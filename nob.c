@@ -4,7 +4,7 @@
 
 // Some folder paths that we use throughout the build process.
 #define CC "gcc"
-#define BUILD_FOLDER "./build/"
+#define BUILD_FOLDER "./"
 #define CFLAGS "-Wall", "-Wextra", "-pedantic", "-O1"
 
 int main(int argc, char **argv)
@@ -13,23 +13,17 @@ int main(int argc, char **argv)
   if (!nob_mkdir_if_not_exists(BUILD_FOLDER)) return 1;
 
   Nob_Cmd cmd = {0};
-
+  // TODO: only compile if src-file is changed
   nob_cmd_append(&cmd,
                  CC,
                  CFLAGS,
+                 "-ggdb",
                  "-fopenmp",
                  "-pg",
                  "-o",
                  BUILD_FOLDER"main",
-                 "./main.c");
-  if (!nob_cmd_run_sync_and_reset(&cmd)) return 1;
-
-  nob_cmd_append(&cmd,
-                 CC,
-                 "-o",
-                 BUILD_FOLDER"ogb",
-                 "./ogb.c",
-                 "-lcurl");
+                 "./main.c",
+                 "-lz",);
   if (!nob_cmd_run_sync_and_reset(&cmd)) return 1;
 
   return 0;
