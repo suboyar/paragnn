@@ -1583,9 +1583,12 @@ int nob_sb_appendf(Nob_String_Builder *sb, const char *fmt, ...)
 
 Nob_String_View nob_sv_chop_by_delim(Nob_String_View *sv, char delim)
 {
+    const char *pdelim = memchr(sv->data, delim, sv->count);
     size_t i = 0;
-    while (i < sv->count && sv->data[i] != delim) {
-        i += 1;
+    if (pdelim != NULL) {
+        i = pdelim - sv->data;
+    } else {
+        i = sv->count;
     }
 
     Nob_String_View result = nob_sv_from_parts(sv->data, i);
