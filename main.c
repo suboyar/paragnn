@@ -9,6 +9,8 @@
 #define NOB_STRIP_PREFIX
 #include "nob.h"
 
+#include "matrix.h"
+
 #define ERROR_PRINT(format, ...)                                        \
   fprintf(stderr, "[ERROR] %s:%d - " format "\n", __FILE__, __LINE__, ##__VA_ARGS__)
 
@@ -18,17 +20,7 @@
     exit(EXIT_FAILURE);                         \
   } while(0)
 
-#define IDX(i, j, width) ((i) * (width) + (j))
-#define IDX3(i, j, k, height, width) ((i) * (height) * (width) + (j) * (width) + (k))
-
 #define todo(str, ...) FATAL_ERROR("TODO: %s", str, ##__VA_ARGS__)
-
-typedef struct {
-    double *data;
-    size_t width;
-    size_t height;
-    size_t capacity;
-} matrix_t;
 
 typedef struct {
     size_t num_edges;
@@ -41,33 +33,12 @@ typedef struct {
     matrix_t *y; // node-level targets of shape [num_nodes, num_label_classes] or graph-level targets of shape [1, num_label_classes]
 } ogb_arxiv_t;
 
-size_t input_dim;
-size_t output_dim;
-size_t hidden_layer_size;
-size_t hidden_layer_count;
 size_t K;
 size_t sample_size;
 
 #define CHUNK 0x1000 // 4kb window size
 
 String_Builder sb = {0};
-
-matrix_t* matrix_create(size_t height, size_t width)
-{
-    matrix_t *mat = malloc(sizeof(matrix_t));
-    if (!mat) return NULL;
-
-    mat->data = calloc(height * width, sizeof(*mat->data));
-    if (!mat->data) {
-        free(mat);
-        return NULL;
-    }
-
-    mat->height = height;
-    mat->width = width;
-    mat->capacity = height * width;
-    return mat;
-}
 
 String_View read_gz(char* file_path)
 {
@@ -133,9 +104,10 @@ void load_data(ogb_arxiv_t *arxiv)
         assert (i < arxiv->num_nodes);
     }
 
-    // TODO: Programatically find the number of labels through counting labels in
-    // the first line of ogbn_arxiv/raw/node-label.csv.gz
-    arxiv->num_label_classes = 1;
+    // TODO: Programmatically find the number of labels by counting unique
+    // labels in ogbn_arxiv/raw/node-label.csv.gz
+
+    arxiv->num_label_classes = 40;
     arxiv->y = matrix_create(arxiv->num_nodes, arxiv->num_label_classes);
     // arxiv->y = malloc(arxiv->num_nodes * arxiv->num_label_classes * sizeof(*arxiv->y));
     if (arxiv->y == NULL) { FATAL_ERROR("Failed to allocate memory for labels"); }
@@ -204,13 +176,82 @@ void load_data(ogb_arxiv_t *arxiv)
     }
 }
 
-matrix_t *sage_layer(matrix_t *input, matrix_t *W, ogb_arxiv_t *arxiv)
+void relu(matrix_t *in, matrix_t *out)
 {
-    matrix_t *output = matrix_create(arxiv->num_nodes, arxiv->num_node_features);
+    assert(in->height == out->height);
+    assert(in->width == out->width);
+
+    for (size_t i = 0; i < in->height; i++) {
+        for (size_t j = 0; j < in->width; j++) {
+            out->data[IDX(i, j, out->width)] = fmax(0.0, in->data[IDX(i, j, in->width)]);
+        }
+    }
+}
+
+/*
+  https://stackoverflow.com/a/61570752:
+  def log_softmax(x):
+      c = x.max()
+      logsumexp = np.log(np.exp(x - c).sum())
+      return x - c - logsumexp
+*/
+void log_softmax(matrix_t* in, matrix_t *out)
+{
+    assert(in->height == out->height);
+    assert(in->width == out->width);
+
+    for (size_t i = 0; i < in->height; i++) {
+        double max_x = in->data[IDX(i, 0, in->width)];
+        for (size_t j = 0; j < in->width; j++) {
+            double x = in->data[IDX(i, j, in->width)];
+            if (x > max_x) max_x = x;
+        }
+
+
+        double sum = 0.0;
+        for (size_t j = 0; j < in->width; j++) {
+            double x = in->data[IDX(i, j, in->width)];
+            sum += exp(x - max_x);
+        }
+
+        double log_sum = log(sum);
+        for (size_t j = 0; j < in->width; j++) {
+            double x = in->data[IDX(i, j, in->width)];
+            out->data[IDX(i, j, out->width)] = x - max_x - log_sum;
+        }
+    }
+}
+
+// Applies an affine linear transformation to the incoming data: y = x @ A^T + b
+void linear_layer(matrix_t *in, matrix_t *weight, matrix_t *bias, matrix_t *out)
+{
+    // Transposing weight will give correct inner dimensions
+    assert(in->height == out->height);
+    assert(in->width == weight->width);
+    assert(out->width == weight->height);
+
+    // Computes out = in @ weight^T
+    dot_ex(in, weight, out, false, true);
+
+    if (bias) {
+        assert(bias->height == 1);
+        assert(out->width == bias->width);
+
+        for (size_t i = 0; i < out->height; i++) {
+            for (size_t j = 0; j < out->width; j++) {
+                out->data[IDX(i, j, out->width)] += bias->data[j];
+            }
+        }
+    }
+}
+
+void sage_layer(matrix_t *in, matrix_t *weight, matrix_t *bias, matrix_t *out, ogb_arxiv_t *arxiv)
+{
 
     size_t *neighbor_ids = malloc(sample_size * sizeof(*neighbor_ids));
     matrix_t *neighbor_agg = matrix_create(1, arxiv->num_node_features);
     matrix_t *concat_features = matrix_create(1, 2 * arxiv->num_node_features);
+
 
     for (size_t v = 0; v < arxiv->num_nodes; v++) {
         uint8_t neigh_count = 0;
@@ -227,11 +268,11 @@ matrix_t *sage_layer(matrix_t *input, matrix_t *W, ogb_arxiv_t *arxiv)
         if (neigh_count > 0) {
             // aggrigate with mean
             size_t u = neighbor_ids[0];
-            memcpy(neighbor_agg->data, &input->data[IDX(u, 0, arxiv->num_node_features)], arxiv->num_node_features * sizeof(double));
+            memcpy(neighbor_agg->data, &in->data[IDX(u, 0, arxiv->num_node_features)], arxiv->num_node_features * sizeof(double));
             for (size_t i = 1; i < neigh_count; i++) {
                 u = neighbor_ids[i];
                 for (size_t feat_idx = 0; feat_idx < arxiv->num_node_features; feat_idx++) {
-                    neighbor_agg->data[feat_idx] += input->data[IDX(u, feat_idx, arxiv->num_node_features)];
+                    neighbor_agg->data[feat_idx] += in->data[IDX(u, feat_idx, arxiv->num_node_features)];
                 }
             }
             for (size_t feat_idx = 0; feat_idx < arxiv->num_node_features; feat_idx++) {
@@ -239,9 +280,12 @@ matrix_t *sage_layer(matrix_t *input, matrix_t *W, ogb_arxiv_t *arxiv)
             }
         }
 
+        // TODO: Divide the linear transformation calculation instead of doing
+        // concatenation linear transformation, and add them together at the end
+
         // copy self features
         for (size_t feat_idx = 0; feat_idx < arxiv->num_node_features; feat_idx++) {
-            concat_features->data[feat_idx] = input->data[IDX(v, feat_idx, arxiv->num_node_features)];
+            concat_features->data[feat_idx] = in->data[IDX(v, feat_idx, arxiv->num_node_features)];
         }
 
         // copy aggregated neighbor features
@@ -249,16 +293,12 @@ matrix_t *sage_layer(matrix_t *input, matrix_t *W, ogb_arxiv_t *arxiv)
             concat_features->data[arxiv->num_node_features + feat_idx] = neighbor_agg->data[feat_idx];
         }
 
-        // matrix multiplication
-        for (size_t out_idx = 0; out_idx < output_dim; out_idx++) {
-            double sum = 0.0;
-            for (size_t in_idx = 0; in_idx < input_dim; in_idx++) {
-                sum += concat_features->data[in_idx] * W->data[IDX(in_idx, out_idx, arxiv->num_node_features)];
-            }
-
-            // relu activation
-            output->data[IDX(v, out_idx, arxiv->num_node_features)] = fmax(0.0, sum);
-        }
+        matrix_t row;
+        row.height = 1;
+        row.width = out->width;
+        row.data = matrix_row(out, v);
+        // asm("int $3");
+        linear_layer(concat_features, weight, bias, &row);
 
 #ifndef ndebug
         if (v > 0 && v % 10000 == 0) {
@@ -267,31 +307,37 @@ matrix_t *sage_layer(matrix_t *input, matrix_t *W, ogb_arxiv_t *arxiv)
 #endif
     }
 
+    // L2 Normalization
     for (size_t v = 0; v < arxiv->num_nodes; v++) {
         double norm = 0.0;
-        for (size_t x = 0; x < arxiv->num_node_features; x++) {
-            double val = output->data[IDX(v, x, arxiv->num_node_features)];
+        for (size_t x = 0; x < out->width; x++) {
+            double val = out->data[IDX(v, x, out->width)];
             norm += val * val;
         }
         norm = sqrt(norm);
 
         if (norm > 1e-8) {
-            for (size_t x = 0; x < arxiv->num_node_features; x++) {
-                output->data[IDX(v, x, arxiv->num_node_features)] /= norm;
+            for (size_t x = 0; x < out->width; x++) {
+                out->data[IDX(v, x, out->width)] /= norm;
             }
         }
     }
 
     free(neighbor_ids);
-    free(neighbor_agg);
-    free(concat_features);
-
-    return output;
+    matrix_destroy(neighbor_agg);
+    matrix_destroy(concat_features);
 }
 
-matrix_t *linear_layer(matrix_t *input, matrix_t *W, ogb_arxiv_t *arxiv)
+/*
+ * For each training sample i:
+ *   1. Get the true class: true_class = targets[i]
+ *   2. Get the predicted log probability: pred_log_prob = log_probs[i][true_class]
+ *   3. Get the class weight: weight = class_weights[true_class]
+ *   4. Compute loss: loss_i = -weight × pred_log_prob
+**/
+void nll_loss()
 {
-    todo("Implement linear_layer");
+    todo("Implement nll_loss");
 }
 
 void backward()
@@ -305,39 +351,70 @@ int main(void)
     printf("Loading data\n");
     load_data(&arxiv);
 
-    input_dim = arxiv.num_node_features;
-    output_dim = arxiv.num_label_classes;
-    hidden_layer_size = 256;
+    size_t input_dim = arxiv.num_node_features;  // 128
+    size_t output_dim = arxiv.num_label_classes; // 40
+    size_t hidden_layer_size = 256;
     K = 1;
-    sample_size = 10;
+    sample_size = 3;
 
-    matrix_t **W = malloc(K+1 * sizeof(matrix_t*));
-    W[0] = matrix_create(input_dim, hidden_layer_size);
-    // W[1] = matrix_create(hidden_layer_size, hidden_layer_size);
-    W[1] = matrix_create(hidden_layer_size, output_dim);
+    // Weights will be transposed when feed through linear transformation, hence
+    // the reverse shape
+    matrix_t *W1 = matrix_create(hidden_layer_size, arxiv.num_node_features*2); // times 2 because of concatenation
+    matrix_t *W2 = matrix_create(arxiv.num_label_classes, hidden_layer_size);
+    matrix_fill(W1, 0.1);
+    matrix_fill(W2, 0.1);
+
+    // Make it small for testing purposes
+    arxiv.num_nodes = 100;
+
+    matrix_t *x = arxiv.x;
+    matrix_t *bias = NULL;
+    matrix_t *z1 = matrix_create(arxiv.num_nodes, hidden_layer_size);
+    matrix_t *a1 = matrix_create(arxiv.num_nodes, hidden_layer_size);
+    matrix_t *z2 = matrix_create(arxiv.num_nodes, arxiv.num_label_classes);
+    matrix_t *y = matrix_create(arxiv.num_nodes, arxiv.num_label_classes);
+
+    FILE *f = fopen("output.log", "w");
 
     size_t max_epoch = 1;
     for (size_t epoch = 1; epoch <= max_epoch; epoch++) {
-        matrix_t *x = arxiv.x;
-        for (size_t k = 1; k <= K; k++) {
-            printf("Staring k=%zu\n", k);
-            x = sage_layer(x, W[k-1], &arxiv);
-        }
-        matrix_t *z = linear_layer(x, W[K], &arxiv);
+        sage_layer(x, W1, bias, z1, &arxiv);
+        printf("sage_layer completed\n");
+        fmatrix_print(f, z1, "z1");
+        fprintf(f, "\n");
 
-        backward();
+        relu(z1, a1);
+        printf("sage_layer relu\n");
+        fmatrix_print(f, a1, "a1");
+        fprintf(f, "\n");
+
+        linear_layer(a1, W2, bias, z2);
+        printf("sage_layer linear_layer\n");
+        fmatrix_print(f, z2, "z2");
+        fprintf(f, "\n");
+
+        log_softmax(z2, y);
+        printf("sage_layer log_softmax\n");
+        fmatrix_print(f, y, "y");
+        fprintf(f, "\n");
+
         break;
     }
 
-
+    fclose(f);
+    matrix_destroy(W1);
+    matrix_destroy(W2);
+    matrix_destroy(z1);
+    matrix_destroy(a1);
+    matrix_destroy(z2);
+    matrix_destroy(y);
+    matrix_destroy(arxiv.x);
+    matrix_destroy(arxiv.y);
     free(arxiv.node_year);
     free(arxiv.edge_index);
-    free(arxiv.x);
-    free(arxiv.y);
     sb_free(sb);
     return 0;
 }
-
 
 // TODO: Initilize weight matrix with random values (with a seed set)
 // TODO: Implement gradient descent training
@@ -345,3 +422,5 @@ int main(void)
 // TODO: Use CRS format for edges
 // TODO: Clean up all allocated memory
 // TODO: Add bias
+// TODO: Split up dataset according to RAW_PATH/../split/time/{test.csv.gz,train.csv.gz,valid.csv.gz} which are indexes
+// TODO: Xavier Initialization for weight matrices

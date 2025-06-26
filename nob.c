@@ -24,6 +24,7 @@ int main(int argc, char **argv)
                  "-o",
                  BUILD_FOLDER"main",
                  "./main.c",
+                 "./matrix.c",
                  "-lm",
                  "-lz",);
   if (!nob_cmd_run_sync_and_reset(&cmd)) return 1;
