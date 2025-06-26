@@ -416,6 +416,7 @@ int main(void)
     return 0;
 }
 
+// TODO: Create a small test node (CRITICAL)
 // TODO: Initilize weight matrix with random values (with a seed set)
 // TODO: Implement gradient descent training
 // TODO: Configurable layer dimensions
