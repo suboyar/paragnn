@@ -36,6 +36,8 @@ typedef struct {
 size_t K;
 size_t sample_size;
 
+#define ENABLE_NODE_LIMIT 0
+
 #define CHUNK 0x1000 // 4kb window size
 
 String_Builder sb = {0};
@@ -78,11 +80,21 @@ String_View read_gz(char* file_path)
 void load_data(ogb_arxiv_t *arxiv)
 {
     String_View sv = {0};
-
     sv = read_gz(RAW_PATH"/num-node-list.csv.gz");
+
     String_View num_node_sv = sv_chop_by_delim(&sv, '\n');
     const char *num_node_cstr = temp_sv_to_cstr(num_node_sv);
     arxiv->num_nodes = atol(num_node_cstr);
+
+#if ENABLE_NODE_LIMIT
+    // Limit nodes for testing purposes
+    const size_t max_nodes = 100;
+    if (arxiv->num_nodes > max_nodes) {
+        fprintf(stderr, "DEBUG: Limiting nodes from %zu to %zu for testing\n",
+                arxiv->num_nodes, max_nodes);
+        arxiv->num_nodes = max_nodes;
+    }
+#endif
 
     sv = read_gz(RAW_PATH"/num-edge-list.csv.gz");
     String_View num_edge_sv = sv_chop_by_delim(&sv, '\n');
@@ -92,31 +104,33 @@ void load_data(ogb_arxiv_t *arxiv)
     sv = read_gz(RAW_PATH"/node_year.csv.gz");
     arxiv->node_year = malloc(arxiv->num_nodes * sizeof(*arxiv->node_year));
     if (arxiv->node_year == NULL) { FATAL_ERROR("Failed to allocate memory for node years"); }
-    for (size_t i = 0; sv.count > 0; i++) {
+
+    for (size_t i = 0; i < arxiv->num_nodes && sv.count > 0; i++) {
         temp_reset();
         String_View year_sv = sv_chop_by_delim(&sv, '\n');
-        // Jump over empty lines if any
-        if (year_sv.data[year_sv.count-1] == '\0') { continue; }
+        // Err if empty line is found while reading
+        if (year_sv.data[year_sv.count-1] == '\0') {
+            FATAL_ERROR("Empty line found in node_year");
+        }
 
         const char *year_cstr = temp_sv_to_cstr(year_sv);
         assert(strcmp(year_cstr, "") != 0);
         arxiv->node_year[i] = atol(year_cstr);
-        assert (i < arxiv->num_nodes);
     }
 
     // TODO: Programmatically find the number of labels by counting unique
     // labels in ogbn_arxiv/raw/node-label.csv.gz
-
     arxiv->num_label_classes = 40;
     arxiv->y = matrix_create(arxiv->num_nodes, arxiv->num_label_classes);
-    // arxiv->y = malloc(arxiv->num_nodes * arxiv->num_label_classes * sizeof(*arxiv->y));
     if (arxiv->y == NULL) { FATAL_ERROR("Failed to allocate memory for labels"); }
     sv = read_gz(RAW_PATH"/node-label.csv.gz");
 
-    for (size_t i = 0; sv.count > 0; i++) {
+    for (size_t i = 0; i < arxiv->num_nodes && sv.count > 0; i++) {
         String_View labels_sv = sv_chop_by_delim(&sv, '\n');
-        // Jump over empty lines if any
-        if (labels_sv.data[labels_sv.count-1] == '\0') { continue; }
+        // Err if empty line is found while reading
+        if (labels_sv.data[labels_sv.count-1] == '\0') {
+            FATAL_ERROR("Empty line found in node_label");
+        }
 
         for (size_t j = 0; labels_sv.count > 0; j++) {
             temp_reset();
@@ -124,23 +138,26 @@ void load_data(ogb_arxiv_t *arxiv)
             const char *label_cstr = temp_sv_to_cstr(label_sv);
             assert(strcmp(label_cstr, "") != 0);
             arxiv->y->data[IDX(i, j, arxiv->num_label_classes)] = atol(label_cstr);
-            assert (j < arxiv->num_label_classes);
+            if (j >= arxiv->num_label_classes) {
+                FATAL_ERROR("Label class index overflow: got %zu, expected < %zu",
+                            j, arxiv->num_label_classes);
+            }
         }
-        assert (i < arxiv->num_nodes);
     }
 
     // TODO: Programatically find the number of features through counting features
     // in the first line of ogbn_arxiv/raw/node-feat.csv.gz
     arxiv->num_node_features = 128;
     arxiv->x = matrix_create(arxiv->num_nodes, arxiv->num_node_features);
-    // arxiv->x = malloc(arxiv->num_nodes * arxiv->num_node_features * sizeof(*arxiv->x));
     if (arxiv->x == NULL) { FATAL_ERROR("Failed to allocate memory for features"); }
     sv = read_gz(RAW_PATH"/node-feat.csv.gz");
 
-    for (size_t i = 0; sv.count > 0; i++) {
+    for (size_t i = 0; i < arxiv->num_nodes && sv.count > 0; i++) {
         String_View feats_sv = sv_chop_by_delim(&sv, '\n');
-        // Jump over empty lines if any
-        if (feats_sv.data[feats_sv.count-1] == '\0') { continue; }
+        // Err if empty line is found while reading
+        if (feats_sv.data[feats_sv.count-1] == '\0') {
+            FATAL_ERROR("Empty line found in node_feature at line %zu", i+1);
+        }
 
         for (size_t j = 0; feats_sv.count > 0; j++) {
             temp_reset();
@@ -148,31 +165,41 @@ void load_data(ogb_arxiv_t *arxiv)
             const char *feat_cstr = temp_sv_to_cstr(feat_sv);
             assert(strcmp(feat_cstr, "") != 0);
             arxiv->x->data[IDX(i, j, arxiv->num_node_features)] = atof(feat_cstr);
-            assert(j < arxiv->num_node_features);
+            if (j >= arxiv->num_node_features) {
+                FATAL_ERROR("Feature index overflow: got %zu, expected < %zu",
+                            j, arxiv->num_node_features);
+            }
         }
-        assert(i < arxiv->num_nodes);
     }
 
     arxiv->edge_index = malloc(2 * arxiv->num_edges * sizeof(*arxiv->edge_index));
     if (arxiv->edge_index == NULL) { FATAL_ERROR("Failed to allocate memory for edges"); }
     sv = read_gz(RAW_PATH"/edge.csv.gz");
 
-    for (size_t i = 0; sv.count > 0; i++) {
+    for (size_t i = 0; i < arxiv->num_edges && sv.count > 0; i++) {
         String_View edges_sv = sv_chop_by_delim(&sv, '\n');
-        // Jump over empty lines if any
-        if (edges_sv.data[edges_sv.count-1] == '\0') { continue; }
+        // Err if empty line is found while reading
+        if (edges_sv.data[edges_sv.count-1] == '\0') {
+            FATAL_ERROR("Empty line found in edge at line %zu", i+1);
+        }
 
         // uint32_t v, u;
         for (size_t j = 0; edges_sv.count > 0; j++) {
             temp_reset();
             String_View edge_sv = sv_chop_by_delim(&edges_sv, ',');
             const char *edge_cstr = temp_sv_to_cstr(edge_sv);
-            assert(strcmp(edge_cstr, "") != 0);
+
+            if (strcmp(edge_cstr, "") == 0) {
+                FATAL_ERROR("Empty edge string at position %zu in line %zu", j, i+1);
+            }
+
             arxiv->edge_index[IDX(j, i, arxiv->num_edges)] = atol(edge_cstr);
 
-            assert(j < 2);
+            if (j >= 2) {
+                FATAL_ERROR("Too many edges: got %zu on line %zu, expected exactly 2",
+                            j+1, i+1);
+            }
         }
-        assert(i < arxiv->num_edges);
     }
 }
 
@@ -265,9 +292,10 @@ void sage_layer(matrix_t *in, matrix_t *weight, matrix_t *bias, matrix_t *out, o
             }
         }
 
+        // aggrigate with mean
+        size_t u = neighbor_ids[0];
+        if (u >= arxiv->num_nodes) { continue; }
         if (neigh_count > 0) {
-            // aggrigate with mean
-            size_t u = neighbor_ids[0];
             memcpy(neighbor_agg->data, &in->data[IDX(u, 0, arxiv->num_node_features)], arxiv->num_node_features * sizeof(double));
             for (size_t i = 1; i < neigh_count; i++) {
                 u = neighbor_ids[i];
@@ -363,9 +391,6 @@ int main(void)
     matrix_t *W2 = matrix_create(arxiv.num_label_classes, hidden_layer_size);
     matrix_fill(W1, 0.1);
     matrix_fill(W2, 0.1);
-
-    // Make it small for testing purposes
-    arxiv.num_nodes = 100;
 
     matrix_t *x = arxiv.x;
     matrix_t *bias = NULL;
