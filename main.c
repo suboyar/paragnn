@@ -358,21 +358,101 @@ void sage_layer(matrix_t *in, matrix_t *weight, matrix_t *bias, matrix_t *out, o
     matrix_destroy(concat_features);
 }
 
-/*
- * For each training sample i:
- *   1. Get the true class: true_class = targets[i]
- *   2. Get the predicted log probability: pred_log_prob = log_probs[i][true_class]
- *   3. Get the class weight: weight = class_weights[true_class]
- *   4. Compute loss: loss_i = -weight × pred_log_prob
-**/
-void nll_loss()
+#define NLL_LOSS_REDUCTION_MEAN
+double nll_loss(matrix_t *pred, matrix_t *target)
 {
-    todo("Implement nll_loss");
+    assert(pred->height == target->height);
+    assert(pred->width == target->width);
+
+    double* L = malloc(target->height * sizeof(*L));
+	for (size_t v = 0; v < target->height; v++) {
+        size_t c;
+        for (c = 0; c < target->width; c++) {
+            double class = target->data[IDX(v,c,target->width)];
+            if (class == 1.0) {
+                break;
+            }
+        }
+        // printf("Node %zu class %zu pred: %f\n", v, c, );
+        assert(c < target->width && "No true class was found");
+        double logits = pred->data[IDX(v, c, pred->width)];
+        L[v] = -logits;
+    }
+
+    size_t N = target->height;
+    double sum = 0.0;
+    for (size_t l = 0; l < N; l++) {
+        sum += L[l];
+    }
+#ifdef NLL_LOSS_REDUCTION_MEAN
+    printf("reduction mean\n");
+    return sum / N;
+#else
+    printf("reduction sum\n");
+    return sum;
+#endif
 }
 
-void backward()
+void nll_loss_backward()
 {
-    todo("Implement backward");
+    todo("Implement nll_loss_backward");
+}
+
+/*
+ * Since output = log_softmax(x), we can recover softmax(x) = exp(output)
+ * without needing the original input x.
+ *
+ * def log_softmax_backward(grad_output, output):
+ *     softmax_vals = torch.exp(output)  # recover softmax(x) from log_softmax(x)
+ *     return grad_output - softmax_vals * torch.sum(grad_output)
+ */
+void log_softmax_backward(matrix_t *grad_output, matrix_t *output)
+{
+    todo("Implement log_softmax_backward");
+}
+
+void linear_backward()
+{
+    todo("Implement linear_backward");
+}
+
+void relu_backward()
+{
+    todo("Implement relu_backward");
+}
+
+void l2_normalize_backward()
+{
+    todo("Implement relu_backward");
+}
+
+/*
+ * Gradients w.r.t. the aggregation function parameters
+ * Gradients w.r.t. the weight matrices W^k
+ * Gradients w.r.t. the node's self features
+ * Gradients w.r.t. the L2 normalization step
+ */
+void sage_backward()
+{
+
+}
+
+
+// TODO: Check out getrusage from <sys/resource.h>
+void print_memory_usage()
+{
+    FILE* file = fopen("/proc/self/status", "r");
+    char line[128];
+
+    if (file) {
+        while (fgets(line, 128, file) != NULL) {
+            if (strncmp(line, "VmRSS:", 6) == 0) {
+                printf("Memory usage: %s", line);
+                break;
+            }
+        }
+        fclose(file);
+    }
 }
 
 int main(void)
@@ -380,6 +460,9 @@ int main(void)
     ogb_arxiv_t arxiv = {0};
     printf("Loading data\n");
     load_data(&arxiv);
+
+    printf("After loading dataset:\n");
+    print_memory_usage();
 
     size_t input_dim = arxiv.num_node_features;  // 128
     size_t output_dim = arxiv.num_label_classes; // 40
@@ -391,8 +474,11 @@ int main(void)
     // the reverse shape
     matrix_t *W1 = matrix_create(hidden_layer_size, arxiv.num_node_features*2); // times 2 because of concatenation
     matrix_t *W2 = matrix_create(arxiv.num_label_classes, hidden_layer_size);
-    matrix_fill(W1, 0.1);
-    matrix_fill(W2, 0.1);
+    matrix_fill(W1, 0.4);
+    matrix_fill(W2, 0.8);
+
+    printf("After initializing only weights:\n");
+    print_memory_usage();
 
     matrix_t *x = arxiv.x;
     matrix_t *bias = NULL;
@@ -401,29 +487,27 @@ int main(void)
     matrix_t *z2 = matrix_create(arxiv.num_nodes, arxiv.num_label_classes);
     matrix_t *y = matrix_create(arxiv.num_nodes, arxiv.num_label_classes);
 
+    printf("After initializing matrices:\n");
+    print_memory_usage();
+
     FILE *f = fopen("output.log", "w");
 
     size_t max_epoch = 1;
     for (size_t epoch = 1; epoch <= max_epoch; epoch++) {
         sage_layer(x, W1, bias, z1, &arxiv);
         printf("sage_layer completed\n");
-        fmatrix_print(f, z1, "z1");
-        fprintf(f, "\n");
 
         relu(z1, a1);
         printf("sage_layer relu\n");
-        fmatrix_print(f, a1, "a1");
-        fprintf(f, "\n");
 
         linear_layer(a1, W2, bias, z2);
         printf("sage_layer linear_layer\n");
-        fmatrix_print(f, z2, "z2");
-        fprintf(f, "\n");
 
         log_softmax(z2, y);
-        printf("sage_layer log_softmax\n");
-        fmatrix_print(f, y, "y");
-        fprintf(f, "\n");
+        printf("log_softmax\n");
+
+        double loss = nll_loss(y, arxiv.y);
+        printf("Loss: %f\n", loss);
 
         break;
     }
