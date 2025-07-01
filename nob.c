@@ -67,6 +67,7 @@ int main(int argc, char **argv)
         nob_cmd_append(&cmd, "-O0");
         nob_cmd_append(&cmd, "-ggdb");
         nob_cmd_append(&cmd, "-pg");
+        nob_cmd_append(&cmd, "-DENABLE_NODE_LIMIT");
 #endif
         nob_cmd_append(&cmd, "-c", src, "-o", obj);
 

@@ -3,9 +3,11 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <time.h>
 #include <zlib.h>
 
 #define NOB_IMPLEMENTATION
+#define NOB_TEMP_CAPACITY (100*1024*1024) // 100MB
 #define NOB_STRIP_PREFIX
 #include "nob.h"
 
@@ -30,13 +32,11 @@ typedef struct {
     uint32_t *edge_index; // Graph connectivity in COO format with shape [2, num_edges]
     uint32_t *node_year;
     matrix_t *x; // Node feature matrix with shape [num_nodes, num_node_features]
-    matrix_t *y; // node-level targets of shape [num_nodes, num_label_classes] or graph-level targets of shape [1, num_label_classes]
+    matrix_t *y; // node-level targets of shape [num_nodes, num_label_classes]
 } ogb_arxiv_t;
 
 size_t K;
 size_t sample_size;
-
-#define ENABLE_NODE_LIMIT 0
 
 #define CHUNK 0x1000 // 4kb window size
 
@@ -126,23 +126,25 @@ void load_data(ogb_arxiv_t *arxiv)
     sv = read_gz(RAW_PATH"/node-label.csv.gz");
 
     for (size_t i = 0; i < arxiv->num_nodes && sv.count > 0; i++) {
-        String_View labels_sv = sv_chop_by_delim(&sv, '\n');
+        String_View label_sv = sv_chop_by_delim(&sv, '\n');
         // Err if empty line is found while reading
-        if (labels_sv.data[labels_sv.count-1] == '\0') {
+        if (label_sv.data[label_sv.count-1] == '\0') {
             FATAL_ERROR("Empty line found in node_label");
         }
-
-        for (size_t j = 0; labels_sv.count > 0; j++) {
+        if (i % 10000 == 0) {
             temp_reset();
-            String_View label_sv = sv_chop_by_delim(&labels_sv, ',');
-            const char *label_cstr = temp_sv_to_cstr(label_sv);
-            assert(strcmp(label_cstr, "") != 0);
-            arxiv->y->data[IDX(i, j, arxiv->num_label_classes)] = atol(label_cstr);
-            if (j >= arxiv->num_label_classes) {
-                FATAL_ERROR("Label class index overflow: got %zu, expected < %zu",
-                            j, arxiv->num_label_classes);
-            }
         }
+
+        const char *label_cstr = temp_sv_to_cstr(label_sv);
+        assert(strcmp(label_cstr, "") != 0);
+        int label_index = atoi(label_cstr); // max 40 classes in ogbn-arxiv
+
+        if ((size_t)label_index >= arxiv->num_label_classes) {
+            FATAL_ERROR("Label class index overflow: got %d, expected < %zu",
+                        label_index, arxiv->num_label_classes-1);
+        }
+
+        arxiv->y->data[IDX(i, label_index, arxiv->num_label_classes)] = 1.0; // Everything else should have been inited to 0.0 by calloc
     }
 
     // TODO: Programatically find the number of features through counting features
@@ -160,7 +162,6 @@ void load_data(ogb_arxiv_t *arxiv)
         }
 
         for (size_t j = 0; feats_sv.count > 0; j++) {
-            temp_reset();
             String_View feat_sv = sv_chop_by_delim(&feats_sv, ',');
             const char *feat_cstr = temp_sv_to_cstr(feat_sv);
             assert(strcmp(feat_cstr, "") != 0);
@@ -201,6 +202,7 @@ void load_data(ogb_arxiv_t *arxiv)
             }
         }
     }
+    sb_free(sb);
 }
 
 void relu(matrix_t *in, matrix_t *out)
@@ -437,7 +439,6 @@ int main(void)
     matrix_destroy(arxiv.y);
     free(arxiv.node_year);
     free(arxiv.edge_index);
-    sb_free(sb);
     return 0;
 }
 
