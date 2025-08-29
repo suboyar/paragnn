@@ -1394,7 +1394,7 @@ char *nob_temp_sprintf(const char *format, ...)
     return result;
 }
 
-void nob_temp_reset(void)
+inline void nob_temp_reset(void)
 {
     nob_temp_size = 0;
 }
