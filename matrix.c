@@ -55,6 +55,15 @@ void matrix_fill(matrix_t *matrix, double value)
     }
 }
 
+void mat_rand(matrix_t* m, float low, float high)
+{
+    for (size_t i = 0; i < m->height; ++i) {
+        for (size_t j = 0; j < m->width; ++j) {
+            MAT_AT(m, i, j) = ((float)rand() / RAND_MAX) * (high - low) + low;
+        }
+    }
+}
+
 void dot(matrix_t *A, matrix_t *B, matrix_t *C)
 {
     // Verify inner dimensions match
@@ -105,6 +114,24 @@ void dot_ex(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt)
             C->data[IDX(i, j, C->width)] = sum;
         }
     }
+}
+
+int mat_spec(matrix_t* mat, char* out)
+{
+    return sprintf(out, "Height: %zu, Width: %zu", mat->height, mat->width);
+}
+
+void mat_print(matrix_t* mat, const char *name, size_t padding)
+{
+    printf("%*s%s = [\n", (int) padding, "", name);
+    for (size_t i = 0; i < mat->height; ++i) {
+        printf("%*s    ", (int) padding, "");
+        for (size_t j = 0; j < mat->width; ++j) {
+            printf("%f ", MAT_AT(mat, i, j));
+        }
+        printf("\n");
+    }
+    printf("%*s]\n", (int) padding, "");
 }
 
 void fmatrix_print(FILE* out, const matrix_t *matrix, const char *name)

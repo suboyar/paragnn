@@ -30,7 +30,7 @@
 size_t K;
 size_t sample_size;
 
-void relu(matrix_t *in, matrix_t *out)
+void relu(matrix_t* in, matrix_t* out)
 {
     assert(in->height == out->height);
     assert(in->width == out->width);
@@ -44,12 +44,8 @@ void relu(matrix_t *in, matrix_t *out)
 
 /*
   https://stackoverflow.com/a/61570752:
-  def log_softmax(x):
-      c = x.max()
-      logsumexp = np.log(np.exp(x - c).sum())
-      return x - c - logsumexp
 */
-void log_softmax(matrix_t* in, matrix_t *out)
+void log_softmax(matrix_t* in, matrix_t* out)
 {
     assert(in->height == out->height);
     assert(in->width == out->width);
@@ -77,7 +73,7 @@ void log_softmax(matrix_t* in, matrix_t *out)
 }
 
 // Applies an affine linear transformation to the incoming data: y = x @ A^T + b
-void linear_layer(matrix_t *in, matrix_t *weight, matrix_t *bias, matrix_t *out)
+void linear_layer(matrix_t* in, matrix_t* weight, matrix_t* bias, matrix_t* out)
 {
     // Transposing weight will give correct inner dimensions
     assert(in->height == out->height);
@@ -99,12 +95,12 @@ void linear_layer(matrix_t *in, matrix_t *weight, matrix_t *bias, matrix_t *out)
     }
 }
 
-void sage_layer(matrix_t *in, matrix_t *weight, matrix_t *bias, matrix_t *out, graph_t *arxiv)
+void sage_layer(matrix_t* in, matrix_t* weight, matrix_t* bias, matrix_t* out, graph_t* arxiv)
 {
 
     size_t *neighbor_ids = malloc(sample_size * sizeof(*neighbor_ids));
-    matrix_t *neighbor_agg = matrix_create(1, arxiv->num_node_features);
-    matrix_t *concat_features = matrix_create(1, 2 * arxiv->num_node_features);
+    matrix_t* neighbor_agg = matrix_create(1, arxiv->num_node_features);
+    matrix_t* concat_features = matrix_create(1, 2 * arxiv->num_node_features);
 
 
     for (size_t v = 0; v < arxiv->num_nodes; v++) {
@@ -185,7 +181,7 @@ void sage_layer(matrix_t *in, matrix_t *weight, matrix_t *bias, matrix_t *out, g
 }
 
 #define NLL_LOSS_REDUCTION_MEAN
-double nll_loss(matrix_t *pred, matrix_t *target)
+double nll_loss(matrix_t* pred, matrix_t* target)
 {
     assert(pred->height == target->height);
     assert(pred->width == target->width);
@@ -211,42 +207,124 @@ double nll_loss(matrix_t *pred, matrix_t *target)
         sum += L[l];
     }
 #ifdef NLL_LOSS_REDUCTION_MEAN
-    printf("reduction mean\n");
+    nob_log(NOB_INFO, "reduction mean");
     return sum / N;
 #else
-    printf("reduction sum\n");
+    nob_log(NOB_INFO, "reduction sum");
     return sum;
 #endif
 }
 
-void nll_loss_backward()
+void nll_loss_backward(matrix_t* pred, matrix_t* target, matrix_t* grad_out)
 {
-    NOB_TODO("Implement nll_loss_backward");
+    assert(pred->height == target->height);
+    assert(pred->width == target->width);
+
+    nob_log(NOB_INFO, "nll_loss_backward");
+
+    char str_buf[64];
+    mat_spec(pred, str_buf);
+    nob_log(NOB_INFO, "pred     => %s\n", str_buf);
+    // MAT_PRINT(pred);
+    mat_spec(target, str_buf);
+    nob_log(NOB_INFO, "target   => %s\n", str_buf);
+    // MAT_PRINT(target);
+
+    size_t height = pred->height, width = pred->width;
+    for (size_t i = 0; i < height; i++) {
+        for (size_t j = 0; j < width; j++) {
+            if (MAT_AT(target, i, j) == 1.0) { // True class
+                MAT_AT(grad_out, i, j) = -1.0/height;
+            } else {
+                MAT_AT(grad_out, i, j) = 0.0;
+            }
+        }
+    }
+
+    mat_spec(grad_out, str_buf);
+    nob_log(NOB_INFO, "grad_out => %s\n", str_buf);
+    // MAT_PRINT(grad_out);
 }
 
-/*
- * Since output = log_softmax(x), we can recover softmax(x) = exp(output)
- * without needing the original input x.
- *
- * def log_softmax_backward(grad_output, output):
- *     softmax_vals = torch.exp(output)  # recover softmax(x) from log_softmax(x)
- *     return grad_output - softmax_vals * torch.sum(grad_output)
- */
-void log_softmax_backward(matrix_t *grad_output, matrix_t *output)
+void log_softmax_backward(matrix_t* pred, matrix_t* grad_in, matrix_t* grad_out)
 {
-    (void) grad_output;
-    (void) output;
-    NOB_TODO("Implement log_softmax_backward");
+    assert(pred->height == grad_in->height);
+    assert(pred->width == grad_in->width);
+    assert(pred->height == grad_out->height);
+    assert(pred->width == grad_out->width);
+
+    nob_log(NOB_INFO, "log_softmax_backward");
+    char str_buf[64];
+
+    mat_spec(grad_in, str_buf);
+    nob_log(NOB_INFO, "grad_in  => %s\n", str_buf);
+    // MAT_PRINT(grad_in);
+
+    mat_spec(pred, str_buf);
+    nob_log(NOB_INFO, "pred     => %s\n", str_buf);
+    // MAT_PRINT(pred);
+
+    size_t height = pred->height, width = pred->width;
+    for (size_t i = 0; i < height; i++) {
+        // Compute sum of incoming gradients for this sample
+        float grad_sum = 0.0;
+        for (size_t j = 0; j < width; j++) {
+            grad_sum += MAT_AT(grad_in, i, j);
+        }
+
+        // Apply the chain rule formula for each class
+        for (size_t j = 0; j < width; j++) {
+            // Convert log-softmax back to softmax: exp(log_softmax) = softmax
+            double softmax_val = exp(MAT_AT(pred, i, j));
+            // Apply: grad_out = grad_in - softmax * grad_sum
+            MAT_AT(grad_out, i, j) = MAT_AT(grad_in, i, j) - softmax_val * grad_sum;
+        }
+    }
+
+    mat_spec(grad_out, str_buf);
+    nob_log(NOB_INFO, "grad_out => %s\n", str_buf);
+    // MAT_PRINT(grad_out);
 }
 
-void linear_backward()
+void linear_backward(matrix_t* lin_in, matrix_t* grad_in, matrix_t* grad_W)
 {
-    NOB_TODO("Implement linear_backward");
+    nob_log(NOB_INFO, "linear_backward");
+    char str_buf[64];
+
+    mat_spec(lin_in, str_buf);
+    nob_log(NOB_INFO, "lin_in  => %s\n", str_buf);
+    // MAT_PRINT(lin_in);
+
+    mat_spec(grad_in, str_buf);
+    nob_log(NOB_INFO, "grad_in => %s\n", str_buf);
+    // MAT_PRINT(grad_in);
+
+    dot_ex(grad_in, lin_in, grad_W, true, false);
+
+    mat_spec(grad_W, str_buf);
+    nob_log(NOB_INFO, "grad_W  => %s\n", str_buf);
+    // MAT_PRINT(grad_W);
 }
 
-void relu_backward()
+void relu_backward(matrix_t* grad_input, matrix_t* grad_output, matrix_t* output)
 {
-    NOB_TODO("Implement relu_backward");
+    assert(output->height == grad_output->height);
+    assert(output->width == grad_output->width);
+    assert(output->height == grad_input->height);
+    assert(output->width == grad_input->width);
+
+    // TODO: Check if one of these are better:
+    // - grad_input->data[IDX] = (output->data[IDX] > 0.0f) * grad_output->data[IDX];
+    // - grad_input->data[IDX] = grad_output->data[IDX] * fmaxf(0.0f, copysignf(1.0f, output->data[IDX]));
+
+    for (size_t i = 0; i < output->height; i++) {
+        for (size_t j = 0; j < output->width; j++) {
+            grad_input->data[IDX(i, j, grad_input->width)] = 0; //  f'(x) x <= 0
+            if (output->data[IDX(i, j, output->width)]) {       //  f'(x) x > 0
+                grad_input->data[IDX(i, j, grad_input->width)] = grad_output->data[IDX(i, j, grad_output->width)];
+            }
+        }
+    }
 }
 
 void l2_normalize_backward()
@@ -254,17 +332,24 @@ void l2_normalize_backward()
     NOB_TODO("Implement relu_backward");
 }
 
-/*
- * Gradients w.r.t. the aggregation function parameters
- * Gradients w.r.t. the weight matrices W^k
- * Gradients w.r.t. the node's self features
- * Gradients w.r.t. the L2 normalization step
- */
 void sage_backward()
 {
-
+    NOB_TODO("Implement sage_backward");
 }
 
+
+void update_weights(matrix_t* W, matrix_t* grad_W)
+{
+    assert(W->height == grad_W->height);
+    assert(W->width == grad_W->width);
+
+    size_t height = W->height, width = W->width;
+    for (size_t i = 0; i < height; i++) {
+        for (size_t j = 0; j < width; j++) {
+            MAT_AT(W, i, j) -= MAT_AT(grad_W, i, j);
+        }
+    }
+}
 
 // TODO: Check out getrusage from <sys/resource.h>
 void print_memory_usage()
@@ -285,6 +370,11 @@ void print_memory_usage()
 
 int main(void)
 {
+    srand(0);
+    // srand(time(NULL));
+
+    nob_minimal_log_level = NOB_NO_LOGS;
+
     graph_t arxiv = {0};
     load_data(&arxiv);
 
@@ -293,50 +383,57 @@ int main(void)
 
     size_t input_dim = arxiv.num_node_features;  // 128
     size_t output_dim = arxiv.num_label_classes; // 40
-    size_t hidden_layer_size = 256;
+    size_t hidden_layer_size = 5;
     K = 1;
     sample_size = 2;
 
     // Weights will be transposed when feed through linear transformation, hence
     // the reverse shape
-    matrix_t *W1 = matrix_create(hidden_layer_size, arxiv.num_node_features*2); // times 2 because of concatenation
-    matrix_t *W2 = matrix_create(arxiv.num_label_classes, hidden_layer_size);
-    matrix_fill(W1, 0.4);
-    matrix_fill(W2, 0.8);
+    matrix_t* W1 = matrix_create(hidden_layer_size, arxiv.num_node_features*2); // times 2 because of concatenation
+    matrix_t* W2 = matrix_create(arxiv.num_label_classes, hidden_layer_size);
+    mat_rand(W1, -1.0, 1.0);
+    mat_rand(W2, -1.0, 1.0);
 
     // printf("After initializing only weights:\n");
     // print_memory_usage();
 
-    matrix_t *x = arxiv.x;
-    matrix_t *bias = NULL;
-    matrix_t *z1 = matrix_create(arxiv.num_nodes, hidden_layer_size);
-    matrix_t *a1 = matrix_create(arxiv.num_nodes, hidden_layer_size);
-    matrix_t *z2 = matrix_create(arxiv.num_nodes, arxiv.num_label_classes);
-    matrix_t *y = matrix_create(arxiv.num_nodes, arxiv.num_label_classes);
+    matrix_t* x = arxiv.x;
+    matrix_t* bias = NULL;
+    matrix_t* z1 = matrix_create(arxiv.num_nodes, hidden_layer_size);
+    matrix_t* a1 = matrix_create(arxiv.num_nodes, hidden_layer_size);
+    matrix_t* z2 = matrix_create(arxiv.num_nodes, arxiv.num_label_classes);
+    matrix_t* y = matrix_create(arxiv.num_nodes, arxiv.num_label_classes);
+
+    matrix_t* grad_loss = matrix_create(arxiv.num_nodes, arxiv.num_label_classes);
+    matrix_t* grad_logsoft = matrix_create(arxiv.num_nodes, arxiv.num_label_classes); // grad_in
+    matrix_t* grad_W2 = matrix_create(arxiv.num_label_classes, hidden_layer_size); // grad_out
 
     // printf("After initializing matrices:\n");
     // print_memory_usage();
 
     FILE *f = fopen("output.log", "w");
 
-    size_t max_epoch = 1;
+    size_t max_epoch = 20;
     for (size_t epoch = 1; epoch <= max_epoch; epoch++) {
         sage_layer(x, W1, bias, z1, &arxiv);
-        printf("sage_layer completed\n");
+        nob_log(NOB_INFO, "sage_layer: completed");
 
         relu(z1, a1);
-        printf("sage_layer relu\n");
+        nob_log(NOB_INFO, "relu: completed");
 
         linear_layer(a1, W2, bias, z2);
-        printf("sage_layer linear_layer\n");
+        nob_log(NOB_INFO, "linear_layer: completed");
 
         log_softmax(z2, y);
-        printf("log_softmax\n");
+        nob_log(NOB_INFO, "log_softmax: completed");
 
         double loss = nll_loss(y, arxiv.y);
         printf("Loss: %f\n", loss);
 
-        break;
+        nll_loss_backward(y, arxiv.y, grad_loss);
+        log_softmax_backward(y, grad_loss, grad_logsoft);
+        linear_backward(a1, grad_logsoft, grad_W2);
+        update_weights(W2, grad_W2);
     }
 
     fclose(f);
