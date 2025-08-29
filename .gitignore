@@ -1,3 +1,5 @@
+main
+*.o
 nob
 nob.old
 build/
