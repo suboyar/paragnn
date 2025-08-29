@@ -1,7 +1,11 @@
+build/
+arxiv/
+.cache/
+
 main
 *.o
 nob
 nob.old
-build/
-arxiv/
 arxiv.zip
+compile_commands.json
+
