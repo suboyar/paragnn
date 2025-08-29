@@ -4,25 +4,19 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <time.h>
+
 #include <zlib.h>
 
 #define NOB_IMPLEMENTATION
-#define NOB_TEMP_CAPACITY (100*1024*1024) // 100MB
-#define NOB_STRIP_PREFIX
 #include "nob.h"
-
 #include "matrix.h"
 
-#define ERROR_PRINT(format, ...)                                        \
-  fprintf(stderr, "[ERROR] %s:%d - " format "\n", __FILE__, __LINE__, ##__VA_ARGS__)
+#define DATASET_PATH "./arxiv"
 
-#define FATAL_ERROR(format, ...)                \
-  do {                                          \
-    ERROR_PRINT(format, ##__VA_ARGS__);         \
-    exit(EXIT_FAILURE);                         \
-  } while(0)
-
-#define todo(str, ...) FATAL_ERROR("TODO: %s", str, ##__VA_ARGS__)
+#define ERROR(fmt, ...) do { \
+    fprintf(stderr, "%s:%d: ERROR: " fmt "\n", __FILE__, __LINE__, ##__VA_ARGS__); \
+    abort(); \
+} while(0)
 
 typedef struct {
     size_t num_edges;
@@ -40,12 +34,12 @@ size_t sample_size;
 
 #define CHUNK 0x1000 // 4kb window size
 
-String_Builder sb = {0};
+Nob_String_Builder sb = {0};
 
-String_View read_gz(char* file_path)
+Nob_String_View read_gz(char* file_path)
 {
     gzFile file = gzopen(file_path, "rb");
-    if (!file) { FATAL_ERROR("gzopen of '%s' failed: %s", file_path, strerror(errno)); }
+    if (!file) { ERROR("gzopen of '%s' failed: %s", file_path, strerror(errno)); }
 
 
     sb.count = 0;
@@ -56,7 +50,7 @@ String_View read_gz(char* file_path)
             break;
         }
 
-        sb_append_buf(&sb, buffer, bytes_read);
+        nob_sb_append_buf(&sb, buffer, bytes_read);
     }
 
     int err = 0;
@@ -68,22 +62,20 @@ String_View read_gz(char* file_path)
     gzclose(file);
 
     if (err){
-        FATAL_ERROR("gzread of '%s' failed: %s", file_path, error_string);
+        ERROR("gzread of '%s' failed: %s", file_path, error_string);
     }
 
-    sb_append_null(&sb);
-    return sb_to_sv(sb);
+    nob_sb_append_null(&sb);
+    return nob_sb_to_sv(sb);
 }
-
-#define RAW_PATH "/home/sboyar/D1/dataset/ogbn_arxiv/raw/"
 
 void load_data(ogb_arxiv_t *arxiv)
 {
-    String_View sv = {0};
-    sv = read_gz(RAW_PATH"/num-node-list.csv.gz");
+    Nob_String_View sv = {0};
+    sv = read_gz(DATASET_PATH"/raw/num-node-list.csv.gz");
 
-    String_View num_node_sv = sv_chop_by_delim(&sv, '\n');
-    const char *num_node_cstr = temp_sv_to_cstr(num_node_sv);
+    Nob_String_View num_node_sv = nob_sv_chop_by_delim(&sv, '\n');
+    const char *num_node_cstr = nob_temp_sv_to_cstr(num_node_sv);
     arxiv->num_nodes = atol(num_node_cstr);
 
 #if ENABLE_NODE_LIMIT
@@ -96,24 +88,24 @@ void load_data(ogb_arxiv_t *arxiv)
     }
 #endif
 
-    sv = read_gz(RAW_PATH"/num-edge-list.csv.gz");
-    String_View num_edge_sv = sv_chop_by_delim(&sv, '\n');
-    const char *num_edge_cstr = temp_sv_to_cstr(num_edge_sv);
+    sv = read_gz(DATASET_PATH"/raw/num-edge-list.csv.gz");
+    Nob_String_View num_edge_sv = nob_sv_chop_by_delim(&sv, '\n');
+    const char *num_edge_cstr = nob_temp_sv_to_cstr(num_edge_sv);
     arxiv->num_edges = atol(num_edge_cstr);
 
-    sv = read_gz(RAW_PATH"/node_year.csv.gz");
+    sv = read_gz(DATASET_PATH"/raw/node_year.csv.gz");
     arxiv->node_year = malloc(arxiv->num_nodes * sizeof(*arxiv->node_year));
-    if (arxiv->node_year == NULL) { FATAL_ERROR("Failed to allocate memory for node years"); }
+    if (arxiv->node_year == NULL) { ERROR("Failed to allocate memory for node years"); }
 
     for (size_t i = 0; i < arxiv->num_nodes && sv.count > 0; i++) {
-        temp_reset();
-        String_View year_sv = sv_chop_by_delim(&sv, '\n');
+        nob_temp_reset();
+        Nob_String_View year_sv = nob_sv_chop_by_delim(&sv, '\n');
         // Err if empty line is found while reading
         if (year_sv.data[year_sv.count-1] == '\0') {
-            FATAL_ERROR("Empty line found in node_year");
+            ERROR("Empty line found in node_year");
         }
 
-        const char *year_cstr = temp_sv_to_cstr(year_sv);
+        const char *year_cstr = nob_temp_sv_to_cstr(year_sv);
         assert(strcmp(year_cstr, "") != 0);
         arxiv->node_year[i] = atol(year_cstr);
     }
@@ -122,87 +114,86 @@ void load_data(ogb_arxiv_t *arxiv)
     // labels in ogbn_arxiv/raw/node-label.csv.gz
     arxiv->num_label_classes = 40;
     arxiv->y = matrix_create(arxiv->num_nodes, arxiv->num_label_classes);
-    if (arxiv->y == NULL) { FATAL_ERROR("Failed to allocate memory for labels"); }
-    sv = read_gz(RAW_PATH"/node-label.csv.gz");
+    if (arxiv->y == NULL) { ERROR("Failed to allocate memory for labels"); }
+    sv = read_gz(DATASET_PATH"/raw/node-label.csv.gz");
 
     for (size_t i = 0; i < arxiv->num_nodes && sv.count > 0; i++) {
-        String_View label_sv = sv_chop_by_delim(&sv, '\n');
+        Nob_String_View label_sv = nob_sv_chop_by_delim(&sv, '\n');
         // Err if empty line is found while reading
         if (label_sv.data[label_sv.count-1] == '\0') {
-            FATAL_ERROR("Empty line found in node_label");
-        }
-        if (i % 10000 == 0) {
-            temp_reset();
+            ERROR("Empty line found in node_label");
         }
 
-        const char *label_cstr = temp_sv_to_cstr(label_sv);
+        const char *label_cstr = nob_temp_sv_to_cstr(label_sv);
         assert(strcmp(label_cstr, "") != 0);
         int label_index = atoi(label_cstr); // max 40 classes in ogbn-arxiv
 
         if ((size_t)label_index >= arxiv->num_label_classes) {
-            FATAL_ERROR("Label class index overflow: got %d, expected < %zu",
+            ERROR("Label class index overflow: got %d, expected < %zu",
                         label_index, arxiv->num_label_classes-1);
         }
 
         arxiv->y->data[IDX(i, label_index, arxiv->num_label_classes)] = 1.0; // Everything else should have been inited to 0.0 by calloc
+        nob_temp_reset();
     }
 
     // TODO: Programatically find the number of features through counting features
     // in the first line of ogbn_arxiv/raw/node-feat.csv.gz
     arxiv->num_node_features = 128;
     arxiv->x = matrix_create(arxiv->num_nodes, arxiv->num_node_features);
-    if (arxiv->x == NULL) { FATAL_ERROR("Failed to allocate memory for features"); }
-    sv = read_gz(RAW_PATH"/node-feat.csv.gz");
+    if (arxiv->x == NULL) { ERROR("Failed to allocate memory for features"); }
+    sv = read_gz(DATASET_PATH"/raw/node-feat.csv.gz");
 
     for (size_t i = 0; i < arxiv->num_nodes && sv.count > 0; i++) {
-        String_View feats_sv = sv_chop_by_delim(&sv, '\n');
+        Nob_String_View feats_sv = nob_sv_chop_by_delim(&sv, '\n');
         // Err if empty line is found while reading
         if (feats_sv.data[feats_sv.count-1] == '\0') {
-            FATAL_ERROR("Empty line found in node_feature at line %zu", i+1);
+            ERROR("Empty line found in node_feature at line %zu", i+1);
         }
 
         for (size_t j = 0; feats_sv.count > 0; j++) {
-            String_View feat_sv = sv_chop_by_delim(&feats_sv, ',');
-            const char *feat_cstr = temp_sv_to_cstr(feat_sv);
+            Nob_String_View feat_sv = nob_sv_chop_by_delim(&feats_sv, ',');
+            const char *feat_cstr = nob_temp_sv_to_cstr(feat_sv);
             assert(strcmp(feat_cstr, "") != 0);
             arxiv->x->data[IDX(i, j, arxiv->num_node_features)] = atof(feat_cstr);
             if (j >= arxiv->num_node_features) {
-                FATAL_ERROR("Feature index overflow: got %zu, expected < %zu",
+                ERROR("Feature index overflow: got %zu, expected < %zu",
                             j, arxiv->num_node_features);
             }
         }
+        nob_temp_reset();
     }
 
     arxiv->edge_index = malloc(2 * arxiv->num_edges * sizeof(*arxiv->edge_index));
-    if (arxiv->edge_index == NULL) { FATAL_ERROR("Failed to allocate memory for edges"); }
-    sv = read_gz(RAW_PATH"/edge.csv.gz");
+    if (arxiv->edge_index == NULL) { ERROR("Failed to allocate memory for edges"); }
+    sv = read_gz(DATASET_PATH"/raw/edge.csv.gz");
 
     for (size_t i = 0; i < arxiv->num_edges && sv.count > 0; i++) {
-        String_View edges_sv = sv_chop_by_delim(&sv, '\n');
+        Nob_String_View edges_sv = nob_sv_chop_by_delim(&sv, '\n');
         // Err if empty line is found while reading
         if (edges_sv.data[edges_sv.count-1] == '\0') {
-            FATAL_ERROR("Empty line found in edge at line %zu", i+1);
+            ERROR("Empty line found in edge at line %zu", i+1);
         }
 
         // uint32_t v, u;
         for (size_t j = 0; edges_sv.count > 0; j++) {
-            temp_reset();
-            String_View edge_sv = sv_chop_by_delim(&edges_sv, ',');
-            const char *edge_cstr = temp_sv_to_cstr(edge_sv);
+            Nob_String_View edge_sv = nob_sv_chop_by_delim(&edges_sv, ',');
+            const char *edge_cstr = nob_temp_sv_to_cstr(edge_sv);
 
             if (strcmp(edge_cstr, "") == 0) {
-                FATAL_ERROR("Empty edge string at position %zu in line %zu", j, i+1);
+                ERROR("Empty edge string at position %zu in line %zu", j, i+1);
             }
 
             arxiv->edge_index[IDX(j, i, arxiv->num_edges)] = atol(edge_cstr);
 
             if (j >= 2) {
-                FATAL_ERROR("Too many edges: got %zu on line %zu, expected exactly 2",
+                ERROR("Too many edges: got %zu on line %zu, expected exactly 2",
                             j+1, i+1);
             }
         }
+        nob_temp_reset();
     }
-    sb_free(sb);
+    nob_sb_free(sb);
 }
 
 void relu(matrix_t *in, matrix_t *out)
@@ -395,7 +386,7 @@ double nll_loss(matrix_t *pred, matrix_t *target)
 
 void nll_loss_backward()
 {
-    todo("Implement nll_loss_backward");
+    NOB_TODO("Implement nll_loss_backward");
 }
 
 /*
@@ -408,22 +399,24 @@ void nll_loss_backward()
  */
 void log_softmax_backward(matrix_t *grad_output, matrix_t *output)
 {
-    todo("Implement log_softmax_backward");
+    (void) grad_output;
+    (void) output;
+    NOB_TODO("Implement log_softmax_backward");
 }
 
 void linear_backward()
 {
-    todo("Implement linear_backward");
+    NOB_TODO("Implement linear_backward");
 }
 
 void relu_backward()
 {
-    todo("Implement relu_backward");
+    NOB_TODO("Implement relu_backward");
 }
 
 void l2_normalize_backward()
 {
-    todo("Implement relu_backward");
+    NOB_TODO("Implement relu_backward");
 }
 
 /*
@@ -533,5 +526,5 @@ int main(void)
 // TODO: Use CRS format for edges
 // TODO: Clean up all allocated memory
 // TODO: Add bias
-// TODO: Split up dataset according to RAW_PATH/../split/time/{test.csv.gz,train.csv.gz,valid.csv.gz} which are indexes
+// TODO: Split up dataset according to DATASET_PATH/split/time/{test.csv.gz,train.csv.gz,valid.csv.gz} which are indexes
 // TODO: Xavier Initialization for weight matrices
