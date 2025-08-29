@@ -10,191 +10,25 @@
 #define NOB_IMPLEMENTATION
 #include "nob.h"
 #include "matrix.h"
+#include "graph.h"
 
-#define DATASET_PATH "./arxiv"
+#define USE_SIMPLE_GRAPH    // Comment out to use arxiv
+
+#ifdef USE_SIMPLE_GRAPH
+#include "simple_graph.h"
+#define load_data load_simple_data
+#else
+#include "arxiv.h"
+#define load_data load_arxiv_data
+#endif
 
 #define ERROR(fmt, ...) do { \
     fprintf(stderr, "%s:%d: ERROR: " fmt "\n", __FILE__, __LINE__, ##__VA_ARGS__); \
     abort(); \
 } while(0)
 
-typedef struct {
-    size_t num_edges;
-    size_t num_nodes;
-    size_t num_node_features;
-    size_t num_label_classes;
-    uint32_t *edge_index; // Graph connectivity in COO format with shape [2, num_edges]
-    uint32_t *node_year;
-    matrix_t *x; // Node feature matrix with shape [num_nodes, num_node_features]
-    matrix_t *y; // node-level targets of shape [num_nodes, num_label_classes]
-} ogb_arxiv_t;
-
 size_t K;
 size_t sample_size;
-
-#define CHUNK 0x1000 // 4kb window size
-
-Nob_String_Builder sb = {0};
-
-Nob_String_View read_gz(char* file_path)
-{
-    gzFile file = gzopen(file_path, "rb");
-    if (!file) { ERROR("gzopen of '%s' failed: %s", file_path, strerror(errno)); }
-
-
-    sb.count = 0;
-    char buffer[CHUNK];
-    while (1) {
-        int bytes_read = gzread(file, buffer, CHUNK);
-        if (bytes_read <= 0) {
-            break;
-        }
-
-        nob_sb_append_buf(&sb, buffer, bytes_read);
-    }
-
-    int err = 0;
-    const char *error_string;
-    if (!gzeof(file)) {
-        error_string = gzerror(file, &err);
-    }
-
-    gzclose(file);
-
-    if (err){
-        ERROR("gzread of '%s' failed: %s", file_path, error_string);
-    }
-
-    nob_sb_append_null(&sb);
-    return nob_sb_to_sv(sb);
-}
-
-void load_data(ogb_arxiv_t *arxiv)
-{
-    Nob_String_View sv = {0};
-    sv = read_gz(DATASET_PATH"/raw/num-node-list.csv.gz");
-
-    Nob_String_View num_node_sv = nob_sv_chop_by_delim(&sv, '\n');
-    const char *num_node_cstr = nob_temp_sv_to_cstr(num_node_sv);
-    arxiv->num_nodes = atol(num_node_cstr);
-
-#if ENABLE_NODE_LIMIT
-    // Limit nodes for testing purposes
-    const size_t max_nodes = 100;
-    if (arxiv->num_nodes > max_nodes) {
-        fprintf(stderr, "DEBUG: Limiting nodes from %zu to %zu for testing\n",
-                arxiv->num_nodes, max_nodes);
-        arxiv->num_nodes = max_nodes;
-    }
-#endif
-
-    sv = read_gz(DATASET_PATH"/raw/num-edge-list.csv.gz");
-    Nob_String_View num_edge_sv = nob_sv_chop_by_delim(&sv, '\n');
-    const char *num_edge_cstr = nob_temp_sv_to_cstr(num_edge_sv);
-    arxiv->num_edges = atol(num_edge_cstr);
-
-    sv = read_gz(DATASET_PATH"/raw/node_year.csv.gz");
-    arxiv->node_year = malloc(arxiv->num_nodes * sizeof(*arxiv->node_year));
-    if (arxiv->node_year == NULL) { ERROR("Failed to allocate memory for node years"); }
-
-    for (size_t i = 0; i < arxiv->num_nodes && sv.count > 0; i++) {
-        nob_temp_reset();
-        Nob_String_View year_sv = nob_sv_chop_by_delim(&sv, '\n');
-        // Err if empty line is found while reading
-        if (year_sv.data[year_sv.count-1] == '\0') {
-            ERROR("Empty line found in node_year");
-        }
-
-        const char *year_cstr = nob_temp_sv_to_cstr(year_sv);
-        assert(strcmp(year_cstr, "") != 0);
-        arxiv->node_year[i] = atol(year_cstr);
-    }
-
-    // TODO: Programmatically find the number of labels by counting unique
-    // labels in ogbn_arxiv/raw/node-label.csv.gz
-    arxiv->num_label_classes = 40;
-    arxiv->y = matrix_create(arxiv->num_nodes, arxiv->num_label_classes);
-    if (arxiv->y == NULL) { ERROR("Failed to allocate memory for labels"); }
-    sv = read_gz(DATASET_PATH"/raw/node-label.csv.gz");
-
-    for (size_t i = 0; i < arxiv->num_nodes && sv.count > 0; i++) {
-        Nob_String_View label_sv = nob_sv_chop_by_delim(&sv, '\n');
-        // Err if empty line is found while reading
-        if (label_sv.data[label_sv.count-1] == '\0') {
-            ERROR("Empty line found in node_label");
-        }
-
-        const char *label_cstr = nob_temp_sv_to_cstr(label_sv);
-        assert(strcmp(label_cstr, "") != 0);
-        int label_index = atoi(label_cstr); // max 40 classes in ogbn-arxiv
-
-        if ((size_t)label_index >= arxiv->num_label_classes) {
-            ERROR("Label class index overflow: got %d, expected < %zu",
-                        label_index, arxiv->num_label_classes-1);
-        }
-
-        arxiv->y->data[IDX(i, label_index, arxiv->num_label_classes)] = 1.0; // Everything else should have been inited to 0.0 by calloc
-        nob_temp_reset();
-    }
-
-    // TODO: Programatically find the number of features through counting features
-    // in the first line of ogbn_arxiv/raw/node-feat.csv.gz
-    arxiv->num_node_features = 128;
-    arxiv->x = matrix_create(arxiv->num_nodes, arxiv->num_node_features);
-    if (arxiv->x == NULL) { ERROR("Failed to allocate memory for features"); }
-    sv = read_gz(DATASET_PATH"/raw/node-feat.csv.gz");
-
-    for (size_t i = 0; i < arxiv->num_nodes && sv.count > 0; i++) {
-        Nob_String_View feats_sv = nob_sv_chop_by_delim(&sv, '\n');
-        // Err if empty line is found while reading
-        if (feats_sv.data[feats_sv.count-1] == '\0') {
-            ERROR("Empty line found in node_feature at line %zu", i+1);
-        }
-
-        for (size_t j = 0; feats_sv.count > 0; j++) {
-            Nob_String_View feat_sv = nob_sv_chop_by_delim(&feats_sv, ',');
-            const char *feat_cstr = nob_temp_sv_to_cstr(feat_sv);
-            assert(strcmp(feat_cstr, "") != 0);
-            arxiv->x->data[IDX(i, j, arxiv->num_node_features)] = atof(feat_cstr);
-            if (j >= arxiv->num_node_features) {
-                ERROR("Feature index overflow: got %zu, expected < %zu",
-                            j, arxiv->num_node_features);
-            }
-        }
-        nob_temp_reset();
-    }
-
-    arxiv->edge_index = malloc(2 * arxiv->num_edges * sizeof(*arxiv->edge_index));
-    if (arxiv->edge_index == NULL) { ERROR("Failed to allocate memory for edges"); }
-    sv = read_gz(DATASET_PATH"/raw/edge.csv.gz");
-
-    for (size_t i = 0; i < arxiv->num_edges && sv.count > 0; i++) {
-        Nob_String_View edges_sv = nob_sv_chop_by_delim(&sv, '\n');
-        // Err if empty line is found while reading
-        if (edges_sv.data[edges_sv.count-1] == '\0') {
-            ERROR("Empty line found in edge at line %zu", i+1);
-        }
-
-        // uint32_t v, u;
-        for (size_t j = 0; edges_sv.count > 0; j++) {
-            Nob_String_View edge_sv = nob_sv_chop_by_delim(&edges_sv, ',');
-            const char *edge_cstr = nob_temp_sv_to_cstr(edge_sv);
-
-            if (strcmp(edge_cstr, "") == 0) {
-                ERROR("Empty edge string at position %zu in line %zu", j, i+1);
-            }
-
-            arxiv->edge_index[IDX(j, i, arxiv->num_edges)] = atol(edge_cstr);
-
-            if (j >= 2) {
-                ERROR("Too many edges: got %zu on line %zu, expected exactly 2",
-                            j+1, i+1);
-            }
-        }
-        nob_temp_reset();
-    }
-    nob_sb_free(sb);
-}
 
 void relu(matrix_t *in, matrix_t *out)
 {
@@ -265,7 +99,7 @@ void linear_layer(matrix_t *in, matrix_t *weight, matrix_t *bias, matrix_t *out)
     }
 }
 
-void sage_layer(matrix_t *in, matrix_t *weight, matrix_t *bias, matrix_t *out, ogb_arxiv_t *arxiv)
+void sage_layer(matrix_t *in, matrix_t *weight, matrix_t *bias, matrix_t *out, graph_t *arxiv)
 {
 
     size_t *neighbor_ids = malloc(sample_size * sizeof(*neighbor_ids));
@@ -293,7 +127,8 @@ void sage_layer(matrix_t *in, matrix_t *weight, matrix_t *bias, matrix_t *out, o
             for (size_t i = 1; i < neigh_count; i++) {
                 u = neighbor_ids[i];
                 for (size_t feat_idx = 0; feat_idx < arxiv->num_node_features; feat_idx++) {
-                    neighbor_agg->data[feat_idx] += in->data[IDX(u, feat_idx, arxiv->num_node_features)];
+                    size_t idx = IDX(u, feat_idx, arxiv->num_node_features);
+                    neighbor_agg->data[feat_idx] += in->data[idx];
                 }
             }
             for (size_t feat_idx = 0; feat_idx < arxiv->num_node_features; feat_idx++) {
@@ -450,18 +285,17 @@ void print_memory_usage()
 
 int main(void)
 {
-    ogb_arxiv_t arxiv = {0};
-    printf("Loading data\n");
+    graph_t arxiv = {0};
     load_data(&arxiv);
 
-    printf("After loading dataset:\n");
-    print_memory_usage();
+    // printf("After loading dataset:\n");
+    // print_memory_usage();
 
     size_t input_dim = arxiv.num_node_features;  // 128
     size_t output_dim = arxiv.num_label_classes; // 40
     size_t hidden_layer_size = 256;
     K = 1;
-    sample_size = 3;
+    sample_size = 2;
 
     // Weights will be transposed when feed through linear transformation, hence
     // the reverse shape
@@ -470,8 +304,8 @@ int main(void)
     matrix_fill(W1, 0.4);
     matrix_fill(W2, 0.8);
 
-    printf("After initializing only weights:\n");
-    print_memory_usage();
+    // printf("After initializing only weights:\n");
+    // print_memory_usage();
 
     matrix_t *x = arxiv.x;
     matrix_t *bias = NULL;
@@ -480,8 +314,8 @@ int main(void)
     matrix_t *z2 = matrix_create(arxiv.num_nodes, arxiv.num_label_classes);
     matrix_t *y = matrix_create(arxiv.num_nodes, arxiv.num_label_classes);
 
-    printf("After initializing matrices:\n");
-    print_memory_usage();
+    // printf("After initializing matrices:\n");
+    // print_memory_usage();
 
     FILE *f = fopen("output.log", "w");
 
