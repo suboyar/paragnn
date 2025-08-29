@@ -26,14 +26,14 @@ void matrix_destroy(matrix_t *mat)
     free(mat);
 }
 
-inline double mat_get(const matrix_t *mat, size_t i, size_t j)
+double mat_get(const matrix_t *mat, size_t i, size_t j)
 {
     assert(mat != NULL && mat->data != NULL);
     assert(i < mat->height && j < mat->width);
     return mat->data[IDX(i, j, mat->width)];
 }
 
-inline void mat_set(matrix_t *mat, size_t i, size_t j, double value)
+void mat_set(matrix_t *mat, size_t i, size_t j, double value)
 {
     assert(mat != NULL && mat->data != NULL);
     assert(i < mat->height && j < mat->width);

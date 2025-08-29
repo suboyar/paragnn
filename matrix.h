@@ -18,8 +18,8 @@ typedef struct {
 
 matrix_t* matrix_create(size_t height, size_t width);
 void matrix_destroy(matrix_t *mat);
-inline double mat_get(const matrix_t *mat, size_t i, size_t j);
-inline void mat_set(matrix_t *mat, size_t i, size_t j, double value);
+double mat_get(const matrix_t *mat, size_t i, size_t j);
+void mat_set(matrix_t *mat, size_t i, size_t j, double value);
 double* matrix_row(matrix_t *mat, size_t i);
 void matrix_fill(matrix_t *matrix, double value);
 void dot(matrix_t *A, matrix_t *B, matrix_t *C);
