@@ -32,6 +32,8 @@ size_t sample_size;
 
 void relu(matrix_t* in, matrix_t* out)
 {
+    nob_log(NOB_INFO, "relu...");
+
     assert(in->height == out->height);
     assert(in->width == out->width);
 
@@ -40,6 +42,8 @@ void relu(matrix_t* in, matrix_t* out)
             out->data[IDX(i, j, out->width)] = fmax(0.0, in->data[IDX(i, j, in->width)]);
         }
     }
+
+    nob_log(NOB_INFO, "relu ok");
 }
 
 /*
@@ -47,6 +51,8 @@ void relu(matrix_t* in, matrix_t* out)
 */
 void log_softmax(matrix_t* in, matrix_t* out)
 {
+    nob_log(NOB_INFO, "log_softmax...");
+
     assert(in->height == out->height);
     assert(in->width == out->width);
 
@@ -70,11 +76,15 @@ void log_softmax(matrix_t* in, matrix_t* out)
             out->data[IDX(i, j, out->width)] = x - max_x - log_sum;
         }
     }
+
+    nob_log(NOB_INFO, "log_softmax ok");
 }
 
 // Applies an affine linear transformation to the incoming data: y = x @ A^T + b
 void linear_layer(matrix_t* in, matrix_t* weight, matrix_t* bias, matrix_t* out)
 {
+    nob_log(NOB_INFO, "linear_layer...");
+
     // Transposing weight will give correct inner dimensions
     assert(in->height == out->height);
     assert(in->width == weight->width);
@@ -93,14 +103,16 @@ void linear_layer(matrix_t* in, matrix_t* weight, matrix_t* bias, matrix_t* out)
             }
         }
     }
+    nob_log(NOB_INFO, "linear_layer ok");
 }
 
 void sage_layer(matrix_t* in, matrix_t* weight, matrix_t* bias, matrix_t* out, graph_t* arxiv)
 {
+    nob_log(NOB_INFO, "sage_layer...");
 
     size_t *neighbor_ids = malloc(sample_size * sizeof(*neighbor_ids));
-    matrix_t* neighbor_agg = matrix_create(1, arxiv->num_node_features);
-    matrix_t* concat_features = matrix_create(1, 2 * arxiv->num_node_features);
+    matrix_t* neighbor_agg = mat_create(1, arxiv->num_node_features);
+    matrix_t* concat_features = mat_create(1, 2 * arxiv->num_node_features);
 
 
     for (size_t v = 0; v < arxiv->num_nodes; v++) {
@@ -148,7 +160,7 @@ void sage_layer(matrix_t* in, matrix_t* weight, matrix_t* bias, matrix_t* out, g
         matrix_t row;
         row.height = 1;
         row.width = out->width;
-        row.data = matrix_row(out, v);
+        row.data = mat_row(out, v);
         // asm("int $3");
         linear_layer(concat_features, weight, bias, &row);
 
@@ -176,15 +188,18 @@ void sage_layer(matrix_t* in, matrix_t* weight, matrix_t* bias, matrix_t* out, g
     }
 
     free(neighbor_ids);
-    matrix_destroy(neighbor_agg);
-    matrix_destroy(concat_features);
+    mat_destroy(neighbor_agg);
+    mat_destroy(concat_features);
+
+    nob_log(NOB_INFO, "sage_layer ok");
 }
 
 #define NLL_LOSS_REDUCTION_MEAN
 double nll_loss(matrix_t* pred, matrix_t* target)
 {
-    assert(pred->height == target->height);
-    assert(pred->width == target->width);
+    nob_log(NOB_INFO, "nll_loss...");
+
+    MAT_ASSERT(pred, target);
 
     double* L = malloc(target->height * sizeof(*L));
 	for (size_t v = 0; v < target->height; v++) {
@@ -206,104 +221,64 @@ double nll_loss(matrix_t* pred, matrix_t* target)
     for (size_t l = 0; l < N; l++) {
         sum += L[l];
     }
+
 #ifdef NLL_LOSS_REDUCTION_MEAN
-    nob_log(NOB_INFO, "reduction mean");
+    nob_log(NOB_INFO, "nll_loss(mean): ok");
     return sum / N;
 #else
-    nob_log(NOB_INFO, "reduction sum");
+    nob_log(NOB_INFO, "nll_loss(sum): ok");
     return sum;
 #endif
 }
 
-void nll_loss_backward(matrix_t* pred, matrix_t* target, matrix_t* grad_out)
+// Computes gradient flow from both NLLLoss and LogSoftmax.
+void cross_entropy_backward(matrix_t *yhat, matrix_t *y, matrix_t *grad_out)
 {
-    assert(pred->height == target->height);
-    assert(pred->width == target->width);
+    nob_log(NOB_INFO, "cross_entropy_backward...");
 
-    nob_log(NOB_INFO, "nll_loss_backward");
+    MAT_ASSERT(yhat, y);
+    MAT_ASSERT(yhat, grad_out);
 
-    char str_buf[64];
-    mat_spec(pred, str_buf);
-    nob_log(NOB_INFO, "pred     => %s\n", str_buf);
-    // MAT_PRINT(pred);
-    mat_spec(target, str_buf);
-    nob_log(NOB_INFO, "target   => %s\n", str_buf);
-    // MAT_PRINT(target);
+    size_t height = yhat->height, width = yhat->width;
+    for (size_t v = 0; v < height; v++) {
+        for (size_t i = 0; i < width; i++) {
+            MAT_AT(grad_out, v, i) = exp(MAT_AT(yhat, v, i));
+        }
 
-    size_t height = pred->height, width = pred->width;
-    for (size_t i = 0; i < height; i++) {
-        for (size_t j = 0; j < width; j++) {
-            if (MAT_AT(target, i, j) == 1.0) { // True class
-                MAT_AT(grad_out, i, j) = -1.0/height;
-            } else {
-                MAT_AT(grad_out, i, j) = 0.0;
+        for (size_t c = 0; c < width; c++) {
+            if (MAT_AT(y, v, c) == 1.0) { //  True class
+                MAT_AT(grad_out, v, c) = MAT_AT(grad_out, v, c) - 1;
+                break;
             }
         }
     }
 
-    mat_spec(grad_out, str_buf);
-    nob_log(NOB_INFO, "grad_out => %s\n", str_buf);
-    // MAT_PRINT(grad_out);
+    nob_log(NOB_INFO, "cross_entropy_backward: ok");
 }
 
-void log_softmax_backward(matrix_t* pred, matrix_t* grad_in, matrix_t* grad_out)
+void linear_weight_backward(matrix_t* h, matrix_t* grad_out, matrix_t* grad_in)
 {
-    assert(pred->height == grad_in->height);
-    assert(pred->width == grad_in->width);
-    assert(pred->height == grad_out->height);
-    assert(pred->width == grad_out->width);
+    nob_log(NOB_INFO, "linear_weight_backward...");
 
-    nob_log(NOB_INFO, "log_softmax_backward");
-    char str_buf[64];
+    assert(grad_out->width == h->width);
+    assert(grad_out->height == grad_in->width);
+    assert(grad_in->height == h->height);
 
-    mat_spec(grad_in, str_buf);
-    nob_log(NOB_INFO, "grad_in  => %s\n", str_buf);
-    // MAT_PRINT(grad_in);
+    dot_ex(grad_in, h, grad_out, true, false);
 
-    mat_spec(pred, str_buf);
-    nob_log(NOB_INFO, "pred     => %s\n", str_buf);
-    // MAT_PRINT(pred);
-
-    size_t height = pred->height, width = pred->width;
-    for (size_t i = 0; i < height; i++) {
-        // Compute sum of incoming gradients for this sample
-        float grad_sum = 0.0;
-        for (size_t j = 0; j < width; j++) {
-            grad_sum += MAT_AT(grad_in, i, j);
-        }
-
-        // Apply the chain rule formula for each class
-        for (size_t j = 0; j < width; j++) {
-            // Convert log-softmax back to softmax: exp(log_softmax) = softmax
-            double softmax_val = exp(MAT_AT(pred, i, j));
-            // Apply: grad_out = grad_in - softmax * grad_sum
-            MAT_AT(grad_out, i, j) = MAT_AT(grad_in, i, j) - softmax_val * grad_sum;
-        }
-    }
-
-    mat_spec(grad_out, str_buf);
-    nob_log(NOB_INFO, "grad_out => %s\n", str_buf);
-    // MAT_PRINT(grad_out);
+    nob_log(NOB_INFO, "linear_weight_backward: ok");
 }
 
-void linear_backward(matrix_t* lin_in, matrix_t* grad_in, matrix_t* grad_W)
+void linear_h_backward(matrix_t* W, matrix_t* grad_out, matrix_t* grad_in)
 {
-    nob_log(NOB_INFO, "linear_backward");
-    char str_buf[64];
+    nob_log(NOB_INFO, "linear_h_backward...");
 
-    mat_spec(lin_in, str_buf);
-    nob_log(NOB_INFO, "lin_in  => %s\n", str_buf);
-    // MAT_PRINT(lin_in);
+    assert(grad_out->height == grad_in->height);
+    assert(grad_out->width == W->width);
+    assert(grad_in->width == W->height);
 
-    mat_spec(grad_in, str_buf);
-    nob_log(NOB_INFO, "grad_in => %s\n", str_buf);
-    // MAT_PRINT(grad_in);
-
-    dot_ex(grad_in, lin_in, grad_W, true, false);
-
-    mat_spec(grad_W, str_buf);
-    nob_log(NOB_INFO, "grad_W  => %s\n", str_buf);
-    // MAT_PRINT(grad_W);
+    dot(grad_in, W, grad_out);
+    nob_log(NOB_INFO, "linear_h_backward: ok");
 }
 
 void relu_backward(matrix_t* grad_input, matrix_t* grad_output, matrix_t* output)
@@ -338,15 +313,16 @@ void sage_backward()
 }
 
 
-void update_weights(matrix_t* W, matrix_t* grad_W)
+void update_weights(matrix_t* W, matrix_t* grad_W, size_t V)
 {
     assert(W->height == grad_W->height);
     assert(W->width == grad_W->width);
 
+    float V_recip = 1/V;
     size_t height = W->height, width = W->width;
     for (size_t i = 0; i < height; i++) {
         for (size_t j = 0; j < width; j++) {
-            MAT_AT(W, i, j) -= MAT_AT(grad_W, i, j);
+            MAT_AT(W, i, j) -= MAT_AT(grad_W, i, j) * V_recip;
         }
     }
 }
@@ -373,7 +349,7 @@ int main(void)
     srand(0);
     // srand(time(NULL));
 
-    nob_minimal_log_level = NOB_NO_LOGS;
+    // nob_minimal_log_level = NOB_NO_LOGS;
 
     graph_t arxiv = {0};
     load_data(&arxiv);
@@ -389,8 +365,8 @@ int main(void)
 
     // Weights will be transposed when feed through linear transformation, hence
     // the reverse shape
-    matrix_t* W1 = matrix_create(hidden_layer_size, arxiv.num_node_features*2); // times 2 because of concatenation
-    matrix_t* W2 = matrix_create(arxiv.num_label_classes, hidden_layer_size);
+    matrix_t* W1 = mat_create(hidden_layer_size, arxiv.num_node_features*2); // times 2 because of concatenation
+    matrix_t* W2 = mat_create(arxiv.num_label_classes, hidden_layer_size);
     mat_rand(W1, -1.0, 1.0);
     mat_rand(W2, -1.0, 1.0);
 
@@ -398,15 +374,17 @@ int main(void)
     // print_memory_usage();
 
     matrix_t* x = arxiv.x;
+    matrix_t* y = arxiv.y;
     matrix_t* bias = NULL;
-    matrix_t* z1 = matrix_create(arxiv.num_nodes, hidden_layer_size);
-    matrix_t* a1 = matrix_create(arxiv.num_nodes, hidden_layer_size);
-    matrix_t* z2 = matrix_create(arxiv.num_nodes, arxiv.num_label_classes);
-    matrix_t* y = matrix_create(arxiv.num_nodes, arxiv.num_label_classes);
+    matrix_t* h1 = mat_create(arxiv.num_nodes, hidden_layer_size); // Hidden layer outcome from GraphSAGE
+    matrix_t* logits = mat_create(arxiv.num_nodes, arxiv.num_label_classes);
+    matrix_t* yhat = mat_create(arxiv.num_nodes, arxiv.num_label_classes);
 
-    matrix_t* grad_loss = matrix_create(arxiv.num_nodes, arxiv.num_label_classes);
-    matrix_t* grad_logsoft = matrix_create(arxiv.num_nodes, arxiv.num_label_classes); // grad_in
-    matrix_t* grad_W2 = matrix_create(arxiv.num_label_classes, hidden_layer_size); // grad_out
+    matrix_t* grad_logits = mat_create(arxiv.num_nodes, arxiv.num_label_classes);
+    matrix_t* grad_W2 = mat_create(arxiv.num_label_classes, hidden_layer_size);
+    matrix_t* grad_bias = grad_logits; // dC/dBias = dC/dLogits
+    matrix_t* grad_h1 = mat_create(arxiv.num_nodes, hidden_layer_size);
+    matrix_t* grad_W1 = mat_create(hidden_layer_size, arxiv.num_node_features*2); // times 2 because of concatenation
 
     // printf("After initializing matrices:\n");
     // print_memory_usage();
@@ -415,36 +393,36 @@ int main(void)
 
     size_t max_epoch = 20;
     for (size_t epoch = 1; epoch <= max_epoch; epoch++) {
-        sage_layer(x, W1, bias, z1, &arxiv);
-        nob_log(NOB_INFO, "sage_layer: completed");
-
-        relu(z1, a1);
-        nob_log(NOB_INFO, "relu: completed");
-
-        linear_layer(a1, W2, bias, z2);
-        nob_log(NOB_INFO, "linear_layer: completed");
-
-        log_softmax(z2, y);
-        nob_log(NOB_INFO, "log_softmax: completed");
-
-        double loss = nll_loss(y, arxiv.y);
+        sage_layer(x, W1, bias, h1, &arxiv);
+        linear_layer(h1, W2, bias, logits);
+        log_softmax(logits, yhat);
+        double loss = nll_loss(yhat, arxiv.y);
         printf("Loss: %f\n", loss);
 
-        nll_loss_backward(y, arxiv.y, grad_loss);
-        log_softmax_backward(y, grad_loss, grad_logsoft);
-        linear_backward(a1, grad_logsoft, grad_W2);
-        update_weights(W2, grad_W2);
+        cross_entropy_backward(yhat, arxiv.y, grad_logits);
+        linear_weight_backward(h1, grad_W2, grad_logits);
+        linear_h_backward(W2, grad_h1, grad_logits);
+
+        break;
+
+        update_weights(W2, grad_W2, arxiv.num_nodes);
+        // update_bias(bias, grad_bias, arxiv.num_nodes);
     }
 
     fclose(f);
-    matrix_destroy(W1);
-    matrix_destroy(W2);
-    matrix_destroy(z1);
-    matrix_destroy(a1);
-    matrix_destroy(z2);
-    matrix_destroy(y);
-    matrix_destroy(arxiv.x);
-    matrix_destroy(arxiv.y);
+    mat_destroy(W1);
+    mat_destroy(W2);
+    mat_destroy(x);
+    mat_destroy(y);
+    // mat_destroy(bias);
+    mat_destroy(h1);
+    mat_destroy(logits);
+    mat_destroy(yhat);
+    mat_destroy(grad_logits);
+    mat_destroy(grad_h1);
+    // mat_destroy(grad_bias);
+    mat_destroy(grad_W2);
+    mat_destroy(grad_W1);
     free(arxiv.node_year);
     free(arxiv.edge_index);
     return 0;

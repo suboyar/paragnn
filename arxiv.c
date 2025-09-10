@@ -94,7 +94,7 @@ void load_arxiv_data(graph_t *arxiv)
     // TODO: Programmatically find the number of labels by counting unique
     // labels in ogbn_arxiv/raw/node-label.csv.gz
     arxiv->num_label_classes = 40;
-    arxiv->y = matrix_create(arxiv->num_nodes, arxiv->num_label_classes);
+    arxiv->y = mat_create(arxiv->num_nodes, arxiv->num_label_classes);
     if (arxiv->y == NULL) { ERROR("Failed to allocate memory for labels"); }
     sv = read_gz(DATASET_PATH"/raw/node-label.csv.gz");
 
@@ -121,7 +121,7 @@ void load_arxiv_data(graph_t *arxiv)
     // TODO: Programatically find the number of features through counting features
     // in the first line of ogbn_arxiv/raw/node-feat.csv.gz
     arxiv->num_node_features = 128;
-    arxiv->x = matrix_create(arxiv->num_nodes, arxiv->num_node_features);
+    arxiv->x = mat_create(arxiv->num_nodes, arxiv->num_node_features);
     if (arxiv->x == NULL) { ERROR("Failed to allocate memory for features"); }
     sv = read_gz(DATASET_PATH"/raw/node-feat.csv.gz");
 

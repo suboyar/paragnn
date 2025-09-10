@@ -1,9 +1,11 @@
 #include <assert.h>
+#include <float.h>
+#include <math.h>
 #include <stdlib.h>
 
 #include "matrix.h"
 
-matrix_t* matrix_create(size_t height, size_t width)
+matrix_t* mat_create(size_t height, size_t width)
 {
     matrix_t *mat = malloc(sizeof(matrix_t));
     if (!mat) return NULL;
@@ -20,7 +22,7 @@ matrix_t* matrix_create(size_t height, size_t width)
     return mat;
 }
 
-void matrix_destroy(matrix_t *mat)
+void mat_destroy(matrix_t *mat)
 {
     free(mat->data);
     free(mat);
@@ -40,13 +42,13 @@ void mat_set(matrix_t *mat, size_t i, size_t j, double value)
     mat->data[IDX(i, j, mat->width)] = value;
 }
 
-double* matrix_row(matrix_t *mat, size_t i)
+double* mat_row(matrix_t *mat, size_t i)
 {
     assert(i < mat->height);
     return mat->data + (i * mat->width);
 }
 
-void matrix_fill(matrix_t *matrix, double value)
+void mat_fill(matrix_t *matrix, double value)
 {
     if (!matrix || !matrix->data) return;
 
@@ -116,9 +118,40 @@ void dot_ex(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt)
     }
 }
 
-int mat_spec(matrix_t* mat, char* out)
+// https://randomascii.wordpress.com/2012/02/25/comparing-floating-point-numbers-2012-edition/
+bool mat_equal(matrix_t *A, matrix_t *B, size_t *row, size_t *col)
 {
-    return sprintf(out, "Height: %zu, Width: %zu", mat->height, mat->width);
+    // Calculate the difference.
+    MAT_ASSERT(A, B);
+    for (size_t i = 0; i < A->height; i++) {
+        for (size_t j = 0; j < A->width; j++) {
+            double a = MAT_AT(A, i, j);
+            double b = MAT_AT(B, i, j);
+            float diff = fabs(a - b);
+            a = fabs(a);
+            b = fabs(b);
+            // Find the largest
+            float largest = (b > a) ? b : a;
+
+            if (diff > largest * DBL_EPSILON) {
+                if (row != NULL && col != NULL) {
+                    *row = i;
+                    *col = j;
+                }
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+void mat_spec(matrix_t* mat, const char* name)
+{
+    if (mat != NULL) {
+        printf("%s (%zux%zu)\n", name, mat->height, mat->width);
+    } else {
+        printf("%s (nil)\n", name);
+    }
 }
 
 void mat_print(matrix_t* mat, const char *name, size_t padding)
@@ -132,26 +165,4 @@ void mat_print(matrix_t* mat, const char *name, size_t padding)
         printf("\n");
     }
     printf("%*s]\n", (int) padding, "");
-}
-
-void fmatrix_print(FILE* out, const matrix_t *matrix, const char *name)
-{
-    if (!matrix || !matrix->data) {
-        fprintf(out, "%s = None\n", name ? name : "matrix");
-        return;
-    }
-
-    fprintf(out, "%s = array([", name ? name : "matrix");
-
-    for (size_t i = 0; i < matrix->height; i++) {
-        if (i > 0) fprintf(out, ", ");
-        fprintf(out, "[");
-        for (size_t j = 0; j < matrix->width; j++) {
-            if (j > 0) fprintf(out, ", ");
-            fprintf(out, "%.2f", matrix->data[IDX(i, j, matrix->width)]);
-        }
-        fprintf(out, "]");
-    }
-
-    fprintf(out, "])\n");
 }
