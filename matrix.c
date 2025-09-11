@@ -13,6 +13,7 @@ matrix_t* mat_create(size_t height, size_t width)
 
     mat->data = calloc(height * width, sizeof(*mat->data));
     if (!mat->data) {
+        assert(false && "Could not create matrix");
         free(mat);
         return NULL;
     }
@@ -48,7 +49,6 @@ double* mat_row(matrix_t *mat, size_t i)
     assert(i < mat->height);
     return mat->data + (i * mat->width);
 }
-
 
 void mat_cpy(matrix_t* dst, matrix_t* src)
 {

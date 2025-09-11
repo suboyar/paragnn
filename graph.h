@@ -5,7 +5,7 @@
 
 #include "matrix.h"
 
-#define EDGE_AT(g, i, j) (g)->edge_index[(i)*(g)->num_edges + (j)]
+#define EDGE_AT(g, v, u) (g)->edge_index[(u)*(g)->num_edges + (v)]
 
 typedef struct {
     size_t num_edges;

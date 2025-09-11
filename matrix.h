@@ -1,4 +1,3 @@
-// matrix.h
 #ifndef MATRIX_H
 #define MATRIX_H
 
@@ -8,6 +7,7 @@
 
 #define IDX(i, j, width) ((i) * (width) + (j))
 #define MAT_AT(m, i, j) (m)->data[(i)*(m)->width + (j)]
+#define MAT_ROW(m, row) (m)->data[(row)*(m)->width]
 
 #define MAT_ASSERT(M1, M2) do {assert((M1)->height == (M2)->height); assert((M1)->width == (M2)->width);} while(0)
 
@@ -28,7 +28,7 @@ void mat_copy_row(matrix_t* dst, size_t dst_row, matrix_t* src, size_t src_row);
 void mat_sum(matrix_t* dst, matrix_t* A);
 void mat_fill(matrix_t *matrix, double value);
 void mat_rand(matrix_t* m, float low, float high);
-void dot(matrix_t *A, matrix_t *B, matrix_t *C);
+void dot(matrix_t *A, matrix_t *B, matrix_t *C); // C = A . B
 void dot_ex(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt);
 bool mat_equal(matrix_t *A, matrix_t *B, size_t *row, size_t *col);
 void mat_print(matrix_t* mat, const char *name, size_t padding);
