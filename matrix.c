@@ -2,6 +2,7 @@
 #include <float.h>
 #include <math.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "matrix.h"
 
@@ -46,6 +47,38 @@ double* mat_row(matrix_t *mat, size_t i)
 {
     assert(i < mat->height);
     return mat->data + (i * mat->width);
+}
+
+
+void mat_cpy(matrix_t* dst, matrix_t* src)
+{
+    MAT_ASSERT(dst, src);
+    for (size_t i = 0; i < dst->height; ++i) {
+        for (size_t j = 0; j < dst->width; ++j) {
+            MAT_AT(dst, i, j) = MAT_AT(src, i, j);
+        }
+    }
+}
+
+void mat_copy_row(matrix_t* dst, size_t dst_row, matrix_t* src, size_t src_row)
+{
+    assert(dst->width == src->width);
+    assert(dst_row < dst->height);
+    assert(src_row < src->height);
+
+    memcpy(&MAT_AT(dst, dst_row, 0),
+           &MAT_AT(src, src_row, 0),
+           src->width * sizeof(double));
+}
+
+void mat_sum(matrix_t* dst, matrix_t* A)
+{
+    MAT_ASSERT(dst, A);
+    for (size_t i = 0; i < dst->height; ++i) {
+        for (size_t j = 0; j < dst->width; ++j) {
+            MAT_AT(dst, i, j) += MAT_AT(A, i, j);
+        }
+    }
 }
 
 void mat_fill(matrix_t *matrix, double value)

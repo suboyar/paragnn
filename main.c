@@ -28,7 +28,6 @@
 } while(0)
 
 size_t K;
-size_t sample_size;
 
 void relu(matrix_t* in, matrix_t* out)
 {
@@ -106,55 +105,88 @@ void linear_layer(matrix_t* in, matrix_t* weight, matrix_t* bias, matrix_t* out)
     nob_log(NOB_INFO, "linear_layer ok");
 }
 
-void sage_layer(matrix_t* in, matrix_t* weight, matrix_t* bias, matrix_t* out, graph_t* arxiv)
+#define SAMPLE_SIZE 10 // XXX: Placeholder unitl I implement proper neighbor samplig
+void aggregate(size_t v, graph_t* G, matrix_t* in, matrix_t* agg)
+{
+    size_t *adj = malloc(SAMPLE_SIZE * sizeof(*adj));
+
+    size_t neigh_count = 0;
+
+    // TODO: wrong edge node is found
+    // Find neighbors of count sample size
+    for (size_t edge = 0; edge < G->num_edges && neigh_count < SAMPLE_SIZE; edge++) {
+        size_t u0 = EDGE_AT(G, edge, 0);
+        size_t u1 = EDGE_AT(G, edge, 1);
+        if (v == u0) {
+            printf("Found v == u0 -> u1 (%zu == %zu -> %zu) at %zu\n", v, u0, u1, neigh_count);
+            adj[neigh_count++] = u1;
+        } else if (v == u1) {
+            printf("Found v == u1 -> u0 (%zu == %zu -> %zu) at %zu\n", v, u1, u0, neigh_count);
+            adj[neigh_count++] = u0;
+        }
+    }
+
+    // Aggregate with mean
+    if (neigh_count == 0) {
+        goto exit;
+    }
+
+    size_t u = adj[0];
+    printf("%zu\n", u);
+    assert(u < G->num_nodes && "WHY!?");
+
+    // Move the first neighbor features to memory space for aggregation
+    // memcpy(agg->data, &in->data[IDX(u, 0, arxiv->num_node_features)], arxiv->num_node_features * sizeof(double));
+    mat_copy_row(agg, 0, in, u);
+    for (size_t i = 1; i < neigh_count; i++) {
+        u = adj[i];
+        // TODO: HERE: Find out how to fit in->data[idx] to mat_sum
+        // mat_sum(agg)
+
+        for (size_t feat_idx = 0; feat_idx < G->num_node_features; feat_idx++) {
+            size_t idx = IDX(u, feat_idx, G->num_node_features);
+            agg->data[feat_idx] += in->data[idx];
+        }
+    }
+
+    for (size_t feat_idx = 0; feat_idx < G->num_node_features; feat_idx++) {
+        agg->data[feat_idx] /= neigh_count;
+    }
+
+exit:
+    free(adj);
+
+}
+
+
+// 1. Aggregate
+// 2. linear transformation
+// 3. relu
+// 4. l2 norm
+
+void sage_layer(matrix_t* in, matrix_t* weight, matrix_t* bias, matrix_t* out, graph_t* G)
 {
     nob_log(NOB_INFO, "sage_layer...");
 
-    size_t *neighbor_ids = malloc(sample_size * sizeof(*neighbor_ids));
-    matrix_t* neighbor_agg = mat_create(1, arxiv->num_node_features);
-    matrix_t* concat_features = mat_create(1, 2 * arxiv->num_node_features);
+    matrix_t* agg = mat_create(1, G->num_node_features);
+    matrix_t* concat_features = mat_create(1, 2 * G->num_node_features);
 
-
-    for (size_t v = 0; v < arxiv->num_nodes; v++) {
+    for (size_t v = 0; v < G->num_nodes; v++) {
         uint8_t neigh_count = 0;
 
-        // find neighbors of count sample size
-        for (size_t edge = 0; edge < arxiv->num_edges && neigh_count < sample_size; edge++) {
-            if (arxiv->edge_index[IDX(0, edge, arxiv->num_edges)] == v) {
-                neighbor_ids[neigh_count++] = arxiv->edge_index[IDX(1, edge, arxiv->num_edges)];
-            } else if (arxiv->edge_index[IDX(1, edge, arxiv->num_edges)] == v) {
-                neighbor_ids[neigh_count++] = arxiv->edge_index[IDX(0, edge, arxiv->num_edges)];
-            }
-        }
-
-        // aggrigate with mean
-        size_t u = neighbor_ids[0];
-        if (u >= arxiv->num_nodes) { continue; }
-        if (neigh_count > 0) {
-            memcpy(neighbor_agg->data, &in->data[IDX(u, 0, arxiv->num_node_features)], arxiv->num_node_features * sizeof(double));
-            for (size_t i = 1; i < neigh_count; i++) {
-                u = neighbor_ids[i];
-                for (size_t feat_idx = 0; feat_idx < arxiv->num_node_features; feat_idx++) {
-                    size_t idx = IDX(u, feat_idx, arxiv->num_node_features);
-                    neighbor_agg->data[feat_idx] += in->data[idx];
-                }
-            }
-            for (size_t feat_idx = 0; feat_idx < arxiv->num_node_features; feat_idx++) {
-                neighbor_agg->data[feat_idx] /= neigh_count;
-            }
-        }
+        aggregate(v, G, in, agg);
 
         // TODO: Divide the linear transformation calculation instead of doing
         // concatenation linear transformation, and add them together at the end
 
         // copy self features
-        for (size_t feat_idx = 0; feat_idx < arxiv->num_node_features; feat_idx++) {
-            concat_features->data[feat_idx] = in->data[IDX(v, feat_idx, arxiv->num_node_features)];
+        for (size_t feat_idx = 0; feat_idx < G->num_node_features; feat_idx++) {
+            concat_features->data[feat_idx] = in->data[IDX(v, feat_idx, G->num_node_features)];
         }
 
         // copy aggregated neighbor features
-        for (size_t feat_idx = 0; feat_idx < arxiv->num_node_features; feat_idx++) {
-            concat_features->data[arxiv->num_node_features + feat_idx] = neighbor_agg->data[feat_idx];
+        for (size_t feat_idx = 0; feat_idx < G->num_node_features; feat_idx++) {
+            concat_features->data[G->num_node_features + feat_idx] = agg->data[feat_idx];
         }
 
         matrix_t row;
@@ -166,13 +198,13 @@ void sage_layer(matrix_t* in, matrix_t* weight, matrix_t* bias, matrix_t* out, g
 
 #ifndef ndebug
         if (v > 0 && v % 10000 == 0) {
-            printf("finished %zu / %zu nodes\n", v, arxiv->num_nodes);
+            printf("finished %zu / %zu nodes\n", v, G->num_nodes);
         }
 #endif
     }
 
     // L2 Normalization
-    for (size_t v = 0; v < arxiv->num_nodes; v++) {
+    for (size_t v = 0; v < G->num_nodes; v++) {
         double norm = 0.0;
         for (size_t x = 0; x < out->width; x++) {
             double val = out->data[IDX(v, x, out->width)];
@@ -187,14 +219,13 @@ void sage_layer(matrix_t* in, matrix_t* weight, matrix_t* bias, matrix_t* out, g
         }
     }
 
-    free(neighbor_ids);
-    mat_destroy(neighbor_agg);
+    mat_destroy(agg);
     mat_destroy(concat_features);
 
     nob_log(NOB_INFO, "sage_layer ok");
 }
 
-#define NLL_LOSS_REDUCTION_MEAN
+#define NLLLOSS_REDUCTION_MEAN
 double nll_loss(matrix_t* pred, matrix_t* target)
 {
     nob_log(NOB_INFO, "nll_loss...");
@@ -361,7 +392,6 @@ int main(void)
     size_t output_dim = arxiv.num_label_classes; // 40
     size_t hidden_layer_size = 5;
     K = 1;
-    sample_size = 2;
 
     // Weights will be transposed when feed through linear transformation, hence
     // the reverse shape
