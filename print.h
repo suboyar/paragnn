@@ -3,9 +3,9 @@
 
 #include <stddef.h>
 
-void print_arr_f(double *arr);
-void print_arr_d(int *arr);
-void print_arr_zu(size_t *arr);
-void print_arr_s(char **arr);
+void print_farr(double *arr, size_t len);
+void print_darr(int *arr, size_t len);
+void print_zuarr(size_t *arr, size_t len);
+void print_sarr(char **arr, size_t len);
 
 #endif // PRINT_H

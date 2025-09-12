@@ -140,24 +140,24 @@ void aggregate(size_t v, graph_t *G, matrix_t *in, double *agg)
     }
 
     // printf("node %zu: ", v);
-    // print_arr_zu(adj);
+    // print_zuarr(adj, neigh_count);
 
     // for (size_t i = 0; i < neigh_count; i++) {
     //     size_t u = adj[i];
     //     assert(u < G->num_nodes && nob_temp_sprintf("Neighbor adj[%zu] points to out-of-bounds value %zu", i, u));
     //     printf("%zu = ", u);
-    //     print_arr_f(&MAT_ROW(in, u));
+    //     print_farr(&MAT_ROW(in, u), G->num_node_features);
     // }
 
     size_t u = adj[0];
     assert(u < G->num_nodes && nob_temp_sprintf("Neighbor adj[0] points to out-of-bounds value %zu", u));
 
     // printf("MAT_ROW(in, %zu) = ", u);
-    // print_arr_f(&(MAT_ROW(in, u)));
+    // print_farr(&(MAT_ROW(in, u)), G->num_node_features);
 
     // Move the first neighbor features to memory space for aggregation
     memcpy(agg, &MAT_ROW(in, u), G->num_node_features * sizeof(*agg));
-    // print_arr_f(agg);
+    // print_farr(agg, G->num_node_features);
     for (size_t i = 1; i < neigh_count; i++) {
         u = adj[i];
         assert(u < G->num_nodes && nob_temp_sprintf("Neighbor adj[%zu] points to out-of-bounds value %zu", i, u));
@@ -168,7 +168,7 @@ void aggregate(size_t v, graph_t *G, matrix_t *in, double *agg)
     }
 
     // printf("agg before norm = ");
-    // print_arr_f(agg);
+    // print_farr(agg, G->num_node_features);
 
     float neigh_count_recp = (float)1/neigh_count;
     for (size_t feat_idx = 0; feat_idx < G->num_node_features; feat_idx++) {
@@ -176,7 +176,7 @@ void aggregate(size_t v, graph_t *G, matrix_t *in, double *agg)
     }
 
     // printf("agg after norm = ");
-    // print_arr_f(agg);
+    // print_farr(agg, G->num_node_features);
 
 exit:
     free(adj);
