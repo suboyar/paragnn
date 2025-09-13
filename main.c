@@ -263,35 +263,68 @@ void linear_h_backward(matrix_t* grad_in, matrix_t* W, matrix_t* grad_out)
 }
 
 
-void relu_backward(matrix_t* grad_input, matrix_t* grad_output, matrix_t* output)
+void l2_normalization_backward(matrix_t *grad_in, matrix_t *h_relu, matrix_t *h_l2, matrix_t *grad_out)
 {
-    assert(output->height == grad_output->height);
-    assert(output->width == grad_output->width);
-    assert(output->height == grad_input->height);
-    assert(output->width == grad_input->width);
+    MAT_ASSERT(grad_in, h_relu);
+    MAT_ASSERT(grad_in, h_l2);
+    MAT_ASSERT(grad_in, grad_out);
+    size_t V = grad_in->height;
+    size_t H = grad_in->width;
+    for (size_t v = 0; v < V; v++) {
+        double norm = 0.0;
+        for (size_t x = 0; x < h_relu->width; x++) {
+            double val = MAT_AT(h_relu, v, x);
+            norm += val * val;
+        }
+        double norm_recp = 1/sqrt(norm);
+
+        for (size_t j = 0; j < H; j++) {
+            MAT_AT(grad_out, v, j) = 0;
+            for (size_t k = 0; k < H; k++) {
+                if (j == k) { MAT_AT(grad_out, v, j) = 1; }
+                MAT_AT(grad_out, v, j) *= MAT_AT(h_l2, v, k) * MAT_AT(h_l2, v, j);
+                MAT_AT(grad_out, v, j) *= MAT_AT(grad_in, v, k);
+            }
+            MAT_AT(grad_out, v, j) *= norm_recp;
+        }
+    }
+    nob_log(NOB_INFO, "l2_normalization_backward: ok");
+}
+
+void relu_backward(matrix_t* grad_in, matrix_t* h, matrix_t* grad_out)
+{
+    MAT_ASSERT(grad_in, grad_out);
+    MAT_ASSERT(grad_in, h);
+
 
     // TODO: Check if one of these are better:
     // - grad_input->data[IDX] = (output->data[IDX] > 0.0f) * grad_output->data[IDX];
     // - grad_input->data[IDX] = grad_output->data[IDX] * fmaxf(0.0f, copysignf(1.0f, output->data[IDX]));
 
-    for (size_t i = 0; i < output->height; i++) {
-        for (size_t j = 0; j < output->width; j++) {
-            grad_input->data[IDX(i, j, grad_input->width)] = 0; //  f'(x) x <= 0
-            if (output->data[IDX(i, j, output->width)]) {       //  f'(x) x > 0
-                grad_input->data[IDX(i, j, grad_input->width)] = grad_output->data[IDX(i, j, grad_output->width)];
-            }
+    size_t height = grad_in->height;
+    size_t width = grad_in->width;
+
+    for (size_t i = 0; i < height; i++) {
+        for (size_t j = 0; j < width; j++) {
+            MAT_AT(grad_out, i, j) = 0;
+            if (MAT_AT(h, i, j) > 0.0) { MAT_AT(grad_out, i, j) = MAT_AT(grad_in, i, j); }
         }
     }
+
+    nob_log(NOB_INFO, "relu_backward: ok");
 }
 
-void l2_normalize_backward()
+void sage_conv_backward(matrix_t *grad_in, matrix_t *h_relu, matrix_t *h, matrix_t *agg, matrix_t *grad_Wl, matrix_t *grad_Wr, graph_t *g)
 {
-    NOB_TODO("Implement relu_backward");
-}
+    // MAT_ASSERT(grad_in, h_relu);
+    // MAT_ASSERT(grad_Wl, grad_Wr);
+    // assert(grad_in->width == grad_Wl->height);
 
-void sage_backward()
-{
-    NOB_TODO("Implement sage_backward");
+    size_t height = grad_Wl->height;
+    size_t width = grad_Wl->width;
+
+    dot_ex(h, grad_in, grad_Wl, true, false);
+    dot_ex(agg, grad_in, grad_Wr, true, false);
 }
 
 
@@ -308,6 +341,26 @@ void update_weights(matrix_t* W, matrix_t* grad_W, size_t V)
         }
     }
 }
+
+void update_sage_weights(matrix_t* W, matrix_t* grad_W, size_t V)
+{
+    // assert(W->height == grad_W->height);
+    // assert(W->width == grad_W->width);
+
+    float V_recip = (float) 1/V;
+    size_t height = W->height, width = W->width;
+    for (size_t i = 0; i < height; i++) {
+        for (size_t j = 0; j < width; j++) {
+            MAT_AT(W, i, j) -= MAT_AT(grad_W, j, i) * V_recip;
+        }
+    }
+}
+
+void reset_grad(matrix_t *grad)
+{
+    memset(grad->data, 0, grad->capacity);
+}
+
 
 // TODO: Check out getrusage from <sys/resource.h>
 void print_memory_usage()
@@ -328,7 +381,7 @@ void print_memory_usage()
 
 int main(void)
 {
-    srand(10);
+    srand(0);
     // srand(time(NULL));
 
     nob_minimal_log_level = NOB_NO_LOGS;
@@ -372,14 +425,14 @@ int main(void)
     matrix_t* grad_h1 = mat_create(g.num_nodes, hidden_layer_size);
     matrix_t* grad_h1_relu = mat_create(g.num_nodes, hidden_layer_size);
     matrix_t* grad_h1_l2 = mat_create(g.num_nodes, hidden_layer_size);
-    matrix_t* grad_W1 = mat_create(hidden_layer_size, g.num_node_features*2); // times 2 because of concatenation
+    // This is the transposed shape of the weight matrices
+    matrix_t* grad_W1l = mat_create(g.num_node_features, hidden_layer_size);
+    matrix_t* grad_W1r = mat_create(g.num_node_features, hidden_layer_size);
 
     // printf("After initializing matrices:\n");
     // print_memory_usage();
 
-    FILE *f = fopen("output.log", "w");
-
-    size_t max_epoch = 20;
+    size_t max_epoch = 100;
     for (size_t epoch = 1; epoch <= max_epoch; epoch++) {
         sage_conv(x, W1l, W1r, agg, h1, &g);
         relu(h1, h1_relu);
@@ -395,8 +448,23 @@ int main(void)
         linear_weight_backward(grad_logits, h1_l2, grad_W2);
 
         linear_h_backward(grad_logits, W2, grad_h1);
+        l2_normalization_backward(grad_h1, h1_relu, h1_l2, grad_h1_l2);
+        relu_backward(grad_h1_l2, h1, grad_h1_relu);
+        sage_conv_backward(grad_h1_relu, h1_relu, x, agg, grad_W1l, grad_W1r, &g);
+        // break;
 
         update_weights(W2, grad_W2, g.num_nodes);
+        update_sage_weights(W1l, grad_W1l, g.num_nodes);
+        update_sage_weights(W1r, grad_W1r, g.num_nodes);
+
+        reset_grad(grad_logits);
+        reset_grad(grad_W2);
+        reset_grad(grad_bias);
+        reset_grad(grad_h1);
+        reset_grad(grad_h1_relu);
+        reset_grad(grad_h1_l2);
+        reset_grad(grad_W1l);
+        reset_grad(grad_W1r);
     }
 
     mat_destroy(W1l);
