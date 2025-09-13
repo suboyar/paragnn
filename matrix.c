@@ -146,10 +146,41 @@ void dot_ex(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt)
                 sum += A->data[i*a_row_stride + k*a_col_stride] *
                        B->data[k*b_row_stride + j*b_col_stride];
             }
-            C->data[IDX(i, j, C->width)] = sum;
+            MAT_AT(C, i, j) = sum;
         }
     }
 }
+
+void dot_agg_ex(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt)
+{
+    // Verify inner dimensions match
+    assert((at ? A->height : A->width) == (bt ? B->width : B->height));
+    assert(C->height == (at ? A->width : A->height));
+    assert(C->width == (bt ? B->height : B->width));
+
+    size_t M = at ? A->width : A->height;
+    size_t N = at ? A->height : A->width;
+    size_t P = bt ? B->height : B->width;
+
+    // Precompute strides for each matrix
+    size_t a_row_stride = at ? 1 : A->width;
+    size_t a_col_stride = at ? A->width : 1;
+    size_t b_row_stride = bt ? 1 : B->width;
+    size_t b_col_stride = bt ? B->width : 1;
+
+    // TODO unroll and jam
+    for (size_t i = 0; i < M; i++) {
+        for (size_t j = 0; j < P; j++) {
+            double sum = 0.0;
+            for (size_t k = 0; k < N; k++) {
+                sum += A->data[i*a_row_stride + k*a_col_stride] *
+                       B->data[k*b_row_stride + j*b_col_stride];
+            }
+            MAT_AT(C, i, j) += sum;
+        }
+    }
+}
+
 
 // https://randomascii.wordpress.com/2012/02/25/comparing-floating-point-numbers-2012-edition/
 bool mat_equal(matrix_t *A, matrix_t *B, size_t *row, size_t *col)

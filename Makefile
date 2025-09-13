@@ -1,4 +1,4 @@
-CFLAGS = -ggdb -Wall -Wextra
+CFLAGS = -ggdb -g3 -gdwarf-2 -Wall -Wextra
 # CFLAGS += -O3 -march=native
 CFLAGS += -O0
 

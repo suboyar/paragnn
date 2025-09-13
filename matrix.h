@@ -30,6 +30,7 @@ void mat_fill(matrix_t *matrix, double value);
 void mat_rand(matrix_t* m, float low, float high);
 void dot(matrix_t *A, matrix_t *B, matrix_t *C); // C = A . B
 void dot_ex(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt);
+void dot_agg_ex(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt);
 bool mat_equal(matrix_t *A, matrix_t *B, size_t *row, size_t *col);
 void mat_print(matrix_t* mat, const char *name, size_t padding);
 #define MAT_PRINT(m) mat_print(m, #m, 0)

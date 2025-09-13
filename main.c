@@ -14,9 +14,9 @@
 #define NOB_IMPLEMENTATION
 #include "nob.h"
 
-#define USE_SIMPLE_GRAPH    // Comment out to use arxiv
+#define USE_SIMPLE_GRAPH 1
 
-#ifdef USE_SIMPLE_GRAPH
+#if USE_SIMPLE_GRAPH
 #include "simple_graph.h"
 #define load_data load_simple_data
 #else
@@ -83,7 +83,6 @@ void linear_layer(matrix_t* in, matrix_t* weight, matrix_t* bias, matrix_t* out)
     assert(in->width == weight->width);
     assert(out->width == weight->height);
 
-    // Computes out = in @ weight^T
     dot_ex(in, weight, out, false, true);
 
     if (bias) {
@@ -100,136 +99,73 @@ void linear_layer(matrix_t* in, matrix_t* weight, matrix_t* bias, matrix_t* out)
 }
 
 #define SAMPLE_SIZE 10 // XXX: Placeholder unitl I implement proper neighbor samplig
-void aggregate(size_t v, graph_t *G, matrix_t *in, double *agg)
+size_t aggregate(matrix_t *in, size_t v, matrix_t *out, graph_t *g)
 {
-    size_t *adj = malloc(SAMPLE_SIZE * sizeof(*adj));
-
+    size_t adj[SAMPLE_SIZE] = {0};
     size_t neigh_count = 0;
 
-    // NOTE: This neighbor finding approach collects neighbors from both directions
-    // (incoming and outgoing edges). For directed graphs like ogbn-arxiv, this is
-    // the intended behavior to aggregate information from both:
-    //
-    // - Papers that node v cites (outgoing edges: v -> u1)
-    // - Papers that cite node v (incoming edges: u0 -> v)
-    //
-    // However, for undirected graphs, this would cause double counting since
-    // each undirected edge (i,j) appears as both (i,j) and (j,i) in the edge
-    // list.
-    //
-    // TODO: Make this behavior configurable based on graph type
-    // - Directed graphs: Keep bidirectional collection (current behavior)
-    // - Undirected graphs: Use deduplication or PyG's to_symmetric approach
-    //
+    // NOTE: Collects neighbors from both directions (incoming/outgoing
+    // edges). Correct for directed graphs like ogbn-arxiv, but causes
+    // double counting for undirected graphs since each edge (i,j) appears
+    // as both (i,j) and (j,i).
+
     // Find neighbors of count sample size
-    for (size_t edge = 0; edge < G->num_edges && neigh_count < SAMPLE_SIZE; edge++) {
-        size_t u0 = EDGE_AT(G, edge, 0);
-        size_t u1 = EDGE_AT(G, edge, 1);
+    for (size_t edge = 0; edge < g->num_edges && neigh_count < SAMPLE_SIZE; edge++) {
+        size_t u0 = EDGE_AT(g, edge, 0);
+        size_t u1 = EDGE_AT(g, edge, 1);
+        assert(u0 < g->num_nodes && nob_temp_sprintf("Neighbor u0 points to out-of-bounds value %zu", u0));
+        assert(u1 < g->num_nodes && nob_temp_sprintf("Neighbor u1 points to out-of-bounds value %zu", u1));
+
         if (v == u0) {  // Paper v cites u1
-            // printf("%zu=u0: adj[%zu]=%zu\n", v, neigh_count, u1);
             adj[neigh_count++] = u1;
         } else if (v == u1) {   // Paper u0 cites v
-            // printf("%pzu=u1: adj[%zu]=%zu\n", v, neigh_count, u0);
             adj[neigh_count++] = u0;
         }
     }
 
-    // Aggregate with mean
     if (neigh_count == 0) {
-        goto exit;
+        return 0;
     }
 
-    // printf("node %zu: ", v);
-    // print_zuarr(adj, neigh_count);
-
-    // for (size_t i = 0; i < neigh_count; i++) {
-    //     size_t u = adj[i];
-    //     assert(u < G->num_nodes && nob_temp_sprintf("Neighbor adj[%zu] points to out-of-bounds value %zu", i, u));
-    //     printf("%zu = ", u);
-    //     print_farr(&MAT_ROW(in, u), G->num_node_features);
-    // }
-
-    size_t u = adj[0];
-    assert(u < G->num_nodes && nob_temp_sprintf("Neighbor adj[0] points to out-of-bounds value %zu", u));
-
-    // printf("MAT_ROW(in, %zu) = ", u);
-    // print_farr(&(MAT_ROW(in, u)), G->num_node_features);
-
     // Move the first neighbor features to memory space for aggregation
-    memcpy(agg, &MAT_ROW(in, u), G->num_node_features * sizeof(*agg));
-    // print_farr(agg, G->num_node_features);
+    size_t u = adj[0];
+    memcpy(&MAT_ROW(out, v), &MAT_ROW(in, u), g->num_node_features * sizeof(*out->data)); // __memmove_evex_unaligned_erms
     for (size_t i = 1; i < neigh_count; i++) {
         u = adj[i];
-        assert(u < G->num_nodes && nob_temp_sprintf("Neighbor adj[%zu] points to out-of-bounds value %zu", i, u));
-
-        for (size_t feat_idx = 0; feat_idx < G->num_node_features; feat_idx++) {
-            agg[feat_idx] += MAT_AT(in, u, feat_idx);
+        for (size_t f = 0; f < g->num_node_features; f++) {
+            MAT_AT(out, v, f) += MAT_AT(in, u, f);
         }
     }
 
-    // printf("agg before norm = ");
-    // print_farr(agg, G->num_node_features);
-
+    // Aggregation with mean
     float neigh_count_recp = (float)1/neigh_count;
-    for (size_t feat_idx = 0; feat_idx < G->num_node_features; feat_idx++) {
-        agg[feat_idx] *= neigh_count_recp;
+    for (size_t f = 0; f < g->num_node_features; f++) {
+        MAT_AT(out, v, f) *= neigh_count_recp;
     }
 
-    // printf("agg after norm = ");
-    // print_farr(agg, G->num_node_features);
-
-exit:
-    free(adj);
+    return neigh_count;
 }
 
 
-void sage_layer(matrix_t* in, matrix_t* W, matrix_t* bias, matrix_t* out, graph_t* G)
+void sage_conv(matrix_t *in, matrix_t *Wl, matrix_t *Wr, matrix_t *agg, matrix_t *out, graph_t *g)
 {
-    // MAT_SPEC(in);
-    // MAT_SPEC(W);
-    // MAT_SPEC(out);
+    MAT_ASSERT(in, agg);
+    MAT_ASSERT(Wl, Wr);
+    MAT_ASSERT(Wl, Wr);
+    assert(out->height == in->height);
+    assert(out->width == Wl->height);
 
-    double *agg = malloc(G->num_node_features*sizeof(*agg));
-    matrix_t *concat_features = mat_create(1, 2 * G->num_node_features);
-
-    for (size_t v = 0; v < G->num_nodes; v++) {
-        aggregate(v, G, in, agg);
-
-        // TODO: Divide the linear transformation instead of doing concatenation
-        // linear transformation, and add them together at the end.
-        // y = W*concat(x, agg()) => y = Wl*x + Wr*agg(), where W = [Wl | Wr]
-
-        // copy self features
-        for (size_t feat_idx = 0; feat_idx < G->num_node_features; feat_idx++) {
-            concat_features->data[feat_idx] = in->data[IDX(v, feat_idx, G->num_node_features)];
-        }
-
-        // copy aggregated neighbor features
-        for (size_t feat_idx = 0; feat_idx < G->num_node_features; feat_idx++) {
-            concat_features->data[G->num_node_features + feat_idx] = agg[feat_idx];
-        }
-
-        matrix_t row;
-        row.height = 1;
-        row.width = out->width;
-        row.data = &MAT_ROW(out, v);
-
-        linear_layer(concat_features, W, bias, &row);
-
-#ifndef NDEBUG
-        if (v > 0 && v % 10000 == 0) {
-            printf("finished %zu / %zu nodes\n", v, G->num_nodes);
-        }
-#endif
+    for (size_t v = 0; v < g->num_nodes; v++) {
+        (void)aggregate(in, v, agg, g);
     }
 
-    free(agg);
-    mat_destroy(concat_features);
+    dot_ex(agg, Wr, out, false, true);
+    dot_agg_ex(in, Wl, out, false, true);
 
     nob_log(NOB_INFO, "sage_layer: ok");
 }
 
-void l2_normalization(matrix_t *out, matrix_t *in, graph_t *G)
+void l2_normalization(matrix_t *in, matrix_t *out, graph_t *G)
 {
     MAT_ASSERT(out, in);
 
@@ -310,13 +246,13 @@ void cross_entropy_backward(matrix_t *grad_out, matrix_t *yhat, matrix_t *y)
     nob_log(NOB_INFO, "cross_entropy_backward: ok");
 }
 
-void linear_weight_backward(matrix_t *grad_in, matrix_t *grad_out, matrix_t *lin_in)
+void linear_weight_backward(matrix_t *grad_in, matrix_t *lin_in, matrix_t *grad_out)
 {
     dot_ex(grad_in, lin_in, grad_out, true, false);
     nob_log(NOB_INFO, "linear_weight_backward: ok");
 }
 
-void linear_h_backward(matrix_t* grad_in, matrix_t* grad_out, matrix_t* W)
+void linear_h_backward(matrix_t* grad_in, matrix_t* W, matrix_t* grad_out)
 {
     assert(grad_out->height == grad_in->height);
     assert(grad_out->width == W->width);
@@ -392,44 +328,51 @@ void print_memory_usage()
 
 int main(void)
 {
-    srand(0);
+    srand(10);
     // srand(time(NULL));
 
     nob_minimal_log_level = NOB_NO_LOGS;
 
-    graph_t G = {0};
-    load_data(&G);
+    graph_t g = {0};
+    load_data(&g);
 
     // printf("After loading dataset:\n");
     // print_memory_usage();
 
-    size_t input_dim = G.num_node_features;  // 128
-    size_t output_dim = G.num_label_classes; // 40
+    size_t input_dim = g.num_node_features;  // 128
+    size_t output_dim = g.num_label_classes; // 40
     size_t hidden_layer_size = 5;
     K = 1;
 
     // Weights will be transposed when feed through linear transformation, hence
     // the reverse shape
-    matrix_t* W1 = mat_create(hidden_layer_size, G.num_node_features*2); // times 2 because of concatenation
-    matrix_t* W2 = mat_create(G.num_label_classes, hidden_layer_size);
-    mat_rand(W1, -1.0, 1.0);
+    matrix_t* W1l = mat_create(hidden_layer_size, g.num_node_features); // For center vertex
+    matrix_t* W1r = mat_create(hidden_layer_size, g.num_node_features); // For aggregated vertices
+    mat_rand(W1l, -1.0, 1.0);
+    mat_rand(W1r, -1.0, 1.0);
+    matrix_t* W2 = mat_create(g.num_label_classes, hidden_layer_size);
     mat_rand(W2, -1.0, 1.0);
 
     // printf("After initializing only weights:\n");
     // print_memory_usage();
 
-    matrix_t* x = G.x;
-    matrix_t* y = G.y;
+    matrix_t* x = g.x;
+    matrix_t* y = g.y;
     matrix_t* bias = NULL;
-    matrix_t* h1 = mat_create(G.num_nodes, hidden_layer_size); // Hidden layer outcome from GraphSAGE
-    matrix_t* logits = mat_create(G.num_nodes, G.num_label_classes);
-    matrix_t* yhat = mat_create(G.num_nodes, G.num_label_classes);
+    matrix_t* agg = mat_create(g.num_nodes, g.num_node_features);
+    matrix_t* h1 = mat_create(g.num_nodes, hidden_layer_size);
+    matrix_t* h1_relu = mat_create(g.num_nodes, hidden_layer_size);
+    matrix_t* h1_l2 = mat_create(g.num_nodes, hidden_layer_size);
+    matrix_t* logits = mat_create(g.num_nodes, g.num_label_classes);
+    matrix_t* yhat = mat_create(g.num_nodes, g.num_label_classes);
 
-    matrix_t* grad_logits = mat_create(G.num_nodes, G.num_label_classes);
-    matrix_t* grad_W2 = mat_create(G.num_label_classes, hidden_layer_size); // grad_out
+    matrix_t* grad_logits = mat_create(g.num_nodes, g.num_label_classes);
+    matrix_t* grad_W2 = mat_create(g.num_label_classes, hidden_layer_size); // grad_out
     matrix_t* grad_bias = grad_logits; // dC/dBias = dC/dLogits
-    matrix_t* grad_h1 = mat_create(G.num_nodes, hidden_layer_size);
-    matrix_t* grad_W1 = mat_create(hidden_layer_size, G.num_node_features*2); // times 2 because of concatenation
+    matrix_t* grad_h1 = mat_create(g.num_nodes, hidden_layer_size);
+    matrix_t* grad_h1_relu = mat_create(g.num_nodes, hidden_layer_size);
+    matrix_t* grad_h1_l2 = mat_create(g.num_nodes, hidden_layer_size);
+    matrix_t* grad_W1 = mat_create(hidden_layer_size, g.num_node_features*2); // times 2 because of concatenation
 
     // printf("After initializing matrices:\n");
     // print_memory_usage();
@@ -438,34 +381,34 @@ int main(void)
 
     size_t max_epoch = 20;
     for (size_t epoch = 1; epoch <= max_epoch; epoch++) {
-        sage_layer(x, W1, bias, h1, &G);
-        relu(h1, h1);
-        l2_normalization(h1, h1, &G);
+        sage_conv(x, W1l, W1r, agg, h1, &g);
+        relu(h1, h1_relu);
+        l2_normalization(h1_relu, h1_l2, &g);
 
-        linear_layer(h1, W2, bias, logits);
+        linear_layer(h1_l2, W2, bias, logits);
         log_softmax(logits, yhat);
 
         double loss = nll_loss(yhat, y);
         printf("Loss: %f\n", loss);
 
         cross_entropy_backward(grad_logits, yhat, y);
-        linear_weight_backward(grad_logits, grad_W2, h1);
+        linear_weight_backward(grad_logits, h1_l2, grad_W2);
 
-        linear_h_backward(grad_logits, grad_h1, W2);
+        linear_h_backward(grad_logits, W2, grad_h1);
 
-        update_weights(W2, grad_W2, G.num_nodes);
+        update_weights(W2, grad_W2, g.num_nodes);
     }
 
-    fclose(f);
-    mat_destroy(W1);
+    mat_destroy(W1l);
+    mat_destroy(W1r);
     mat_destroy(W2);
     mat_destroy(h1);
     mat_destroy(logits);
     mat_destroy(yhat);
-    mat_destroy(G.x);
-    mat_destroy(G.y);
-    free(G.node_year);
-    free(G.edge_index);
+    mat_destroy(g.x);
+    mat_destroy(g.y);
+    free(g.node_year);
+    free(g.edge_index);
     return 0;
 }
 
