@@ -6,13 +6,19 @@ all: main
 
 .PHONY: all clean
 
-main: main.o matrix.o arxiv.o simple_graph.o print.o
+main: main.o matrix.o layers.o gnn.o arxiv.o simple_graph.o print.o
 	gcc $(CFLAGS) $^ -o $@ -lm -lz
 
 main.o: main.c
 	gcc $(CFLAGS) -c $< -o $@
 
 matrix.o: matrix.c
+	gcc $(CFLAGS) -c $< -o $@
+
+layers.o: layers.c
+	gcc $(CFLAGS) -c $< -o $@
+
+gnn.o: gnn.c
 	gcc $(CFLAGS) -c $< -o $@
 
 arxiv.o: arxiv.c
