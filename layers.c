@@ -4,7 +4,6 @@
 #include "matrix.h"
 
 // Init helpers
-
 SageLayer* init_sage_layer(size_t n_nodes, size_t in_dim, size_t out_dim)
 {
     SageLayer *layer = malloc(sizeof(*layer));

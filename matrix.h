@@ -36,5 +36,6 @@ void mat_print(matrix_t* mat, const char *name, size_t padding);
 #define MAT_PRINT(m) mat_print(m, #m, 0)
 void mat_spec(matrix_t* mat, const char* name);
 #define MAT_SPEC(m) mat_spec(m, #m)
+const char* mat_shape(matrix_t* mat);
 
 #endif // MATRIX_H

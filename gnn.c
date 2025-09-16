@@ -59,6 +59,16 @@ size_t aggregate(matrix_t *in, size_t v, matrix_t *out, graph_t *g)
 }
 
 
+#ifdef NEWWAY
+
+void sage_conv(SageLayer *l, graph_t *g)
+{
+    SAGE_LAYER_INFO(l);
+    SAGE_LAYER_INFO(l);
+}
+
+#else
+
 void sage_conv(matrix_t *in, matrix_t *Wl, matrix_t *Wr, matrix_t *agg, matrix_t *out, graph_t *g)
 {
     MAT_ASSERT(in, agg);
@@ -332,3 +342,4 @@ void cross_entropy_backward(matrix_t *grad_out, matrix_t *yhat, matrix_t *y)
 
     nob_log(NOB_INFO, "cross_entropy_backward: ok");
 }
+#endif

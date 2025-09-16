@@ -4,8 +4,14 @@
 #include <stddef.h>
 
 #include "matrix.h"
+#include "layers.h"
 #include "graph.h"
 
+#ifdef NEWWAY
+
+void sage_conv(SageLayer *l, graph_t *g);
+
+#else
 // Forward propagation
 void sage_conv(matrix_t *in, matrix_t *Wl, matrix_t *Wr, matrix_t *agg, matrix_t *out, graph_t *g);
 void relu(matrix_t* in, matrix_t* out);
@@ -23,5 +29,7 @@ void l2_normalization_backward(matrix_t *grad_in, matrix_t *h_relu, matrix_t *h_
 void linear_weight_backward(matrix_t *grad_in, matrix_t *lin_in, matrix_t *grad_out);
 void linear_h_backward(matrix_t* grad_in, matrix_t* W, matrix_t* grad_out);
 void cross_entropy_backward(matrix_t *grad_out, matrix_t *yhat, matrix_t *y);
+
+#endif // NEWWAY
 
 #endif // GNN_H

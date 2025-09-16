@@ -6,6 +6,8 @@
 
 #include "matrix.h"
 
+#include "nob.h"
+
 matrix_t* mat_create(size_t height, size_t width)
 {
     matrix_t *mat = malloc(sizeof(matrix_t));
@@ -209,12 +211,21 @@ bool mat_equal(matrix_t *A, matrix_t *B, size_t *row, size_t *col)
     return true;
 }
 
+// void mat_spec(matrix_t* mat, const char* name)
+// {
+//     if (mat != NULL) {
+//         printf("%s (%zux%zu)\n", name, mat->height, mat->width);
+//     } else {
+//         printf("%s (nil)\n", name);
+//     }
+// }
+
 void mat_spec(matrix_t* mat, const char* name)
 {
     if (mat != NULL) {
-        printf("%s (%zux%zu)\n", name, mat->height, mat->width);
+        printf("%-12s : %4zu x %-4zu\n", name, mat->height, mat->width);
     } else {
-        printf("%s (nil)\n", name);
+        printf("%-12s : %s\n", name, "nil");
     }
 }
 
@@ -229,4 +240,9 @@ void mat_print(matrix_t* mat, const char *name, size_t padding)
         printf("\n");
     }
     printf("%*s]\n", (int) padding, "");
+}
+
+const char* mat_shape(matrix_t* mat)
+{
+    return nob_temp_sprintf("(%ldx%ld)", mat->height, mat->width);
 }
