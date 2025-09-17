@@ -9,15 +9,15 @@ SageLayer* init_sage_layer(size_t n_nodes, size_t in_dim, size_t out_dim)
     SageLayer *layer = malloc(sizeof(*layer));
 
     *layer = (SageLayer){
-        .input       = NULL,    // Set later when connecting layers
-        .output      = mat_create(out_dim, n_nodes),
-        .agg         = mat_create(in_dim, n_nodes),
-        .Wagg        = mat_create(out_dim, in_dim),
-        .Wroot       = mat_create(out_dim, in_dim),
-        .grad_input  = NULL,    // Set later when connecting layers
-        .grad_output = mat_create(out_dim, n_nodes),
-        .grad_Wagg   = mat_create(out_dim, in_dim),
-        .grad_Wroot  = mat_create(out_dim, in_dim)
+        .input       = NULL, // Set later when connecting layers
+        .output      = MAT_CREATE(n_nodes, out_dim),
+        .agg         = MAT_CREATE(n_nodes, in_dim),
+        .Wagg        = MAT_CREATE(in_dim, out_dim),
+        .Wroot       = MAT_CREATE(in_dim, out_dim),
+        .grad_input  = MAT_CREATE(n_nodes, in_dim),
+        .grad_output = NULL, // Set later when connecting layers
+        .grad_Wagg   = MAT_CREATE(in_dim, out_dim),
+        .grad_Wroot  = MAT_CREATE(in_dim, out_dim)
     };
 
     // Initialize weights randomly
@@ -32,24 +32,24 @@ ReluLayer* init_relu_layer(size_t n_nodes, size_t dim)
     ReluLayer *layer = malloc(sizeof(*layer));
 
     *layer = (ReluLayer) {
-        .input       = NULL,    // Set later when connecting layers,
-        .output      = mat_create(dim, n_nodes),
-        .grad_input  = NULL,    // Set later when connecting layers,
-        .grad_output = mat_create(dim, n_nodes),
+        .input       = NULL, // Set later when connecting layers,
+        .output      = MAT_CREATE(n_nodes, dim),
+        .grad_input  = MAT_CREATE(n_nodes, dim),
+        .grad_output = NULL, // Set later when connecting layers, mat_create(dim, n_nodes),
     };
 
     return layer;
 }
 
-L2NormLayer* init_l2norm_layer(size_t n_nodes, size_t dim)
+NormalizeLayer* init_l2norm_layer(size_t n_nodes, size_t dim)
 {
-    L2NormLayer *layer = malloc(sizeof(*layer));
+    NormalizeLayer *layer = malloc(sizeof(*layer));
 
-    *layer = (L2NormLayer) {
-        .input       = NULL,    // Set later when connecting layers,
-        .output      = mat_create(dim, n_nodes),
-        .grad_input  = NULL,    // Set later when connecting layers,
-        .grad_output = mat_create(dim, n_nodes),
+    *layer = (NormalizeLayer) {
+        .input       = NULL, // Set later when connecting layers,
+        .output      = MAT_CREATE(n_nodes, dim),
+        .grad_input  = MAT_CREATE(n_nodes, dim),
+        .grad_output = NULL, // Set later when connecting layers, mat_create(dim, n_nodes),
     };
 
     return layer;
@@ -60,28 +60,32 @@ LinearLayer* init_linear_layer(size_t n_nodes, size_t in_dim, size_t out_dim)
     LinearLayer *layer = malloc(sizeof(*layer));
 
     *layer = (LinearLayer) {
-        .input       = NULL,    // Set later when connecting layers
-        .output      = mat_create(out_dim, n_nodes),
-        .W           = mat_create(out_dim, in_dim),
-        .bias        = mat_create(out_dim, 1),
-        .grad_output = mat_create(out_dim, n_nodes),
-        .grad_input  = NULL,    // Set later when connecting layers
-        .grad_W      = mat_create(out_dim, in_dim),
-        .grad_bias   = mat_create(out_dim, 1),
+        .input       = NULL, // Set later when connecting layers
+        .output      = MAT_CREATE(n_nodes, out_dim),
+        .W           = MAT_CREATE(in_dim, out_dim),
+        .bias        = NULL, // MAT_CREATE(1, out_dim),
+        .grad_input  = MAT_CREATE(n_nodes, in_dim),
+        .grad_output = NULL, // Set later when connecting layers
+        .grad_W      = MAT_CREATE(in_dim, out_dim),
+        .grad_bias   = MAT_CREATE(1, out_dim),
     };
+
+    mat_rand(layer->W, -1.0, 1.0);
+    // mat_rand(layer->bias, -1.0, 1.0);
 
     return layer;
 }
 
 
-LogSoftLayer* init_logsoft_layer(size_t n_nodes, size_t out_dim)
+LogSoftLayer* init_logsoft_layer(size_t n_nodes, size_t dim)
 {
     LogSoftLayer *layer = malloc(sizeof(*layer));
 
     *layer = (LogSoftLayer) {
-        .input       = NULL,    // Set later when connecting layers
-        .output      = mat_create(out_dim, n_nodes),
-        .grad_output = mat_create(out_dim, n_nodes),
+        .input       = NULL, // Set later when connecting layers
+        .output      = MAT_CREATE(n_nodes, dim),
+        .grad_input  = MAT_CREATE(n_nodes, dim),
+        .grad_output = NULL, // Set later when connecting layers
     };
 
     return layer;

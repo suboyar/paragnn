@@ -101,6 +101,22 @@ void mat_rand(matrix_t* m, float low, float high)
     }
 }
 
+void mat_transpose(matrix_t *m)
+{
+    size_t height = m->height;
+    size_t width = m->width;
+
+    for (size_t i = 0; i < height; i++) {
+        for (size_t j = 0; j < width; j++) {
+            double temp = MAT_AT(m, i, j);
+            MAT_AT(m, i, j) = MAT_AT(m, j, i);
+            MAT_AT(m, j, i) = temp;
+        }
+    }
+    m->width = height;
+    m->height = width;
+}
+
 void dot(matrix_t *A, matrix_t *B, matrix_t *C)
 {
     // Verify inner dimensions match
@@ -122,6 +138,30 @@ void dot(matrix_t *A, matrix_t *B, matrix_t *C)
         }
     }
 }
+
+void dot_agg(matrix_t *A, matrix_t *B, matrix_t *C)
+{
+    // Verify inner dimensions match
+
+    assert(A->width == B->height);
+    assert(C->height == A->height);
+    assert(C->width == B->width);
+
+    size_t M = A->height;
+    size_t N = A->width;
+    size_t P = B->width;
+
+    for (size_t i = 0; i < M; i++) {
+        for (size_t j = 0; j < P; j++) {
+            double sum = 0.0;
+            for (size_t k = 0; k < N; k++) {
+                sum += A->data[IDX(i, k, A->width)] * B->data[IDX(k, j, B->width)];
+            }
+            C->data[IDX(i, j, C->width)] += sum;
+        }
+    }
+}
+
 
 void dot_ex(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt)
 {
@@ -211,21 +251,12 @@ bool mat_equal(matrix_t *A, matrix_t *B, size_t *row, size_t *col)
     return true;
 }
 
-// void mat_spec(matrix_t* mat, const char* name)
-// {
-//     if (mat != NULL) {
-//         printf("%s (%zux%zu)\n", name, mat->height, mat->width);
-//     } else {
-//         printf("%s (nil)\n", name);
-//     }
-// }
-
 void mat_spec(matrix_t* mat, const char* name)
 {
     if (mat != NULL) {
-        printf("%-12s : %4zu x %-4zu\n", name, mat->height, mat->width);
+        printf("%s (%zux%zu)\n", name, mat->height, mat->width);
     } else {
-        printf("%-12s : %s\n", name, "nil");
+        printf("%s (nil)\n", name);
     }
 }
 
@@ -242,7 +273,11 @@ void mat_print(matrix_t* mat, const char *name, size_t padding)
     printf("%*s]\n", (int) padding, "");
 }
 
-const char* mat_shape(matrix_t* mat)
+const char* mat_shape(matrix_t* m)
 {
-    return nob_temp_sprintf("(%ldx%ld)", mat->height, mat->width);
+    if (m == NULL ) {
+        return "(nil)";
+    }
+    return nob_temp_sprintf("(%zux%zu)", m->height, m->width);
+
 }

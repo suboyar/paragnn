@@ -9,7 +9,12 @@
 
 #ifdef NEWWAY
 
-void sage_conv(SageLayer *l, graph_t *g);
+void sageconv(SageLayer *l, graph_t *g);
+void relu(ReluLayer *l, graph_t *g);
+void normalize(NormalizeLayer *l, graph_t *g);
+void linear(LinearLayer *l, graph_t *g);
+void logsoft(LogSoftLayer *l, graph_t *g);
+double nll_loss(matrix_t* yhat, matrix_t* y);
 
 #else
 // Forward propagation

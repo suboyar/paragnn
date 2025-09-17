@@ -72,22 +72,62 @@ int main(void)
 
     size_t hidden_dim = 5;
 #ifdef NEWWAY
+    mat_transpose(g.x);
+    MAT_SPEC(g.y); printf("\n");
+    MAT_PRINT(g.y);
+    mat_transpose(g.y);
+    MAT_SPEC(g.y); printf("\n");
+    MAT_PRINT(g.y);
+
     size_t n_nodes = g.num_nodes;
     SageLayer *sagelayer = init_sage_layer(n_nodes, g.num_node_features, hidden_dim);
     ReluLayer *relulayer = init_relu_layer(n_nodes, hidden_dim);
-    L2NormLayer *l2normlayer = init_l2norm_layer(n_nodes, hidden_dim);
+    NormalizeLayer *normalizelayer = init_l2norm_layer(n_nodes, hidden_dim);
 
     LinearLayer *linearlayer = init_linear_layer(n_nodes, hidden_dim, g.num_label_classes);
     LogSoftLayer *logsoftlayer = init_logsoft_layer(n_nodes, g.num_label_classes);
 
+
     sagelayer->input = g.x;
     CONNECT_LAYER(sagelayer, relulayer);
-    CONNECT_LAYER(relulayer, l2normlayer);
-    CONNECT_LAYER(l2normlayer, linearlayer);
+    CONNECT_LAYER(relulayer, normalizelayer);
+    CONNECT_LAYER(normalizelayer, linearlayer);
     CONNECT_LAYER(linearlayer, logsoftlayer);
 
-    sage_conv(sagelayer, &g);
+    SAGE_LAYER_INFO(sagelayer);
+    RELU_LAYER_INFO(relulayer);
+    NORMALIZE_LAYER_INFO(normalizelayer);
+    LINEAR_LAYER_INFO(linearlayer);
+    LOGSOFT_LAYER_INFO(logsoftlayer);
+    printf("\n");
 
+    for (size_t epoch = 1; epoch < 10; epoch++) {
+        MAT_PRINT(sagelayer->Wagg);
+        MAT_PRINT(sagelayer->Wroot);
+        MAT_PRINT(linearlayer->W);
+
+        MAT_PRINT(g.x);
+        sageconv(sagelayer, &g);
+        MAT_PRINT(sagelayer->output);
+
+        relu(relulayer, &g);
+        MAT_PRINT(relulayer->output);
+
+        normalize(normalizelayer, &g);
+        MAT_PRINT(normalizelayer->output);
+
+        linear(linearlayer, &g);
+        MAT_PRINT(linearlayer->output);
+
+        logsoft(logsoftlayer, &g);
+        MAT_PRINT(logsoftlayer->output);
+
+        double loss = nll_loss(logsoftlayer->output, g.y) / BATCH_DIM(g.y);
+        printf("[epoch %zu] loss: %f\n", epoch, loss);
+
+        break;
+
+    }
 #else
 
     size_t input_dim = g.num_node_features;  // 128
@@ -124,29 +164,35 @@ int main(void)
     matrix_t* grad_W1l = mat_create(g.num_node_features, hidden_dim);
     matrix_t* grad_W1r = mat_create(g.num_node_features, hidden_dim);
 
-#endif
 
     // printf("After initializing matrices:\n");
     // print_memory_usage();
 
     size_t max_epoch = 100;
     for (size_t epoch = 1; epoch <= max_epoch; epoch++) {
+        MAT_PRINT(W1l);
+        MAT_PRINT(W1r);
+        MAT_PRINT(W2);
 
-#ifdef NEWWAY
+        MAT_PRINT(g.x);
+        sage_conv(g.x, W1l, W1r, agg, h1, &g);
+        MAT_PRINT(h1);
 
-
-
-#else
-
-        sage_conv(x, W1l, W1r, agg, h1, &g);
         relu(h1, h1_relu);
+        MAT_PRINT(h1_relu);
         l2_normalization(h1_relu, h1_l2, &g);
+        MAT_PRINT(h1_l2);
 
         linear_layer(h1_l2, W2, bias, logits);
+        MAT_PRINT(logits);
+
         log_softmax(logits, yhat);
+        MAT_PRINT(yhat);
 
         double loss = nll_loss(yhat, y);
         printf("Loss: %f\n", loss);
+
+        break;
 
         cross_entropy_backward(grad_logits, yhat, y);
         linear_weight_backward(grad_logits, h1_l2, grad_W2);
@@ -155,15 +201,17 @@ int main(void)
         l2_normalization_backward(grad_h1, h1_relu, h1_l2, grad_h1_l2);
         relu_backward(grad_h1_l2, h1, grad_h1_relu);
         sage_conv_backward(grad_h1_relu, h1_relu, x, agg, grad_W1l, grad_W1r, &g);
-        // break;
+
 
         update_weights(W2, grad_W2, g.num_nodes);
         update_sage_weights(W1l, grad_W1l, g.num_nodes);
         update_sage_weights(W1r, grad_W1r, g.num_nodes);
 
-#endif
+
 
     }
+
+#endif
 
 #ifndef NEWWAY
     mat_destroy(W1l);

@@ -1,6 +1,6 @@
-CFLAGS = -ggdb -g3 -gdwarf-2 -Wall -Wextra
-# CFLAGS += -O3 -march=native
-CFLAGS += -O0
+# CFLAGS = -O3 -march=native
+CFLAGS = -O0 -ggdb -g3 -gdwarf-2
+CFLAGS += -Wall -Wextra
 CFLAGS += -DNEWWAY
 
 all: main
