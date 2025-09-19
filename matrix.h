@@ -8,38 +8,39 @@
 
 #include "nob.h"
 
-#define IDX(i, j, width) ((i) * (width) + (j))
+#define BATCH_DIM(m) ((m)->height)  // batch_size = height
+#define NODE_DIM(m)  ((m)->width)   // features = width
+#define MAT_CREATE(batch, features) mat_create(batch, features)
 #define MAT_AT(m, i, j) (m)->data[(i)*(m)->width + (j)]
-#define MAT_ROW(m, row) MAT_AT((m), row, 0)
-#define MAT_COL(m, col) MAT_AT((m), 0, col)
+
+#define MAT_ROW(m, row) NOB_TODO("MAT_ROW is depricated")
+#define MAT_COL(m, col) NOB_TODO("MAT_COL is depricated")
+
 #ifndef NDEBUG
-    #define MAT_BOUNDS_CHECK(m, i, j) do {                                            \
-            if ((i) >= (m)->height) {                                                 \
-                fprintf(stderr, "%s:%d: error: %s: Row index %zu out of bounds\n",    \
-                        __FILE__, __LINE__, __func__, (size_t)(i));                   \
-                abort();                                                              \
-            }                                                                         \
-            if ((j) >= (m)->width) {                                                  \
-                fprintf(stderr, "%s:%d: error: %s: Column index %zu out of bounds\n", \
-                __FILE__, __LINE__, __func__, (size_t)(j));                           \
-                abort();                                                              \
-            }                                                                         \
+    #define MAT_BOUNDS_CHECK(m, i, j) do {                                                     \
+            if ((i) >= BATCH_DIM(m)) {                                                         \
+                fprintf(stderr, "%s:%d: error: %s: Batch index %zu out of bounds (max %zu)\n", \
+                        __FILE__, __LINE__, __func__, (size_t)(i), (size_t)BATCH_DIM(m));      \
+                abort();                                                                       \
+            }                                                                                  \
+            if ((j) >= NODE_DIM(m)) {                                                          \
+                fprintf(stderr, "%s:%d: error: %s: Node index %zu out of bounds (max %zu)\n",  \
+                        __FILE__, __LINE__, __func__, (size_t)(j), (size_t)NODE_DIM(m));       \
+                abort();                                                                       \
+            }                                                                                  \
         } while(0)
 #else
     #define MAT_BOUNDS_CHECK(m, i, j) (void)(0)
 #endif
 
-#define MAT_ASSERT(M1, M2) do {assert((M1)->height == (M2)->height); assert((M1)->width == (M2)->width);} while(0)
-#define MAT_ASSERT_H(M1, M2) do {assert((M1)->height == (M2)->height);} while(0)
-#define MAT_ASSERT_W(M1, M2) do {assert((M1)->width == (M2)->width);} while(0)
-#define MAT_ASSERT_DOT(M1, M2) do {assert((M1)->width == (M2)->height);} while(0)
+#define MAT_ASSERT(A, B) do {assert((A)->height == (B)->height); assert((A)->width == (B)->width);} while(0)
+#define MAT_ASSERT_BATCH(A, B) do {assert(BATCH_DIM((A)) == BATCH_DIM((B)));} while(0)
+#define MAT_ASSERT_NODE(A, B) do {assert(NODE_DIM((A)) == NODE_DIM((B)));} while(0)
+#define MAT_ASSERT_DOT(A, B) do {assert((A)->width == (B)->height);} while(0)
+#define MAT_ASSERT_DOT_EX(A, B, AT, BT) assert(((AT) ? (A)->height : (A)->width) == ((BT) ? (B)->width : (B)->height))
+#define MAT_ASSERT_H(A, B) NOB_TODO("MAT_ASSERT_H is depricated, maybe use MAT_ASSERT_BATCH")
+#define MAT_ASSERT_W(A, B) NOB_TODO("MAT_ASSERT_W is depricated, maybe use MAT_ASSERT_NODE")
 
-// Matrix creation macro which handles format switching internally
-#ifdef ROW_MAJOR
-    #define MAT_CREATE(dim1, dim2) mat_create(dim1, dim2)
-#else
-    #define MAT_CREATE(dim1, dim2) mat_create(dim2, dim1)  // Swap dimensions
-#endif
 
 typedef struct {
     double *data;
@@ -60,6 +61,7 @@ void mat_sum(matrix_t* dst, matrix_t* A);
 void mat_fill(matrix_t *matrix, double value);
 void mat_rand(matrix_t* m, float low, float high);
 void mat_transpose(matrix_t *m);
+void mat_transpose_to(matrix_t *A, matrix_t *B);
 void dot(matrix_t *A, matrix_t *B, matrix_t *C); // C = A @ B
 void dot_agg(matrix_t *A, matrix_t *B, matrix_t *C); // C += A @ B
 void dot_ex(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt);

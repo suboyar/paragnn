@@ -9,12 +9,16 @@
 
 #ifdef NEWWAY
 
-void sageconv(SageLayer *l, graph_t *g);
-void relu(ReluLayer *l, graph_t *g);
-void normalize(NormalizeLayer *l, graph_t *g);
-void linear(LinearLayer *l, graph_t *g);
-void logsoft(LogSoftLayer *l, graph_t *g);
-double nll_loss(matrix_t* yhat, matrix_t* y);
+void sageconv(SageLayer* const l, graph_t* const g);
+void relu(ReluLayer* const l);
+void normalize(NormalizeLayer* const l);
+void linear(LinearLayer* const l);
+void logsoft(LogSoftLayer* const l);
+double nll_loss(matrix_t* const yhat, matrix_t* const y);
+
+void cross_entropy_backward(LogSoftLayer* const l, matrix_t* const y);
+void linear_backward(LinearLayer* const l);
+void normalize_backward(NormalizeLayer* const l);
 
 #else
 // Forward propagation

@@ -1,7 +1,9 @@
 # CFLAGS = -O3 -march=native
 CFLAGS = -O0 -ggdb -g3 -gdwarf-2
-CFLAGS += -Wall -Wextra
-CFLAGS += -DNEWWAY
+CFLAGS += -std=c17 -D_POSIX_C_SOURCE=200809L
+CFLAGS += -Wall -Wextra -Werror=implicit-function-declaration
+CFLAGS += -Werror=implicit-function-declaration -Werror=incompatible-pointer-types
+CFLAGS += -DNEWWAY -DCOL_MAJOR
 
 all: main
 

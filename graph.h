@@ -7,16 +7,12 @@
 
 #define EDGE_AT(g, v, u) (g)->edge_index[(u)*(g)->num_edges + (v)]
 
-#ifdef ROW_MAJOR
-    #define GRAPH_AT(m, node, feat) MAT_AT(m, node, feat)
-    #define GRAPH_NODES(m)              ((m)->height)
-    #define GRAPH_FEATURES(m)           ((m)->width)
-#else
-    #define GRAPH_AT(m, node, feat)  MAT_AT(m, feat, node)
-    #define GRAPH_NODES(m)               ((m)->width)
-    #define GRAPH_FEATURES(m)            ((m)->height)
-#endif
+// Although these macros don't reflect column-major storage dimensions,
+// MAT_AT compensates by adjusting the access pattern
+#define GRAPH_NODES(m)              ((m)->height)
+#define GRAPH_FEATURES(m)           ((m)->width)
 
+/*
 #ifndef NDEBUG
     #define GRAPH_BOUNDS_CHECK(m, n, f) do {                                       \
             if ((n) >= GRAPH_NODES((m))) {                                         \
@@ -33,6 +29,7 @@
 #else
     #define GRAPH_BOUNDS_CHECK(m, n, f) (void)(0)
 #endif
+*/
 
 typedef struct {
     size_t num_edges;

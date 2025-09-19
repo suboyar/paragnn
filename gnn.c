@@ -13,180 +13,144 @@
 // Forward propagation
 #ifdef NEWWAY
 #define SAMPLE_SIZE 10 // XXX: Placeholder unitl I implement proper neighbor samplig
-size_t aggregate(matrix_t *in, size_t v, matrix_t *out, graph_t *g)
+void aggregate(SageLayer* const l, graph_t* const g)
 {
     size_t adj[SAMPLE_SIZE] = {0};
     size_t neigh_count = 0;
 
-    // NOTE: Collects neighbors from both directions (incoming/outgoing
-    // edges). Correct for directed graphs like ogbn-arxiv, but causes
-    // double counting for undirected graphs since each edge (i,j) appears
-    // as both (i,j) and (j,i).
+    for (size_t v = 0; v < BATCH_DIM(l->input); v++) {
+        // NOTE: Collects neighbors from both directions (incoming/outgoing
+        // edges). Correct for directed graphs like ogbn-arxiv, but causes
+        // double counting for undirected graphs since each edge (i,j) appears
+        // as both (i,j) and (j,i).
 
-    // Find neighbors of count sample size
-    for (size_t edge = 0; edge < g->num_edges && neigh_count < SAMPLE_SIZE; edge++) {
-        size_t u0 = EDGE_AT(g, edge, 0);
-        size_t u1 = EDGE_AT(g, edge, 1);
-        assert(u0 < g->num_nodes && nob_temp_sprintf("Neighbor u0 points to out-of-bounds value %zu", u0));
-        assert(u1 < g->num_nodes && nob_temp_sprintf("Neighbor u1 points to out-of-bounds value %zu", u1));
+        // Find neighbors of count sample size
+        for (size_t edge = 0; edge < g->num_edges && neigh_count < SAMPLE_SIZE; edge++) {
+            size_t u0 = EDGE_AT(g, edge, 0);
+            size_t u1 = EDGE_AT(g, edge, 1);
+            assert(u0 < g->num_nodes && nob_temp_sprintf("Neighbor u0 points to out-of-bounds value %zu", u0));
+            assert(u1 < g->num_nodes && nob_temp_sprintf("Neighbor u1 points to out-of-bounds value %zu", u1));
 
-        if (v == u0) {  // Paper v cites u1
-            adj[neigh_count++] = u1;
-        } else if (v == u1) {   // Paper u0 cites v
-            adj[neigh_count++] = u0;
+            if (v == u0) {  // Paper v cites u1
+                adj[neigh_count++] = u1;
+            } else if (v == u1) {   // Paper u0 cites v
+                adj[neigh_count++] = u0;
+            }
         }
-    }
 
-    if (neigh_count == 0) {
-        return 0;
-    }
+        if (neigh_count == 0) {
+            mat_fill(l->agg, 0.0);
+            return;
+        }
 
-    // Copy the first neighbor features to memory space for aggregation
-    size_t u = adj[0];
-    for (size_t f = 0; f < g->num_node_features; f++) {
-        // TODO: memcpy(MAT_ROW(out, v), MAT_ROW(in, u), g->num_node_features * sizeof(*out->data));
-        GRAPH_BOUNDS_CHECK(out, v, f);
-        GRAPH_BOUNDS_CHECK(in, u, f);
-        GRAPH_AT(out, v, f) = GRAPH_AT(in, u, f);
-    }
+        // Copy the first neighbor features to memory space for aggregation
+        size_t u = adj[0];
+        for (size_t f = 0; f < NODE_DIM(l->agg); f++) {
+            // TODO: memcpy(MAT_ROW(out, v), MAT_ROW(in, u), g->num_node_features * sizeof(*out->data));
+            MAT_BOUNDS_CHECK(l->agg, v, f);
+            MAT_BOUNDS_CHECK(l->input, u, f);
+            MAT_AT(l->agg, v, f) = MAT_AT(l->input, u, f);
+        }
 
-    // Add remaining neighbors
-    for (size_t i = 1; i < neigh_count; i++) {
-        u = adj[i];
+        // Add remaining neighbors
+        for (size_t i = 1; i < neigh_count; i++) {
+            u = adj[i];
+            for (size_t f = 0; f < g->num_node_features; f++) {
+                MAT_BOUNDS_CHECK(l->agg, v, f);
+                MAT_BOUNDS_CHECK(l->input, u, f);
+                MAT_AT(l->agg, v, f) += MAT_AT(l->input, u, f);
+            }
+        }
+
+        // Aggregation with mean
+        float neigh_count_recp = (float)1/neigh_count;
         for (size_t f = 0; f < g->num_node_features; f++) {
-            GRAPH_BOUNDS_CHECK(out, v, f);
-            GRAPH_BOUNDS_CHECK(in, u, f);
-            GRAPH_AT(out, v, f) += GRAPH_AT(in, u, f);
+            MAT_BOUNDS_CHECK(l->agg, v, f);
+            MAT_AT(l->agg, v, f) *= neigh_count_recp;
         }
     }
-
-    // Aggregation with mean
-    float neigh_count_recp = (float)1/neigh_count;
-    for (size_t f = 0; f < g->num_node_features; f++) {
-        GRAPH_BOUNDS_CHECK(out, v, f);
-        GRAPH_AT(out, v, f) *= neigh_count_recp;
-    }
-
-    return neigh_count;
 }
 
-void sageconv(SageLayer *l, graph_t *g)
+void sageconv(SageLayer* const l, graph_t* const g)
 {
+
     MAT_ASSERT(l->input, l->agg);
     MAT_ASSERT(l->Wroot, l->Wagg);
-    MAT_ASSERT_DOT(l->Wroot, l->input);
-    MAT_ASSERT_DOT(l->Wagg, l->agg);
-    MAT_ASSERT_H(l->output, l->Wroot);
-    MAT_ASSERT_H(l->output, l->Wagg);
-    MAT_ASSERT_W(l->output, l->input);
-    MAT_ASSERT_W(l->output, l->agg);
+    MAT_ASSERT_DOT(l->input, l->Wroot);
+    MAT_ASSERT_DOT(l->agg, l->Wagg);
+    MAT_ASSERT_NODE(l->output, l->Wroot);
+    MAT_ASSERT_NODE(l->output, l->Wagg);
+    MAT_ASSERT_BATCH(l->output, l->input);
+    MAT_ASSERT_BATCH(l->output, l->agg);
 
-    for (size_t v = 0; v < g->num_nodes; v++) {
-        (void)aggregate(l->input, v, l->agg, g);
-    }
+    aggregate(l, g);
 
-    dot(l->Wroot, l->input, l->output);
-    dot_agg(l->Wagg, l->agg, l->output);
+    dot(l->input, l->Wroot, l->output);
+    dot_agg(l->agg, l->Wagg, l->output);
+
+    mat_print(l->output, "sage->output", 0);
 
     nob_log(NOB_INFO, "sageconv: ok");
 }
 
-void relu(ReluLayer *l, graph_t *g)
+void relu(ReluLayer* const l)
 {
-    (void) g;
     MAT_ASSERT(l->output, l->input);
 
     for (size_t i = 0; i < BATCH_DIM(l->input); i++) {
         for (size_t j = 0; j < NODE_DIM(l->input); j++) {
-#ifdef ROW_MAJOR
             MAT_BOUNDS_CHECK(l->output, i, j);
             MAT_BOUNDS_CHECK(l->input, i, j);
             MAT_AT(l->output, i, j) = fmax(0.0, MAT_AT(l->input, i, j));
-#else
-            MAT_BOUNDS_CHECK(l->output, j, i);
-            MAT_BOUNDS_CHECK(l->input, j, i);
-            MAT_AT(l->output, j, i) = fmax(0.0, MAT_AT(l->input, j, i));
-#endif // ROW_MAJOR
         }
     }
     nob_log(NOB_INFO, "relu: ok");
 }
 
-void normalize(NormalizeLayer *l, graph_t *g)
+void normalize(NormalizeLayer * const l)
 {
-    (void) g;
     MAT_ASSERT(l->output, l->input);
 
     for (size_t i = 0; i < BATCH_DIM(l->input); i++) {
         double norm = 0.0;
         for (size_t j = 0; j < NODE_DIM(l->input); j++) {
-#ifdef ROW_MAJOR
             MAT_BOUNDS_CHECK(l->input, i, j);
             double val = MAT_AT(l->input, i, j);
-#else
-            MAT_BOUNDS_CHECK(l->input, j, i);
-            double val = MAT_AT(l->input, j, i);
-#endif // ROW_MAJOR
             norm += val * val;
         }
-        double norm_recip = 1/sqrt(norm);
+
+        MAT_SPEC(l->recip_mag);
+        MAT_BOUNDS_CHECK(l->recip_mag, i, 0);
+        MAT_AT(l->recip_mag, i, 0) = (double)1/sqrt(norm);
 
         if (norm > 1e-8) {
             for (size_t j = 0; j < NODE_DIM(l->input); j++) {
-
-#ifdef ROW_MAJOR
                 MAT_BOUNDS_CHECK(l->output, i, j);
                 MAT_BOUNDS_CHECK(l->input, i, j);
-                MAT_AT(l->output, i, j) = MAT_AT(l->input, i, j) * norm_recip;
-#else
-                MAT_BOUNDS_CHECK(l->output, j, i);
-                MAT_BOUNDS_CHECK(l->input, j, i);
-                MAT_AT(l->output, j, i) = MAT_AT(l->input, j, i) * norm_recip;
-#endif // ROW_MAJOR
+                MAT_AT(l->output, i, j) = MAT_AT(l->input, i, j) * MAT_AT(l->recip_mag, i, 0);
             }
         }
     }
     nob_log(NOB_INFO, "normalize: ok");
 }
 
-void linear(LinearLayer *l, graph_t *g)
+void linear(LinearLayer* const l)
 {
-    (void) g;
-
-#ifdef ROW_MAJOR                // y = x @ W
     MAT_ASSERT_DOT(l->input, l->W);
-    MAT_ASSERT_W(l->output, l->W);
-    MAT_ASSERT_H(l->output, l->input);
+    MAT_ASSERT_NODE(l->output, l->W);
+    MAT_ASSERT_BATCH(l->output, l->input);
 
-    NOB_TODO("Use dot product for row-major")
-#else                           // y = W @ x
-    MAT_ASSERT_DOT(l->W, l->input);
-    MAT_ASSERT_H(l->output, l->W);
-    MAT_ASSERT_W(l->output, l->input);
-
-    dot(l->W, l->input, l->output);
-#endif // ROW_MAJOR
+    dot(l->input, l->W, l->output);
 
     if (l->bias) {
-#ifdef ROW_MAJOR
-        MAT_ASSERT_W(l->output, l->bias);
+        MAT_ASSERT_NODE(l->output, l->bias);
         assert(BATCH_DIM(l->bias) == 1);
-#else
-        MAT_ASSERT_H(l->output, l->bias);
-        assert(l->bias->width == 1);
-#endif // ROW_MAJOR
 
         for (size_t i = 0; i < BATCH_DIM(l->output); i++) {
             for (size_t j = 0; j < NODE_DIM(l->output); j++) {
-#ifdef ROW_MAJOR
                 MAT_BOUNDS_CHECK(l->output, i, j);
                 MAT_BOUNDS_CHECK(l->bias, 0, j);
                 MAT_AT(l->output, i, j) += MAT_AT(l->bias, 0, j);
-#else
-                MAT_BOUNDS_CHECK(l->output, j, i);
-                MAT_BOUNDS_CHECK(l->bias, j, 0);
-                MAT_AT(l->output, j, i) += MAT_AT(l->bias, j, 0);
-#endif // ROW_MAJOR
             }
         }
     }
@@ -197,83 +161,60 @@ void linear(LinearLayer *l, graph_t *g)
 /*
   Log Sum Exp: https://stackoverflow.com/a/61570752
 */
-void logsoft(LogSoftLayer *l, graph_t *g)
+void logsoft(LogSoftLayer* const l)
 {
-    (void) g;
     MAT_ASSERT(l->output, l->input);
 
     for (size_t i = 0; i < BATCH_DIM(l->input); i++) {
-#if ROW_MAJOR
-        double max = MAT_AT(l->input, i, 0);
-#else
-        double max = MAT_AT(l->input, 0, i);
-#endif // ROW_MAJOR
+        MAT_BOUNDS_CHECK(l->input, i, 0);
+        double rowmax = MAT_AT(l->input, i, 0);
+        MAT_BOUNDS_CHECK(l->input, i, 0);
+        double colmax = MAT_AT(l->input, 0, i);
+
+        printf("(batch %zu) colmax: %f rowmax: %f\n", i, colmax, rowmax);
+        double max = rowmax;
 
         for (size_t j = 1; j < NODE_DIM(l->input); j++) {
-#ifdef ROW_MAJOR
             MAT_BOUNDS_CHECK(l->input, i, j);
             max = fmax(max, MAT_AT(l->input, i, j));
-#else
-            MAT_BOUNDS_CHECK(l->input, j, i);
-            max = fmax(max, MAT_AT(l->input, j, i));
-#endif // ROW_MAJOR
         }
 
         double logsumexp = 0.0;
         for (size_t j = 0; j < NODE_DIM(l->input); j++) {
-#ifdef ROW_MAJOR
             MAT_BOUNDS_CHECK(l->input, i, j);
             logsumexp += exp(MAT_AT(l->input, i, j) - max);
-#else
-            MAT_BOUNDS_CHECK(l->input, j, i);
-            logsumexp += exp(MAT_AT(l->input, j, i) - max);
-#endif // ROW_MAJOR
         }
 
         logsumexp = log(logsumexp);
 
         for (size_t j = 0; j < NODE_DIM(l->input); j++) {
-#ifdef ROW_MAJOR
             MAT_BOUNDS_CHECK(l->output, i, j);
             MAT_BOUNDS_CHECK(l->input, i, j);
             MAT_AT(l->output, i, j) = MAT_AT(l->input, i, j) - max - logsumexp;
-#else
-            MAT_BOUNDS_CHECK(l->output, j, i);
-            MAT_BOUNDS_CHECK(l->input, j, i);
-            MAT_AT(l->output, j, i) = MAT_AT(l->input, j, i) - max - logsumexp;
-#endif // ROW_MAJOR
         }
     }
 
     nob_log(NOB_INFO, "log_softmax: ok");
 }
 
-double nll_loss(matrix_t* yhat, matrix_t* y)
+double nll_loss(matrix_t* const yhat, matrix_t* const y)
 {
+    MAT_PRINT(y);
+    MAT_SPEC(y);
     double sum = 0.0;
 	for (size_t i = 0; i < BATCH_DIM(yhat); i++) {
         size_t j;
 	    for (j = 0; j < NODE_DIM(yhat); j++) {
-
-#ifdef ROW_MAJOR
             MAT_BOUNDS_CHECK(y, i, j);
             double class = MAT_AT(y, i, j);
-#else
-            MAT_BOUNDS_CHECK(y, j, i);
-            double class = MAT_AT(y, j, i);
-#endif // ROW_MAJOR
+            printf("(%zu, %zu) class: %f\n", i, j, class);
             if (class == 1.0) { break; }
         }
 
         assert(j < NODE_DIM(yhat) && "No true class was found");
 
-#ifdef ROW_MAJOR
         MAT_BOUNDS_CHECK(y, i, j);
         double logits = MAT_AT(yhat, i, j);
-#else
-        MAT_BOUNDS_CHECK(y, j, i);
-        double logits = MAT_AT(yhat, j, i);
-#endif // ROW_MAJOR
         sum -= logits;
     }
 

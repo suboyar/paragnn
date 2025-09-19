@@ -32,18 +32,19 @@ void mat_destroy(matrix_t *mat)
     free(mat);
 }
 
-double mat_get(const matrix_t *mat, size_t i, size_t j)
+double mat_get(const matrix_t *m, size_t i, size_t j)
 {
-    assert(mat != NULL && mat->data != NULL);
-    assert(i < mat->height && j < mat->width);
-    return mat->data[IDX(i, j, mat->width)];
+    assert(m != NULL && m->data != NULL);
+    assert(i < m->height && j < m->width);
+    return MAT_AT(m, i, j);
 }
 
-void mat_set(matrix_t *mat, size_t i, size_t j, double value)
+void mat_set(matrix_t *m, size_t i, size_t j, double value)
 {
-    assert(mat != NULL && mat->data != NULL);
-    assert(i < mat->height && j < mat->width);
-    mat->data[IDX(i, j, mat->width)] = value;
+    assert(m != NULL && m->data != NULL);
+    assert(i < BATCH_DIM(m));
+    assert(j < NODE_DIM(m));
+    MAT_AT(m, i, j) = value;
 }
 
 double* mat_row(matrix_t *mat, size_t i)
@@ -106,23 +107,42 @@ void mat_transpose(matrix_t *m)
     size_t height = m->height;
     size_t width = m->width;
 
+    double *temp_data = malloc(height * width * sizeof(double));
+    assert(temp_data != NULL);
+
     for (size_t i = 0; i < height; i++) {
         for (size_t j = 0; j < width; j++) {
-            double temp = MAT_AT(m, i, j);
-            MAT_AT(m, i, j) = MAT_AT(m, j, i);
-            MAT_AT(m, j, i) = temp;
+            temp_data[j * height + i] = MAT_AT(m, i, j);
         }
     }
-    m->width = height;
+
+    memcpy(m->data, temp_data, height * width * sizeof(double));
+    free(temp_data);
+
     m->height = width;
+    m->width = height;
+}
+
+void mat_transpose_to(matrix_t *A, matrix_t *B)
+{
+    assert(A->height == B->width);
+    assert(A->width == B->height);
+
+    size_t height = A->height;
+    size_t width = B->width;
+    for (size_t i = 0; i < height; i++) {
+        for (size_t j = 0; j < width; j++) {
+            MAT_AT(B, j, i) = MAT_AT(A, i, j);
+        }
+    }
 }
 
 void dot(matrix_t *A, matrix_t *B, matrix_t *C)
 {
     // Verify inner dimensions match
-    assert(A->width == B->height);
-    assert(C->height == A->height);
-    assert(C->width == B->width);
+    assert(A->width == B->height && "Inner dimensions must match for matrix multiplication");
+    assert(C->height == A->height && "Output height must match A height");
+    assert(C->width == B->width && "Output width must match B width");
 
     size_t M = A->height;
     size_t N = A->width;
@@ -132,9 +152,9 @@ void dot(matrix_t *A, matrix_t *B, matrix_t *C)
         for (size_t j = 0; j < P; j++) {
             double sum = 0.0;
             for (size_t k = 0; k < N; k++) {
-                sum += A->data[IDX(i, k, A->width)] * B->data[IDX(k, j, B->width)];
+                sum += MAT_AT(A, i, k) * MAT_AT(B, k, j);
             }
-            C->data[IDX(i, j, C->width)] = sum;
+            MAT_AT(C, i, j) = sum;
         }
     }
 }
@@ -155,9 +175,10 @@ void dot_agg(matrix_t *A, matrix_t *B, matrix_t *C)
         for (size_t j = 0; j < P; j++) {
             double sum = 0.0;
             for (size_t k = 0; k < N; k++) {
-                sum += A->data[IDX(i, k, A->width)] * B->data[IDX(k, j, B->width)];
+
+                sum += MAT_AT(A, i, k) * MAT_AT(B, k, j);
             }
-            C->data[IDX(i, j, C->width)] += sum;
+            MAT_AT(C, i, j) += sum;
         }
     }
 }
@@ -165,14 +186,23 @@ void dot_agg(matrix_t *A, matrix_t *B, matrix_t *C)
 
 void dot_ex(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt)
 {
-    // Verify inner dimensions match
-    assert((at ? A->height : A->width) == (bt ? B->width : B->height));
-    assert(C->height == (at ? A->width : A->height));
-    assert(C->width == (bt ? B->height : B->width));
+    // Calculate effective dimensions after potential transposition
+    size_t eff_A_rows = at ? A->width : A->height;
+    size_t eff_A_cols = at ? A->height : A->width;
+    size_t eff_B_rows = bt ? B->width : B->height;
+    size_t eff_B_cols = bt ? B->height : B->width;
 
-    size_t M = at ? A->width : A->height;
-    size_t N = at ? A->height : A->width;
-    size_t P = bt ? B->height : B->width;
+    // Verify dimensions for valid matrix multiplication: eff_A * eff_B = C
+    // Inner dimensions must match: columns of eff_A = rows of eff_B
+    assert(eff_A_cols == eff_B_rows && "Inner dimensions must match for matrix multiplication");
+
+    // Output dimensions must match: C = eff_A_rows @ eff_B_cols
+    assert(C->height == eff_A_rows && "Output height must match effective rows of operand A");
+    assert(C->width == eff_B_cols && "Output width must match effective columns of operand B");
+
+    size_t M = eff_A_rows;
+    size_t N = eff_A_cols;
+    size_t P = eff_B_cols;
 
     // Precompute strides for each matrix
     size_t a_row_stride = at ? 1 : A->width;

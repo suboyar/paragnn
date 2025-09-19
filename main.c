@@ -7,6 +7,7 @@
 
 #include <zlib.h>
 
+#include "core.h"
 #include "matrix.h"
 #include "layers.h"
 #include "gnn.h"
@@ -62,9 +63,10 @@ int main(void)
     srand(0);
     // srand(time(NULL));
 
-    nob_minimal_log_level = NOB_NO_LOGS;
+    // nob_minimal_log_level = NOB_NO_LOGS;
 
     graph_t g = {0};
+    // BREAKPOINT();
     load_data(&g);
 
     // printf("After loading dataset:\n");
@@ -72,12 +74,9 @@ int main(void)
 
     size_t hidden_dim = 5;
 #ifdef NEWWAY
-    mat_transpose(g.x);
-    MAT_SPEC(g.y); printf("\n");
+
     MAT_PRINT(g.y);
-    mat_transpose(g.y);
-    MAT_SPEC(g.y); printf("\n");
-    MAT_PRINT(g.y);
+    MAT_SPEC(g.y);
 
     size_t n_nodes = g.num_nodes;
     SageLayer *sagelayer = init_sage_layer(n_nodes, g.num_node_features, hidden_dim);
@@ -94,11 +93,11 @@ int main(void)
     CONNECT_LAYER(normalizelayer, linearlayer);
     CONNECT_LAYER(linearlayer, logsoftlayer);
 
-    SAGE_LAYER_INFO(sagelayer);
-    RELU_LAYER_INFO(relulayer);
-    NORMALIZE_LAYER_INFO(normalizelayer);
-    LINEAR_LAYER_INFO(linearlayer);
-    LOGSOFT_LAYER_INFO(logsoftlayer);
+    sage_layer_info(sagelayer);
+    relu_layer_info(relulayer);
+    normalize_layer_info(normalizelayer);
+    linear_layer_info(linearlayer);
+    logsoft_layer_info(logsoftlayer);
     printf("\n");
 
     for (size_t epoch = 1; epoch < 10; epoch++) {
@@ -110,20 +109,24 @@ int main(void)
         sageconv(sagelayer, &g);
         MAT_PRINT(sagelayer->output);
 
-        relu(relulayer, &g);
+        relu(relulayer);
         MAT_PRINT(relulayer->output);
 
-        normalize(normalizelayer, &g);
+        normalize(normalizelayer);
         MAT_PRINT(normalizelayer->output);
 
-        linear(linearlayer, &g);
+        linear(linearlayer);
         MAT_PRINT(linearlayer->output);
 
-        logsoft(logsoftlayer, &g);
+        logsoft(logsoftlayer);
         MAT_PRINT(logsoftlayer->output);
 
         double loss = nll_loss(logsoftlayer->output, g.y) / BATCH_DIM(g.y);
         printf("[epoch %zu] loss: %f\n", epoch, loss);
+
+        cross_entropy_backward(logsoftlayer, g.y);
+        linear_backward(linearlayer);
+        normalize_backward(normalizelayer);
 
         break;
 

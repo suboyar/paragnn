@@ -14,12 +14,13 @@
 
 Nob_String_Builder sb = {0};
 
+#define IDX(i, j, width) ((i) * (width) + (j))
+
 #define CHUNK 0x1000 // 4kb window size
 Nob_String_View read_gz(char* file_path)
 {
     gzFile file = gzopen(file_path, "rb");
     if (!file) { ERROR("gzopen of '%s' failed: %s", file_path, strerror(errno)); }
-
 
     sb.count = 0;
     char buffer[CHUNK];
@@ -114,7 +115,7 @@ void load_arxiv_data(graph_t *arxiv)
                         label_index, arxiv->num_label_classes-1);
         }
 
-        arxiv->y->data[IDX(i, label_index, arxiv->num_label_classes)] = 1.0; // Everything else should have been inited to 0.0 by calloc
+        MAT_AT(arxiv->y, i, label_index) = 1.0; // Everything else should have been inited to 0.0 by calloc
         nob_temp_reset();
     }
 
@@ -136,7 +137,7 @@ void load_arxiv_data(graph_t *arxiv)
             Nob_String_View feat_sv = nob_sv_chop_by_delim(&feats_sv, ',');
             const char *feat_cstr = nob_temp_sv_to_cstr(feat_sv);
             assert(strcmp(feat_cstr, "") != 0);
-            arxiv->x->data[IDX(i, j, arxiv->num_node_features)] = atof(feat_cstr);
+            MAT_AT(arxiv->x, i, j) = atof(feat_cstr);
             if (j >= arxiv->num_node_features) {
                 ERROR("Feature index overflow: got %zu, expected < %zu",
                             j, arxiv->num_node_features);
