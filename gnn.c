@@ -221,6 +221,94 @@ double nll_loss(matrix_t* const yhat, matrix_t* const y)
     return sum;
 }
 
+// Computes gradient flow from both NLLLoss and LogSoftmax.
+void cross_entropy_backward(LogSoftLayer* const l, matrix_t* const y)
+{
+    MAT_ASSERT(l->output, y);
+    MAT_ASSERT(l->output, l->output);
+
+    for (size_t i = 0; i < BATCH_DIM(l->output); i++) {
+        for (size_t j = 0; j < NODE_DIM(l->output); j++) {
+            MAT_BOUNDS_CHECK(l->grad_input, i, j);
+            MAT_BOUNDS_CHECK(l->output, i, j);
+            MAT_AT(l->grad_input, i, j) = exp(MAT_AT(l->output, i, j));
+        }
+
+        for (size_t j = 0; j < NODE_DIM(l->output); j++) {
+            MAT_BOUNDS_CHECK(l->output, i, j);
+            if (MAT_AT(y, i, j) == 1.0) { //  True class
+                MAT_BOUNDS_CHECK(l->grad_input, i, j);
+                MAT_AT(l->grad_input, i, j) -= 1;
+                break;
+            }
+        }
+    }
+
+    nob_log(NOB_INFO, "cross_entropy_backward: ok");
+}
+
+void linear_backward(LinearLayer* const l)
+{
+    // Downstream:
+    // Column-major: grad_input = W^T @ grad_output
+    // Row-major:    grad_input = grad_output @ W^T
+    // Note: Row-major storage causes W to be implicitly transposed
+    dot_ex(l->grad_output, l->W, l->grad_input, false, true);
+
+    // Cost of weights:
+    // Column-major: grad_W = grad_output @ input^T
+    // Row-major:    grad_W = input^T @ grad_output
+    // Note: Similar reasoning - Row-major storage causes input to be implicitly transposed
+    dot_ex(l->input, l->grad_output, l->grad_W, true, false);
+
+    if (l->grad_bias != NULL) {
+        NOB_TODO("Implement gradient for bias vector");
+    }
+
+    nob_log(NOB_INFO, "linear_backward: ok");
+}
+
+void normalize_backward(NormalizeLayer* const l)
+{
+    // TODO: add the asserts for matrix dims
+
+    for (size_t i = 0; i < BATCH_DIM(l->input); i++) {
+        double grad_local_data[NODE_DIM(l->input) * NODE_DIM(l->input)];
+        matrix_t grad_local = {
+            .height = NODE_DIM(l->input),
+            .width = NODE_DIM(l->input),
+            .data = grad_local_data
+        };
+        for (size_t j = 0; j < NODE_DIM(l->input); j++) {
+            for (size_t k = 0; k < NODE_DIM(l->input); k++) {
+                MAT_AT(&grad_local, j, k) = MAT_AT(l->output, i, j) * MAT_AT(l->output, i, k);
+                if (j == k) {     // Kronecker delta
+                    MAT_AT(&grad_local, j, k) = 1 + MAT_AT(&grad_local, j, k);
+                }
+                MAT_AT(&grad_local, j, k) *= MAT_AT(l->recip_mag, i, 0);
+            }
+        }
+
+        for (size_t j = 0; j < NODE_DIM(l->grad_input); j++) {
+            double sum = 0.0;
+            for (size_t k = 0; k < NODE_DIM(l->grad_output); k++) {
+                sum += MAT_AT(l->grad_output, i, k) * MAT_AT(&grad_local, k, j);
+            }
+            MAT_AT(l->grad_input, i, j) = sum;
+        }
+    }
+    nob_log(NOB_INFO, "normalize_backward: ok");
+}
+
+void relu_backward(ReluLayer* const l)
+{
+    MAT_ASSERT(l->output, l->input);
+
+    nob_log(NOB_INFO, "relu_backward: ok");
+}
+
+
+
 #else // NEWWAY
 
 #define SAMPLE_SIZE 10 // XXX: Placeholder unitl I implement proper neighbor samplig
