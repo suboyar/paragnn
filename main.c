@@ -63,7 +63,7 @@ int main(void)
     srand(0);
     // srand(time(NULL));
 
-    // nob_minimal_log_level = NOB_NO_LOGS;
+    nob_minimal_log_level = NOB_NO_LOGS;
 
     graph_t g = {0};
     // BREAKPOINT();
@@ -73,6 +73,8 @@ int main(void)
     // print_memory_usage();
 
     size_t hidden_dim = 5;
+    float lr = 0.1;
+
 #ifdef NEWWAY
 
     MAT_PRINT(g.y);
@@ -100,26 +102,28 @@ int main(void)
     logsoft_layer_info(logsoftlayer);
     printf("\n");
 
-    for (size_t epoch = 1; epoch < 10; epoch++) {
-        MAT_PRINT(sagelayer->Wagg);
-        MAT_PRINT(sagelayer->Wroot);
-        MAT_PRINT(linearlayer->W);
+    const size_t MAX_EPOCH = 10;
 
-        MAT_PRINT(g.x);
+    for (size_t epoch = 1; epoch <= MAX_EPOCH; epoch++) {
+        // MAT_PRINT(sagelayer->Wagg);
+        // MAT_PRINT(sagelayer->Wroot);
+        // MAT_PRINT(linearlayer->W);
+
+        // MAT_PRINT(g.x);
         sageconv(sagelayer, &g);
-        MAT_PRINT(sagelayer->output);
+        // MAT_PRINT(sagelayer->output);
 
         relu(relulayer);
-        MAT_PRINT(relulayer->output);
+        // MAT_PRINT(relulayer->output);
 
         normalize(normalizelayer);
-        MAT_PRINT(normalizelayer->output);
+        // MAT_PRINT(normalizelayer->output);
 
         linear(linearlayer);
-        MAT_PRINT(linearlayer->output);
+        // MAT_PRINT(linearlayer->output);
 
         logsoft(logsoftlayer);
-        MAT_PRINT(logsoftlayer->output);
+        // MAT_PRINT(logsoftlayer->output);
 
         double loss = nll_loss(logsoftlayer->output, g.y) / BATCH_DIM(g.y);
         printf("[epoch %zu] loss: %f\n", epoch, loss);
@@ -127,8 +131,11 @@ int main(void)
         cross_entropy_backward(logsoftlayer, g.y);
         linear_backward(linearlayer);
         normalize_backward(normalizelayer);
+        relu_backward(relulayer);
+        sageconv_backward(sagelayer);
 
-        break;
+        update_linear_weights(linearlayer, lr);
+        update_sageconv_weights(sagelayer, lr);
 
     }
 #else

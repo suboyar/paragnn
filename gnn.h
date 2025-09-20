@@ -19,6 +19,11 @@ double nll_loss(matrix_t* const yhat, matrix_t* const y);
 void cross_entropy_backward(LogSoftLayer* const l, matrix_t* const y);
 void linear_backward(LinearLayer* const l);
 void normalize_backward(NormalizeLayer* const l);
+void relu_backward(ReluLayer* const l);
+void sageconv_backward(SageLayer* const l);
+
+void update_linear_weights(LinearLayer* const l, float lr);
+void update_sageconv_weights(SageLayer* const l, float lr);
 
 #else
 // Forward propagation
