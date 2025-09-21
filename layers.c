@@ -1,9 +1,41 @@
 #include <stdlib.h>
 
+#include "core.h"
 #include "layers.h"
 #include "matrix.h"
+#include "graph.h"
 
 // Init helpers
+
+K_SageLayers* init_k_sage_layers(size_t k_layers, size_t hidden_dim, graph_t *g)
+{
+    K_SageLayers *layer = malloc(sizeof(*layer));
+    layer->k_layers = k_layers;
+    layer->sagelayer      = malloc(k_layers * sizeof(*layer->sagelayer));
+    layer->relulayer      = malloc(k_layers * sizeof(*layer->relulayer));
+    layer->normalizelayer = malloc(k_layers * sizeof(*layer->normalizelayer));
+
+    size_t batch_size = g->num_nodes;
+    size_t num_features = g->num_node_features;
+    printf("batch_size: %zu, num_features: %zu\n", batch_size, num_features);
+    MAT_SPEC(g->x);
+    BREAKPOINT();
+
+    layer->sagelayer[0] = init_sage_layer(batch_size, num_features, hidden_dim);
+    layer->relulayer[0] = init_relu_layer(batch_size, hidden_dim);
+    layer->normalizelayer[0] = init_l2norm_layer(batch_size, hidden_dim);
+
+    for (size_t k = 1; k < k_layers; k++) {
+        layer->sagelayer[k] = init_sage_layer(batch_size, hidden_dim, hidden_dim);
+        layer->relulayer[k] = init_relu_layer(batch_size, hidden_dim);
+        layer->normalizelayer[k] = init_l2norm_layer(batch_size, hidden_dim);
+    }
+
+    layer->sagelayer[0]->input = g->x;
+
+    return layer;
+}
+
 SageLayer* init_sage_layer(size_t batch_size, size_t in_dim, size_t out_dim)
 {
     SageLayer *layer = malloc(sizeof(*layer));
@@ -151,6 +183,15 @@ void normalize_layer_info(const NormalizeLayer* const l)
     printf("   %-7s  = %s\n",
            mat_shape((l)->grad_input), mat_shape((l)->input));
     printf("========================================\n");
+}
+
+void k_sage_layers_info(const K_SageLayers* const l)
+{
+    for (size_t k = 0; k < l->k_layers; k++) {
+        sage_layer_info(l->sagelayer[k]);
+        relu_layer_info(l->relulayer[k]);
+        normalize_layer_info(l->normalizelayer[k]);
+    }
 }
 
 void linear_layer_info(const LinearLayer* const l)

@@ -4,12 +4,27 @@
 #include <stdio.h>
 
 #include "matrix.h"
+#include "graph.h"
 
 #define CONNECT_LAYER(l1, l2) do {              \
         (l2)->input       = (l1)->output;       \
         (l1)->grad_output = (l2)->grad_input;   \
     } while(0);
 
+#define CONNECT_SAGE_LAYERS(K_SAGE_LAYERS) do {                                                   \
+        for (size_t k = 0; k < (K_SAGE_LAYERS)->k_layers; k++) {                                  \
+            CONNECT_LAYER((K_SAGE_LAYERS)->sagelayer[k], (K_SAGE_LAYERS)->relulayer[k]);          \
+            CONNECT_LAYER((K_SAGE_LAYERS)->relulayer[k], (K_SAGE_LAYERS)->normalizelayer[k]);     \
+            if (k < (K_SAGE_LAYERS)->k_layers - 1) {                                              \
+                CONNECT_LAYER((K_SAGE_LAYERS)->normalizelayer[k], (K_SAGE_LAYERS)->sagelayer[k+1]); \
+            }                                                                                     \
+        }                                                                                         \
+    } while(0);
+
+#define LAST_SAGE_LAYER(K_SAGE_LAYERS) (K_SAGE_LAYERS)->normalizelayer[(K_SAGE_LAYERS)->k_layers-1]
+
+
+// TODO: add references to graph struct
 typedef struct {
     matrix_t *input;            // Points to previous layer's output
     matrix_t *output;
@@ -38,6 +53,13 @@ typedef struct {
 } NormalizeLayer;
 
 typedef struct {
+    SageLayer      **sagelayer;
+    ReluLayer      **relulayer;
+    NormalizeLayer **normalizelayer;
+    size_t k_layers;
+} K_SageLayers;
+
+typedef struct {
     matrix_t *input;            // Points to previous layer's output
     matrix_t *output;
     matrix_t *W;
@@ -58,6 +80,7 @@ typedef struct {
 
 
 // Init helpers
+K_SageLayers* init_k_sage_layers(size_t k_layers, size_t hidden_dim, graph_t *g);
 SageLayer* init_sage_layer(size_t n_nodes, size_t in_dim, size_t out_dim);
 ReluLayer* init_relu_layer(size_t n_nodes, size_t dim);
 NormalizeLayer* init_l2norm_layer(size_t n_nodes, size_t dim);
@@ -68,6 +91,7 @@ LogSoftLayer* init_logsoft_layer(size_t n_nodes, size_t out_dim);
 void sage_layer_info(const SageLayer* const l);
 void relu_layer_info(const ReluLayer* const l);
 void normalize_layer_info(const NormalizeLayer* const l);
+void k_sage_layers_info(const K_SageLayers* const l);
 void linear_layer_info(const LinearLayer* const l);
 void logsoft_layer_info(const LogSoftLayer* const l);
 

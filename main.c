@@ -80,24 +80,30 @@ int main(void)
     MAT_PRINT(g.y);
     MAT_SPEC(g.y);
 
-    size_t n_nodes = g.num_nodes;
-    SageLayer *sagelayer = init_sage_layer(n_nodes, g.num_node_features, hidden_dim);
-    ReluLayer *relulayer = init_relu_layer(n_nodes, hidden_dim);
-    NormalizeLayer *normalizelayer = init_l2norm_layer(n_nodes, hidden_dim);
+    size_t batch_size   = g.num_nodes;
+    size_t num_features = g.num_node_features;
+    size_t num_classes  = g.num_label_classes;
 
-    LinearLayer *linearlayer = init_linear_layer(n_nodes, hidden_dim, g.num_label_classes);
-    LogSoftLayer *logsoftlayer = init_logsoft_layer(n_nodes, g.num_label_classes);
+    // SageLayer *sagelayer = init_sage_layer(n_nodes, g.num_node_features, hidden_dim);
+    // ReluLayer *relulayer = init_relu_layer(n_nodes, hidden_dim);
+    // NormalizeLayer *normalizelayer = init_l2norm_layer(n_nodes, hidden_dim);
+    // sagelayer->input = g.x;
 
+    K_SageLayers *k_sagelayers = init_k_sage_layers(2, hidden_dim, &g);
+    LinearLayer *linearlayer = init_linear_layer(batch_size, hidden_dim, num_classes);
+    LogSoftLayer *logsoftlayer = init_logsoft_layer(batch_size, num_classes);
 
-    sagelayer->input = g.x;
-    CONNECT_LAYER(sagelayer, relulayer);
-    CONNECT_LAYER(relulayer, normalizelayer);
-    CONNECT_LAYER(normalizelayer, linearlayer);
+    // CONNECT_LAYER(sagelayer, relulayer);
+    // CONNECT_LAYER(relulayer, normalizelayer);
+    CONNECT_SAGE_LAYERS(k_sagelayers);
+    CONNECT_LAYER(LAST_SAGE_LAYER(k_sagelayers), linearlayer);
     CONNECT_LAYER(linearlayer, logsoftlayer);
 
-    sage_layer_info(sagelayer);
-    relu_layer_info(relulayer);
-    normalize_layer_info(normalizelayer);
+    // sage_layer_info(sagelayer);
+    // relu_layer_info(relulayer);
+    // normalize_layer_info(normalizelayer);
+    k_sage_layers_info(k_sagelayers);
+
     linear_layer_info(linearlayer);
     logsoft_layer_info(logsoftlayer);
     printf("\n");
@@ -109,15 +115,14 @@ int main(void)
         // MAT_PRINT(sagelayer->Wroot);
         // MAT_PRINT(linearlayer->W);
 
-        // MAT_PRINT(g.x);
-        sageconv(sagelayer, &g);
-        // MAT_PRINT(sagelayer->output);
-
-        relu(relulayer);
-        // MAT_PRINT(relulayer->output);
-
-        normalize(normalizelayer);
-        // MAT_PRINT(normalizelayer->output);
+        for (size_t k = 0; k < k_sagelayers->k_layers; k++) {
+            sageconv(k_sagelayers->sagelayer[k], &g);
+            // MAT_PRINT(sagelayer->output);
+            relu(k_sagelayers->relulayer[k]);
+            // MAT_PRINT(relulayer->output);
+            normalize(k_sagelayers->normalizelayer[k]);
+            // MAT_PRINT(normalizelayer->output);
+        }
 
         linear(linearlayer);
         // MAT_PRINT(linearlayer->output);
@@ -130,12 +135,17 @@ int main(void)
 
         cross_entropy_backward(logsoftlayer, g.y);
         linear_backward(linearlayer);
-        normalize_backward(normalizelayer);
-        relu_backward(relulayer);
-        sageconv_backward(sagelayer);
+        for (size_t k = 0; k < k_sagelayers->k_layers; k++) {
+            normalize_backward(k_sagelayers->normalizelayer[k]);
+            relu_backward(k_sagelayers->relulayer[k]);
+            sageconv_backward(k_sagelayers->sagelayer[k]);
+        }
 
         update_linear_weights(linearlayer, lr);
-        update_sageconv_weights(sagelayer, lr);
+        for (size_t k = 0; k < k_sagelayers->k_layers; k++) {
+            update_sageconv_weights(k_sagelayers->sagelayer[k], lr);
+        }
+
 
     }
 #else
