@@ -1,5 +1,6 @@
 build/
 arxiv/
+asm/
 .cache/
 
 main

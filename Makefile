@@ -7,33 +7,43 @@ CFLAGS += -DNEWWAY -DCOL_MAJOR
 
 all: main
 
-.PHONY: all clean
-
 main: main.o matrix.o layers.o gnn.o arxiv.o simple_graph.o
 	gcc $(CFLAGS) $^ -o $@ -lm -lz
 
-main.o: main.c
+%.o: %.c
 	gcc $(CFLAGS) -c $< -o $@
 
-matrix.o: matrix.c
-	gcc $(CFLAGS) -c $< -o $@
+# main.o: main.c
+# 	gcc $(CFLAGS) -c $< -o $@
 
-layers.o: layers.c
-	gcc $(CFLAGS) -c $< -o $@
+# matrix.o: matrix.c
+# 	gcc $(CFLAGS) -c $< -o $@
 
-gnn.o: gnn.c
-	gcc $(CFLAGS) -c $< -o $@
+# layers.o: layers.c
+# 	gcc $(CFLAGS) -c $< -o $@
 
-arxiv.o: arxiv.c
-	gcc $(CFLAGS) -c $< -o $@
+# gnn.o: gnn.c
+# 	gcc $(CFLAGS) -c $< -o $@
 
-simple_graph.o: simple_graph.c
-	gcc $(CFLAGS) -c $< -o $@
+# arxiv.o: arxiv.c
+# 	gcc $(CFLAGS) -c $< -o $@
 
+# simple_graph.o: simple_graph.c
+# 	gcc $(CFLAGS) -c $< -o $@
+
+gen-asm: asm/main.s asm/matrix.s asm/layers.s asm/gnn.s asm/arxiv.s asm/simple_graph.s
+
+asm/%.s: %.c | asm
+	gcc $(CFLAGS) -fverbose-asm -fno-omit-frame-pointer -masm=intel -S $< -o $@
+
+asm:
+	mkdir -p $@
 
 arxiv:
 	wget http://snap.stanford.edu/ogb/data/nodeproppred/arxiv.zip
 	unzip arxiv.zip
 
 clean:
-	rm -rf main main.o matrix.o simple_graph.o arxiv.o
+	rm -rf main *.o asm/
+
+.PHONY: all clean gen-asm
