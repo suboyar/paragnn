@@ -64,15 +64,15 @@ LinearLayer* init_linear_layer(size_t batch_size, size_t in_dim, size_t out_dim)
         .input       = NULL, // Set later when connecting layers
         .output      = MAT_CREATE(batch_size, out_dim),
         .W           = MAT_CREATE(in_dim, out_dim),
-        .bias        = NULL, // MAT_CREATE(1, out_dim),
+        .bias        = MAT_CREATE(1, out_dim),
         .grad_input  = MAT_CREATE(batch_size, in_dim),
         .grad_output = NULL, // Set later when connecting layers
         .grad_W      = MAT_CREATE(in_dim, out_dim),
-        .grad_bias   = NULL, //MAT_CREATE(1, out_dim),
+        .grad_bias   = MAT_CREATE(1, out_dim),
     };
 
     mat_rand(layer->W, -1.0, 1.0);
-    // mat_rand(layer->bias, -1.0, 1.0);
+    mat_rand(layer->bias, -1.0, 1.0);
 
     return layer;
 }

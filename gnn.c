@@ -252,7 +252,20 @@ void linear_backward(LinearLayer* const l)
     dot_ex(l->input, l->grad_output, l->grad_W, true, false);
 
     if (l->grad_bias != NULL) {
-        NOB_TODO("Implement gradient for bias vector");
+        MAT_ASSERT(l->bias, l->grad_bias);
+        MAT_ASSERT_NODE(l->grad_output, l->grad_bias);
+
+        // Sum gradients across batch dimension
+        for (size_t batch = 0; batch < BATCH_DIM(l->grad_output); batch++) {
+            for (size_t i = 0; i < NODE_DIM(l->grad_output); i++) {
+                MAT_BOUNDS_CHECK(l->grad_bias, 0, i);
+                MAT_BOUNDS_CHECK(l->grad_output, batch, i);
+
+                // Accumulate the bias used by all batch samples
+                MAT_AT(l->grad_bias, 0, i) += MAT_AT(l->grad_output, batch, i);
+            }
+        }
+
     }
 
     nob_log(NOB_INFO, "linear_backward: ok");
@@ -328,7 +341,7 @@ void update_linear_weights(LinearLayer* const l, float lr)
     MAT_ASSERT(l->W, l->grad_W);
     float batch_recip = (float) 1/BATCH_DIM(l->input);
 
-    for (size_t n = 0; n < BATCH_DIM(l->input); n++) {
+    for (size_t batch = 0; batch < BATCH_DIM(l->input); batch++) {
         for (size_t i = 0; i < l->W->height; i++) {
             for (size_t j = 0; j < l->W->width; j++) {
                 MAT_BOUNDS_CHECK(l->W, i, j);
@@ -336,7 +349,19 @@ void update_linear_weights(LinearLayer* const l, float lr)
                 MAT_AT(l->W, i, j) -= batch_recip * lr * MAT_AT(l->grad_W, i, j);
             }
         }
+
     }
+
+
+    if (l->grad_bias != NULL) {
+        MAT_ASSERT(l->grad_bias, l->bias);
+        for (size_t i = 0; i < NODE_DIM(l->bias); i++) {
+            MAT_BOUNDS_CHECK(l->bias, 0, i);
+            MAT_BOUNDS_CHECK(l->grad_bias, 0, i);
+            MAT_AT(l->bias, 0, i) -= batch_recip * lr * MAT_AT(l->grad_bias, 0, i);
+        }
+    }
+
     nob_log(NOB_INFO, "update_linear_weights: ok");
 }
 
