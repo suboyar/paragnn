@@ -9,7 +9,7 @@ all: main
 
 .PHONY: all clean
 
-main: main.o matrix.o layers.o gnn.o arxiv.o simple_graph.o print.o
+main: main.o matrix.o layers.o gnn.o arxiv.o simple_graph.o
 	gcc $(CFLAGS) $^ -o $@ -lm -lz
 
 main.o: main.c
@@ -30,8 +30,6 @@ arxiv.o: arxiv.c
 simple_graph.o: simple_graph.c
 	gcc $(CFLAGS) -c $< -o $@
 
-print.o: print.c
-	gcc $(CFLAGS) -c $< -o $@
 
 arxiv:
 	wget http://snap.stanford.edu/ogb/data/nodeproppred/arxiv.zip

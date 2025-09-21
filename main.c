@@ -12,7 +12,6 @@
 #include "layers.h"
 #include "gnn.h"
 #include "graph.h"
-#include "print.h"
 
 #define NOB_IMPLEMENTATION
 #include "nob.h"
