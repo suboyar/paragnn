@@ -141,6 +141,7 @@ void dot(matrix_t *A, matrix_t *B, matrix_t *C)
 {
     // Verify inner dimensions match
     assert(A->width == B->height && "Inner dimensions must match for matrix multiplication");
+
     assert(C->height == A->height && "Output height must match A height");
     assert(C->width == B->width && "Output width must match B width");
 

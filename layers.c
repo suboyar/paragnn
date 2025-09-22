@@ -17,9 +17,6 @@ K_SageLayers* init_k_sage_layers(size_t k_layers, size_t hidden_dim, graph_t *g)
 
     size_t batch_size = g->num_nodes;
     size_t num_features = g->num_node_features;
-    printf("batch_size: %zu, num_features: %zu\n", batch_size, num_features);
-    MAT_SPEC(g->x);
-    BREAKPOINT();
 
     layer->sagelayer[0] = init_sage_layer(batch_size, num_features, hidden_dim);
     layer->relulayer[0] = init_relu_layer(batch_size, hidden_dim);

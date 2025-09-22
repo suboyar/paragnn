@@ -175,5 +175,6 @@ void load_arxiv_data(graph_t *arxiv)
         }
         nob_temp_reset();
     }
+    nob_temp_reset();
     nob_sb_free(sb);
 }

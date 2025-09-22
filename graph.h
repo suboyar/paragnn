@@ -12,24 +12,20 @@
 #define GRAPH_NODES(m)              ((m)->height)
 #define GRAPH_FEATURES(m)           ((m)->width)
 
-/*
+
 #ifndef NDEBUG
-    #define GRAPH_BOUNDS_CHECK(m, n, f) do {                                       \
-            if ((n) >= GRAPH_NODES((m))) {                                         \
-                fprintf(stderr, "%s:%d: error: Node index %zu out of bounds\n",    \
-                        __FILE__, __LINE__, (size_t)(n));                          \
-                abort();                                                           \
-            }                                                                      \
-            if ((f) >= GRAPH_FEATURES((m))) {                                      \
-                fprintf(stderr, "%s:%d: error: Feature index %zu out of bounds\n", \
-                        __FILE__, __LINE__, (size_t)(f));                          \
-                abort();                                                           \
-            }                                                                      \
-        } while(0)
+#define EDGE_BOUNDS_CHECK(g, v, u) do {                                                           \
+        if (EDGE_AT((g), (v), (u)) >= (g)->num_nodes) {                                           \
+            fprintf(stderr, "Edge %zu endpoint %zu points to out-of-bounds node %zu (max %zu)\n", \
+                    (size_t)(v), (size_t)(u), (size_t)EDGE_AT((g), (v), (u)), (g)->num_nodes);    \
+            abort();                                                                              \
+        }                                                                                         \
+    }                                                                                             \
+    while(0);
 #else
-    #define GRAPH_BOUNDS_CHECK(m, n, f) (void)(0)
+    #define EDGE_BOUNDS_CHECK(g, v, u) (void)(0)
 #endif
-*/
+
 
 typedef struct {
     size_t num_edges;
