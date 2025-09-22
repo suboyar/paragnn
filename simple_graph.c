@@ -12,14 +12,14 @@ void load_simple_data(graph_t *graph)
 {
     printf("Loading simple graph dataset\n");
 
-    graph->num_edges = 6;
+    graph->num_edges = 4;
     graph->num_nodes = 3;
     graph->num_node_features = 1;
     graph->num_label_classes = 2;
 
     size_t edges[] = {
-        0, 0, 1, 1, 2, 2,
-        1, 2, 0, 2, 0, 1
+        0, 0, 1, 2,
+        1, 2, 2, 0,
     };
     // graph->edge_index = malloc(sizeof(edges)); // Graph connectivity in COO format with shape [2, num_edges]
     // memcpy(graph->edge_index, edges, sizeof(edges));
