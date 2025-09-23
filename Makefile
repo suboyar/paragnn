@@ -1,4 +1,4 @@
-# CFLAGS = -O3 -march=native
+# CFLAGS = -O3 -march=native -DNDEBUG
 CFLAGS = -O0 -ggdb -g3 -gdwarf-2
 CFLAGS += -std=c17 -D_POSIX_C_SOURCE=200809L
 CFLAGS += -fopenmp
@@ -8,7 +8,7 @@ CLIBS = -lm -lz
 
 all: main
 
-main: main.o matrix.o layers.o gnn.o arxiv.o simple_graph.o
+main: main.o matrix.o layers.o gnn.o graph.o arxiv.o simple_graph.o
 	gcc $(CFLAGS) $^ -o $@ $(CLIBS)
 
 %.o: %.c

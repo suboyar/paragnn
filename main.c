@@ -77,37 +77,16 @@ int main(void)
     size_t num_features = g.num_node_features;
     size_t num_classes  = g.num_label_classes;
 
-    // SageLayer *sagelayer = init_sage_layer(n_nodes, g.num_node_features, hidden_dim);
-    // ReluLayer *relulayer = init_relu_layer(n_nodes, hidden_dim);
-    // NormalizeLayer *normalizelayer = init_l2norm_layer(n_nodes, hidden_dim);
-    // sagelayer->input = g.x;
-
     K_SageLayers *k_sagelayers = init_k_sage_layers(2, hidden_dim, &g);
     LinearLayer *linearlayer = init_linear_layer(batch_size, hidden_dim, num_classes);
     LogSoftLayer *logsoftlayer = init_logsoft_layer(batch_size, num_classes);
 
-    // CONNECT_LAYER(sagelayer, relulayer);
-    // CONNECT_LAYER(relulayer, normalizelayer);
     CONNECT_SAGE_LAYERS(k_sagelayers);
     CONNECT_LAYER(LAST_SAGE_LAYER(k_sagelayers), linearlayer);
     CONNECT_LAYER(linearlayer, logsoftlayer);
 
-    // sage_layer_info(sagelayer);
-    // relu_layer_info(relulayer);
-    // normalize_layer_info(normalizelayer);
-    // k_sage_layers_info(k_sagelayers);
-
-    // linear_layer_info(linearlayer);
-    // logsoft_layer_info(logsoftlayer);
-    // printf("\n");
-
     const size_t MAX_EPOCH = 10;
-
     for (size_t epoch = 1; epoch <= MAX_EPOCH; epoch++) {
-        // MAT_PRINT(sagelayer->Wagg);
-        // MAT_PRINT(sagelayer->Wroot);
-        // MAT_PRINT(linearlayer->W);
-
         for (size_t k = 0; k < k_sagelayers->k_layers; k++) {
             sageconv(k_sagelayers->sagelayer[k], &g);
             // MAT_PRINT(sagelayer->output);
@@ -141,16 +120,15 @@ int main(void)
 
     }
 
-    // TODO: Clean up
+    free_logsoft_layer(logsoftlayer);
+    free_linear_layer(linearlayer);
+    free_k_sage_layers(k_sagelayers);
+    free_graph(g);
 
     return 0;
 }
 
-// TODO: Implement gradient descent training
-// TODO: Configurable layer dimensions
 // TODO: Use CRS format for edges
-// TODO: Clean up all allocated memory
-// TODO: Add bias
 // TODO: Split up dataset according to DATASET_PATH/split/time/{test.csv.gz,train.csv.gz,valid.csv.gz} which are indexes
 // TODO: Xavier Initialization for weight matrices
 // TODO: Make a global memory pool that for internal use

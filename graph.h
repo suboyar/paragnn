@@ -39,4 +39,6 @@ typedef struct {
     size_t *node_year;
 } graph_t;
 
+void free_graph(graph_t g);
+
 #endif // GRAPH_H_

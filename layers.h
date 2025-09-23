@@ -78,7 +78,6 @@ typedef struct {
     matrix_t *grad_output;      // Gradients w.r.t. this layer's output (from downstream)
 } LogSoftLayer;
 
-
 // Init helpers
 K_SageLayers* init_k_sage_layers(size_t k_layers, size_t hidden_dim, graph_t *g);
 SageLayer* init_sage_layer(size_t n_nodes, size_t in_dim, size_t out_dim);
@@ -86,6 +85,14 @@ ReluLayer* init_relu_layer(size_t n_nodes, size_t dim);
 NormalizeLayer* init_l2norm_layer(size_t n_nodes, size_t dim);
 LinearLayer* init_linear_layer(size_t n_nodes, size_t in_dim, size_t out_dim);
 LogSoftLayer* init_logsoft_layer(size_t n_nodes, size_t out_dim);
+
+// Free up layers
+void free_k_sage_layers(K_SageLayers *k_sagelayers);
+void free_sage_layer(SageLayer* l);
+void free_relu_layer(ReluLayer* l);
+void free_l2norm_layer(NormalizeLayer* l);
+void free_linear_layer(LinearLayer *linearlayer);
+void free_logsoft_layer(LogSoftLayer *logsoftlayer);
 
 // Inspect helpers
 void sage_layer_info(const SageLayer* const l);
