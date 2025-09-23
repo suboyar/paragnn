@@ -6,6 +6,8 @@
 #include <stddef.h>
 #include <stdio.h>
 
+#include "core.h"
+
 #include "nob.h"
 
 #define BATCH_DIM(m) ((m)->height)  // batch_size = height
@@ -17,18 +19,16 @@
 #define MAT_COL(m, col) NOB_TODO("MAT_COL is depricated")
 
 #ifndef NDEBUG
-    #define MAT_BOUNDS_CHECK(m, i, j) do {                                                     \
-            if ((i) >= BATCH_DIM(m)) {                                                         \
-                fprintf(stderr, "%s:%d: error: %s: Batch index %zu out of bounds (max %zu)\n", \
-                        __FILE__, __LINE__, __func__, (size_t)(i), (size_t)BATCH_DIM(m));      \
-                abort();                                                                       \
-            }                                                                                  \
-            if ((j) >= NODE_DIM(m)) {                                                          \
-                fprintf(stderr, "%s:%d: error: %s: Node index %zu out of bounds (max %zu)\n",  \
-                        __FILE__, __LINE__, __func__, (size_t)(j), (size_t)NODE_DIM(m));       \
-                abort();                                                                       \
-            }                                                                                  \
-        } while(0)
+    #define MAT_BOUNDS_CHECK(m, i, j) do {                                                           \
+            if ((i) >= BATCH_DIM(m)) {                                                               \
+                ERROR("Batch index %zu out of bounds (max %zu)", (size_t)(i), (size_t)BATCH_DIM(m)); \
+                abort();                                                                             \
+            }                                                                                        \
+            if ((j) >= NODE_DIM(m)) {                                                                \
+                ERROR("Node index %zu out of bounds (max %zu)", (size_t)(j), (size_t)NODE_DIM(m));   \
+                abort();                                                                             \
+            }                                                                                        \
+    } while(0)
 #else
     #define MAT_BOUNDS_CHECK(m, i, j) (void)(0)
 #endif

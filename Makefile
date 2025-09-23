@@ -1,15 +1,23 @@
-# CFLAGS = -O3 -march=native -DNDEBUG
-CFLAGS = -O0 -ggdb -g3 -gdwarf-2
+CFLAGS = -O3 -march=native -DNDEBUG
+# CFLAGS = -O0 -ggdb -g3 -gdwarf-2
 CFLAGS += -std=c17 -D_POSIX_C_SOURCE=200809L
 CFLAGS += -fopenmp
 CFLAGS += -Wall -Wextra
 CFLAGS += -Werror=implicit-function-declaration -Werror=incompatible-pointer-types
-CLIBS = -lm -lz
+CLIBS = -lm
 
-all: main
+CFLAGS_OGB = -Wall -Wextra -std=c17 -D_POSIX_C_SOURCE=200809L
+CFLAGS_OGB += -O0 -ggdb
+# CFLAGS_OGB += -O3
+CLIBS_OGB = -lz
 
-main: main.o matrix.o layers.o gnn.o graph.o arxiv.o simple_graph.o
+all: main ogb
+
+main: main.o matrix.o layers.o gnn.o graph.o
 	gcc $(CFLAGS) $^ -o $@ $(CLIBS)
+
+ogb: ogb.o				# Decompreses the dataset
+	gcc $(CFLAGS_OGB) $^ -o $@ $(CLIBS_OGB)
 
 %.o: %.c
 	gcc $(CFLAGS) -c $< -o $@
@@ -22,8 +30,8 @@ asm/%.s: %.c | asm
 asm:
 	mkdir -p $@
 
-arxiv: arxiv.zip
-	unzip arxiv.zip
+dataset/arxiv: arxiv.zip
+	unzip arxiv.zip -d dataset/
 
 arxiv.zip:
 	wget http://snap.stanford.edu/ogb/data/nodeproppred/arxiv.zip

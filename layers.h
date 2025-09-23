@@ -87,12 +87,12 @@ LinearLayer* init_linear_layer(size_t n_nodes, size_t in_dim, size_t out_dim);
 LogSoftLayer* init_logsoft_layer(size_t n_nodes, size_t out_dim);
 
 // Free up layers
-void free_k_sage_layers(K_SageLayers *k_sagelayers);
-void free_sage_layer(SageLayer* l);
-void free_relu_layer(ReluLayer* l);
-void free_l2norm_layer(NormalizeLayer* l);
-void free_linear_layer(LinearLayer *linearlayer);
-void free_logsoft_layer(LogSoftLayer *logsoftlayer);
+void destroy_k_sage_layers(K_SageLayers *k_sagelayers);
+void destroy_sage_layer(SageLayer* l);
+void destroy_relu_layer(ReluLayer* l);
+void destroy_l2norm_layer(NormalizeLayer* l);
+void destroy_linear_layer(LinearLayer *linearlayer);
+void destroy_logsoft_layer(LogSoftLayer *logsoftlayer);
 
 // Inspect helpers
 void sage_layer_info(const SageLayer* const l);

@@ -5,13 +5,12 @@
 
 #include "matrix.h"
 
-#define EDGE_AT(g, v, u) (g)->edge_index[(u)*(g)->num_edges + (v)]
+#define SRC_NODE 0
+#define DST_NODE 1
 
-// Although these macros don't reflect column-major storage dimensions,
-// MAT_AT compensates by adjusting the access pattern
-#define GRAPH_NODES(m)              ((m)->height)
-#define GRAPH_FEATURES(m)           ((m)->width)
-
+#define EDGE_AT(g, edge, end) (g)->edge_index[(end)*(g)->num_edges + (edge)]
+#define GRAPH_NODES(m)    ((m)->height)
+#define GRAPH_FEATURES(m) ((m)->width)
 
 #ifndef NDEBUG
 #define EDGE_BOUNDS_CHECK(g, v, u) do {                                                           \
@@ -39,6 +38,8 @@ typedef struct {
     size_t *node_year;
 } graph_t;
 
-void free_graph(graph_t g);
+graph_t* load_graph();
+
+void destroy_graph(graph_t *g);
 
 #endif // GRAPH_H_

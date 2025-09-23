@@ -122,12 +122,12 @@ LogSoftLayer* init_logsoft_layer(size_t batch_size, size_t dim)
 }
 
 // We don't free matrices that are references from other layers, i.e input and grad_output
-void free_k_sage_layers(K_SageLayers *l)
+void destroy_k_sage_layers(K_SageLayers *l)
 {
     for (size_t k = 0; k < l->k_layers; k++) {
-        free_l2norm_layer(l->normalizelayer[k]);
-        free_relu_layer(l->relulayer[k]);
-        free_sage_layer(l->sagelayer[k]);
+        destroy_l2norm_layer(l->normalizelayer[k]);
+        destroy_relu_layer(l->relulayer[k]);
+        destroy_sage_layer(l->sagelayer[k]);
     }
     free(l->relulayer);
     free(l->normalizelayer);
@@ -135,7 +135,7 @@ void free_k_sage_layers(K_SageLayers *l)
     free(l);
 }
 
-void free_sage_layer(SageLayer* l)
+void destroy_sage_layer(SageLayer* l)
 {
     mat_destroy(l->output);
     mat_destroy(l->agg);
@@ -147,14 +147,14 @@ void free_sage_layer(SageLayer* l)
     free(l);
 }
 
-void free_relu_layer(ReluLayer* l)
+void destroy_relu_layer(ReluLayer* l)
 {
     mat_destroy(l->output);
     mat_destroy(l->grad_input);
     free(l);
 }
 
-void free_l2norm_layer(NormalizeLayer* l)
+void destroy_l2norm_layer(NormalizeLayer* l)
 {
     mat_destroy(l->output);
     mat_destroy(l->grad_input);
@@ -162,7 +162,7 @@ void free_l2norm_layer(NormalizeLayer* l)
     free(l);
 }
 
-void free_linear_layer(LinearLayer *l)
+void destroy_linear_layer(LinearLayer *l)
 {
     mat_destroy(l->output);
     mat_destroy(l->W);
@@ -173,7 +173,7 @@ void free_linear_layer(LinearLayer *l)
     free(l);
 }
 
-void free_logsoft_layer(LogSoftLayer *l)
+void destroy_logsoft_layer(LogSoftLayer *l)
 {
     mat_destroy(l->output);
     mat_destroy(l->grad_input);
