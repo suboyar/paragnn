@@ -84,7 +84,10 @@ int main()
     decode_csv(DATASET_PATH"/raw/edge.csv.gz", DATASET_PATH"/processed/edge.csv");
     decode_csv(DATASET_PATH"/raw/node-feat.csv.gz", DATASET_PATH"/processed/node-feat.csv");
     decode_csv(DATASET_PATH"/raw/node-label.csv.gz", DATASET_PATH"/processed/node-label.csv");
-    decode_csv(DATASET_PATH"/raw/node_year.csv.gz", DATASET_PATH"/processed/node_year.csv.gz");
-
+    decode_csv(DATASET_PATH"/raw/node_year.csv.gz", DATASET_PATH"/processed/node_year.csv");
+    decode_csv(DATASET_PATH"/split/time/test.csv.gz", DATASET_PATH"/processed/test.csv");
+    decode_csv(DATASET_PATH"/split/time/test.csv.gz", DATASET_PATH"/processed/test.csv");
+    decode_csv(DATASET_PATH"/split/time/train.csv.gz", DATASET_PATH"/processed/train.csv");
+    decode_csv(DATASET_PATH"/split/time/valid.csv.gz", DATASET_PATH"/processed/valid.csv");
     nob_sb_free(sb);
 }
