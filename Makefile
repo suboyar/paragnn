@@ -1,5 +1,5 @@
-CFLAGS = -O3 -march=native -DNDEBUG
-# CFLAGS = -O0 -ggdb -g3 -gdwarf-2
+# CFLAGS = -O3 -march=native -DNDEBUG
+CFLAGS = -O0 -ggdb -g3 -gdwarf-2
 CFLAGS += -std=c17 -D_POSIX_C_SOURCE=200809L
 CFLAGS += -fopenmp
 CFLAGS += -Wall -Wextra
@@ -7,13 +7,13 @@ CFLAGS += -Werror=implicit-function-declaration -Werror=incompatible-pointer-typ
 CLIBS = -lm
 
 CFLAGS_OGB = -Wall -Wextra -std=c17 -D_POSIX_C_SOURCE=200809L
-CFLAGS_OGB += -O0 -ggdb
-# CFLAGS_OGB += -O3
+# CFLAGS_OGB += -O0 -ggdb
+CFLAGS_OGB += -O3 -ggdb
 CLIBS_OGB = -lz
 
 all: main ogb
 
-main: main.o matrix.o layers.o gnn.o graph.o
+main: main.o matrix.o layers.o gnn.o graph.o benchmark.o
 	gcc $(CFLAGS) $^ -o $@ $(CLIBS)
 
 ogb: ogb.o				# Decompreses the dataset
