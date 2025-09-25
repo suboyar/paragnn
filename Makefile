@@ -1,5 +1,6 @@
 # CFLAGS = -O3 -march=native -DNDEBUG
 CFLAGS = -O0 -ggdb -g3 -gdwarf-2
+# CFLAGS = -DUSE_OGB_ARXIV
 CFLAGS += -std=c17 -D_POSIX_C_SOURCE=200809L
 CFLAGS += -fopenmp
 CFLAGS += -Wall -Wextra

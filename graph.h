@@ -39,6 +39,7 @@ typedef struct {
 } graph_t;
 
 graph_t* load_graph();
+void load_split_graph(graph_t** train_graph, graph_t** valid_graph, graph_t** test_graph);
 
 void destroy_graph(graph_t *g);
 
