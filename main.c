@@ -8,6 +8,7 @@
 #include <zlib.h>
 
 #include "core.h"
+#include "benchmark.h"
 #include "matrix.h"
 #include "layers.h"
 #include "gnn.h"
@@ -15,6 +16,9 @@
 
 #define NOB_IMPLEMENTATION
 #include "nob.h"
+
+#define EPOCH 2
+#define LEARNING_RATE 0.1f
 
 size_t K;
 size_t sample_size;
@@ -42,6 +46,68 @@ void print_memory_usage()
     }
 }
 
+void benchmark_layers(K_SageLayers *k_sagelayers, LinearLayer *linearlayer, LogSoftLayer *logsoftlayer, graph_t *g)
+{
+    for (size_t k = 0; k < k_sagelayers->k_layers; k++) {
+        BENCH_START("sagelayer");
+        sageconv(k_sagelayers->sagelayer[k], g);
+        BENCH_STOP("sagelayer");
+
+        BENCH_START("relu");
+        relu(k_sagelayers->relulayer[k]);
+        BENCH_STOP("relu");
+
+        BENCH_START("normalize");
+        normalize(k_sagelayers->normalizelayer[k]);
+        BENCH_STOP("normalize");
+    }
+
+    BENCH_START("linear");
+    linear(linearlayer);
+    BENCH_STOP("linear");
+
+    BENCH_START("logsoft");
+    logsoft(logsoftlayer);
+    BENCH_STOP("logsoft");
+
+    BENCH_START("nll_loss");
+    double loss = nll_loss(logsoftlayer->output, g->y) / BATCH_DIM(g->y);
+    BENCH_STOP("nll_loss");
+    printf("[epoch %zu] loss: %f\n", (size_t)EPOCH, loss);
+
+    BENCH_START("cross_entropy_backward");
+    cross_entropy_backward(logsoftlayer, g->y);
+    BENCH_STOP("cross_entropy_backward");
+
+    BENCH_START("linear_backward");
+    linear_backward(linearlayer);
+    BENCH_STOP("linear_backward");
+
+    for (size_t k = k_sagelayers->k_layers-1; k < k_sagelayers->k_layers; k--) {
+        BENCH_START("normalize_backward");
+        normalize_backward(k_sagelayers->normalizelayer[k]);
+        BENCH_STOP("normalize_backward");
+
+        BENCH_START("relu_backward");
+        relu_backward(k_sagelayers->relulayer[k]);
+        BENCH_STOP("relu_backward");
+
+        BENCH_START("sageconv_backward");
+        sageconv_backward(k_sagelayers->sagelayer[k], g);
+        BENCH_STOP("sageconv_backward");
+    }
+
+    BENCH_START("update_linear_weights");
+    update_linear_weights(linearlayer, LEARNING_RATE);
+    BENCH_STOP("update_linear_weights");
+
+    for (size_t k = k_sagelayers->k_layers-1; k < k_sagelayers->k_layers; k--) {
+        BENCH_START("update_sageconv_weights");
+        update_sageconv_weights(k_sagelayers->sagelayer[k], LEARNING_RATE);
+        BENCH_STOP("update_sageconv_weights");
+    }
+}
+
 int main(void)
 {
     srand(0);
@@ -52,12 +118,11 @@ int main(void)
     load_split_graph(&train, &valid, &test);
 
     size_t hidden_dim = 256;
-    float lr = 0.1;
 
     size_t batch_size   = train->num_nodes;
     size_t num_classes  = train->num_label_classes;
 
-    K_SageLayers *k_sagelayers = init_k_sage_layers(2, hidden_dim, train);
+    K_SageLayers *k_sagelayers = init_k_sage_layers(1, hidden_dim, train);
     LinearLayer *linearlayer = init_linear_layer(batch_size, hidden_dim, num_classes);
     LogSoftLayer *logsoftlayer = init_logsoft_layer(batch_size, num_classes);
 
@@ -66,39 +131,12 @@ int main(void)
     CONNECT_LAYER(linearlayer, logsoftlayer);
 
 
-    const size_t MAX_EPOCH = 100;
-    for (size_t epoch = 1; epoch <= MAX_EPOCH; epoch++) {
-        for (size_t k = 0; k < k_sagelayers->k_layers; k++) {
-            sageconv(k_sagelayers->sagelayer[k], train);
-            // MAT_PRINT(sagelayer->output);
-            relu(k_sagelayers->relulayer[k]);
-            // MAT_PRINT(relulayer->output);
-            normalize(k_sagelayers->normalizelayer[k]);
-            // MAT_PRINT(normalizelayer->output);
-        }
-
-        linear(linearlayer);
-        // MAT_PRINT(linearlayer->output);
-
-        logsoft(logsoftlayer);
-        // MAT_PRINT(logsoftlayer->output);
-
-        double loss = nll_loss(logsoftlayer->output, train->y) / BATCH_DIM(train->y);
-        printf("[epoch %zu] loss: %f\n", epoch, loss);
-
-        cross_entropy_backward(logsoftlayer, train->y);
-        linear_backward(linearlayer);
-        for (size_t k = k_sagelayers->k_layers-1; k < k_sagelayers->k_layers; k--) {
-            normalize_backward(k_sagelayers->normalizelayer[k]);
-            relu_backward(k_sagelayers->relulayer[k]);
-            sageconv_backward(k_sagelayers->sagelayer[k], train);
-        }
-
-        update_linear_weights(linearlayer, lr);
-        for (size_t k = k_sagelayers->k_layers-1; k < k_sagelayers->k_layers; k--) {
-            update_sageconv_weights(k_sagelayers->sagelayer[k], lr);
-        }
+    for (size_t epoch = 1; epoch <= EPOCH; epoch++) {
+        benchmark_layers(k_sagelayers, linearlayer, logsoftlayer, train);
     }
+
+    printf("Benchmark results (%zu epochs):\n", (size_t)EPOCH);
+    benchmark_print();
 
     destroy_logsoft_layer(logsoftlayer);
     destroy_linear_layer(linearlayer);
