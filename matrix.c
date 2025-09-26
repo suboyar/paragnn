@@ -97,7 +97,7 @@ void mat_rand(matrix_t* m, float low, float high)
 {
     for (size_t i = 0; i < m->height; ++i) {
         for (size_t j = 0; j < m->width; ++j) {
-            MAT_AT(m, i, j) = ((float)rand() / RAND_MAX) * (high - low) + low;
+            MAT_AT(m, i, j) = ((double)rand() / RAND_MAX) * (high - low) + low;
         }
     }
 }
@@ -264,11 +264,11 @@ bool mat_equal(matrix_t *A, matrix_t *B, size_t *row, size_t *col)
         for (size_t j = 0; j < A->width; j++) {
             double a = MAT_AT(A, i, j);
             double b = MAT_AT(B, i, j);
-            float diff = fabs(a - b);
+            double diff = fabs(a - b);
             a = fabs(a);
             b = fabs(b);
             // Find the largest
-            float largest = (b > a) ? b : a;
+            double largest = (b > a) ? b : a;
 
             if (diff > largest * DBL_EPSILON) {
                 if (row != NULL && col != NULL) {
