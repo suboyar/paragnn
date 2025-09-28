@@ -17,7 +17,11 @@
 #define NOB_IMPLEMENTATION
 #include "nob.h"
 
-#define EPOCH 2
+#ifndef BENC_CSV_FILE
+#define BENC_CSV_FILE stdout
+#endif // BENC_CSV_FILE
+
+#define EPOCH 10
 #define LEARNING_RATE 0.1f
 
 size_t K;
@@ -130,13 +134,14 @@ int main(void)
     CONNECT_LAYER(LAST_SAGE_LAYER(k_sagelayers), linearlayer);
     CONNECT_LAYER(linearlayer, logsoftlayer);
 
-
     for (size_t epoch = 1; epoch <= EPOCH; epoch++) {
         benchmark_layers(k_sagelayers, linearlayer, logsoftlayer, train);
     }
 
     printf("Benchmark results (%zu epochs):\n", (size_t)EPOCH);
-    benchmark_print();
+    BENCH_PRINT();
+
+    BENCH_CSV(BENC_CSV_FILE);
 
     destroy_logsoft_layer(logsoftlayer);
     destroy_linear_layer(linearlayer);

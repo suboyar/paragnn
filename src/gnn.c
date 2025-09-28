@@ -59,10 +59,10 @@ void aggregate(SageLayer* const l, graph_t* const g)
         }
 
         // Aggregation with mean
-        float neigh_count_recp = (float)1/neigh_count;
+        l->mean_scale[v] = (float)1/neigh_count;
         for (size_t f = 0; f < NODE_DIM(l->agg); f++) {
             MAT_BOUNDS_CHECK(l->agg, v, f);
-            MAT_AT(l->agg, v, f) *= neigh_count_recp;
+            MAT_AT(l->agg, v, f) *= l->mean_scale[v];
         }
     }
 }
@@ -280,7 +280,7 @@ void normalize_backward(NormalizeLayer* const l)
         };
         for (size_t j = 0; j < NODE_DIM(l->input); j++) {
             for (size_t k = 0; k < NODE_DIM(l->input); k++) {
-                MAT_AT(&grad_local, j, k) = MAT_AT(l->output, i, j) * MAT_AT(l->output, i, k);
+                MAT_AT(&grad_local, j, k) = - MAT_AT(l->output, i, j) * MAT_AT(l->output, i, k);
                 if (j == k) {     // Kronecker delta
                     MAT_AT(&grad_local, j, k) = 1 + MAT_AT(&grad_local, j, k);
                 }
@@ -341,7 +341,7 @@ void sageconv_backward(SageLayer* const l, graph_t* const g)
                 sum += MAT_AT(l->grad_output, u1, j) * MAT_AT(l->Wagg, i, j);
             }
             MAT_BOUNDS_CHECK(l->grad_input, u0, i);
-            MAT_AT(l->grad_input, u0, i) += sum;
+            MAT_AT(l->grad_input, u0, i) += sum * l->mean_scale[u1];
         }
     }
 

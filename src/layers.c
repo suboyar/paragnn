@@ -46,8 +46,9 @@ SageLayer* init_sage_layer(size_t batch_size, size_t in_dim, size_t out_dim)
         .grad_input  = MAT_CREATE(batch_size, in_dim),
         .grad_output = NULL, // Set later when connecting layers
         .grad_Wagg   = MAT_CREATE(in_dim, out_dim),
-        .grad_Wroot  = MAT_CREATE(in_dim, out_dim)
+        .grad_Wroot  = MAT_CREATE(in_dim, out_dim),
     };
+    layer->mean_scale = malloc(batch_size * sizeof(*layer->mean_scale));
 
     // Initialize weights randomly
     mat_rand(layer->Wagg, -1.0, 1.0);
@@ -144,6 +145,7 @@ void destroy_sage_layer(SageLayer* l)
     mat_destroy(l->grad_input);
     mat_destroy(l->grad_Wagg);
     mat_destroy(l->grad_Wroot);
+    free(l->mean_scale);
     free(l);
 }
 

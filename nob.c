@@ -1,127 +1,314 @@
-#include <stdlib.h>
-
-#define NOB_EXPERIMENTAL_DELETE_OLD
+#define nob_cc_flags(cmd) nob_cmd_append(cmd, "-std=c17", "-D_POSIX_C_SOURCE=200809L")
+#define nob_cc_error_flags(cmd) nob_cmd_append(cmd, "-Wall", \
+                                                    "-Wextra", \
+                                                    "-Wfloat-conversion", \
+                                                    "-Werror=implicit-function-declaration", \
+                                                    "-Werror=incompatible-pointer-types")
 #define NOB_IMPLEMENTATION
+#define NOB_WARN_DEPRECATED
 #include "nob.h"
 
-#define CC "gcc"
-#define BUILD_FOLDER "./"
-#define EXECUTABLE "./main"
-#define WARNING_FLAGS "-Wall", "-Wextra", "-pedantic"
-#define RELEASE 0
+#define BUILD_FOLDER "build/"
+#define TOOLS_FOLDER "tools/"
+#define SRC_FOLDER "src/"
 
-#define SRC_FILES "./main.c", "./matrix.c"
+#define NOB_NEEDS_REBUILD(output_path, input_paths, input_paths_count) \
+    (flags.force_rebuild ? 1 : nob_needs_rebuild((output_path), (input_paths), (input_paths_count)))
 
-const char *src_to_obj(const char *src_path);
+#define NOB_NEEDS_REBUILD1(output_path, input_path) \
+    (flags.force_rebuild ? 1 : nob_needs_rebuild1((output_path), (input_path)))
 
-int main(int argc, char **argv)
+static struct {
+    bool        force_rebuild;
+    bool        build_ogb;
+    bool        release;
+    bool        compile_sbatch;
+    bool        run_sbatch;
+    const char* partition;
+    const char* out_dir;
+} flags = {
+    .force_rebuild  = false,
+    .build_ogb      = false,
+    .release        = false,
+    .compile_sbatch = false,
+    .run_sbatch     = false,
+    .partition      = NULL,
+    .out_dir        = NULL,
+};
+
+Nob_Cmd cmd = {0};
+Nob_Procs procs = {0};
+
+struct {
+    const char* name;
+    const char* arch;
+    bool testing;
+} partitions[] = {
+    {.name = "defq",     .arch = "arm",   .testing = false},
+    {.name = "genoaxq",  .arch = "amd",   .testing = false},
+    {.name = "milanq",   .arch = "amd",   .testing = false},
+    {.name = "fpgaq",    .arch = "amd",   .testing = false},
+    {.name = "xeonmaxq", .arch = "intel", .testing = false},
+    {.name = "rome16q",  .arch = "amd",   .testing = true},
+};
+
+void list_all_partitions()
 {
-    int result = EXIT_SUCCESS;
-    Nob_Cmd cmd = {0};
-    Nob_Procs procs = {0};
-    Nob_File_Paths src_files = {0};
-    Nob_File_Paths obj_files = {0};
+    // Find longest name
+    int max_len = 0;
+    for (size_t i = 0; i < NOB_ARRAY_LEN(partitions); i++) {
+        int len = (int)strlen(partitions[i].name);
+        if (len > max_len) max_len = len;
+    }
+    max_len += 2;    // Some more padding
 
-    NOB_GO_REBUILD_URSELF(argc, argv);
-    if (!nob_mkdir_if_not_exists(BUILD_FOLDER)) nob_return_defer(EXIT_FAILURE);
-
-    // Skip program name
-    nob_shift_args(&argc, &argv);
-
-    bool force_rebuild = false;
-
-    while (argc > 0) {
-        const char *arg = nob_shift_args(&argc, &argv);
-        if (strcmp(arg, "-B") == 0) {
-            force_rebuild = true;
-        } else {
-            nob_log(NOB_ERROR, "Unknown argument: %s", arg);
-            nob_return_defer(EXIT_FAILURE);
+    printf("Partitions for benchmarking:\n");
+    for (size_t i = 0; i < NOB_ARRAY_LEN(partitions); i++) {
+        if (!partitions[i].testing) {
+            printf("\t%-*s (%s)\n", max_len, partitions[i].name, partitions[i].arch);
         }
     }
 
-    nob_da_append_many(&src_files, ((const char*[]){SRC_FILES}), 2);
-
-    for (size_t i = 0; i < src_files.count; ++i) {
-        nob_da_append(&obj_files, src_to_obj(src_files.items[i]));
-    }
-
-    // Compile object files
-    for (size_t i = 0; i < src_files.count; ++i) {
-        const char *src = src_files.items[i];
-        const char *obj = obj_files.items[i];
-
-        if (!force_rebuild) {
-            int rebuild_needed = nob_needs_rebuild1(obj, src);
-            if (rebuild_needed < 0) nob_return_defer(EXIT_FAILURE);
-            if (rebuild_needed == 0) continue;
-        }
-
-        // Build compile command
-        nob_cmd_append(&cmd, CC);
-        nob_cmd_append(&cmd, WARNING_FLAGS);
-#if RELEASE
-        nob_cmd_append(&cmd, "-O3");
-        nob_cmd_append(&cmd, "-DNDEBUG");
-#else
-        nob_cmd_append(&cmd, "-O0");
-        nob_cmd_append(&cmd, "-ggdb");
-        nob_cmd_append(&cmd, "-pg");
-        nob_cmd_append(&cmd, "-DENABLE_NODE_LIMIT");
-#endif
-        nob_cmd_append(&cmd, "-c", src, "-o", obj);
-
-        // Start compilation in background
-        Nob_Proc proc = nob_cmd_run_async_and_reset(&cmd);
-        if (proc == NOB_INVALID_PROC) nob_return_defer(EXIT_FAILURE);
-        nob_da_append(&procs, proc);
-    }
-
-    // Wait for all compilations to finish
-    if (!nob_procs_wait_and_reset(&procs)) nob_return_defer(EXIT_FAILURE);
-
-
-    // Link object files to executable
-    if (!force_rebuild) {
-        int link_needed = nob_needs_rebuild(EXECUTABLE, obj_files.items, obj_files.count);
-        if (link_needed < 0) nob_return_defer(EXIT_FAILURE);
-        if (link_needed == 0) {
-            nob_log(NOB_INFO, "%s is up to date", EXECUTABLE);
-            nob_return_defer(EXIT_SUCCESS);
+    printf("Partitions for testing:\n");
+    for (size_t i = 0; i < NOB_ARRAY_LEN(partitions); i++) {
+        if (partitions[i].testing) {
+            printf("\t%-*s (%s)\n", max_len, partitions[i].name, partitions[i].arch);
         }
     }
-    nob_cmd_append(&cmd, CC);
-    // Add object files
-    for (size_t i = 0; i < obj_files.count; ++i) {
-        nob_cmd_append(&cmd, obj_files.items[i]);
-    }
-    nob_cmd_append(&cmd,
-                   "-fopenmp",
-                   "-o", EXECUTABLE,
-                   "-lm", "-lz");
 
-    if (!nob_cmd_run_sync_and_reset(&cmd)) return 1;
-    nob_log(NOB_INFO, "%s was compiled in %s mode\n",
-            EXECUTABLE, RELEASE ? "release" : "debug");
-
-defer:
-     nob_cmd_free(cmd);
-     nob_da_free(src_files);
-     nob_da_free(obj_files);
-     nob_da_free(procs);
-     return result;
+    printf("\nExample usage: ./nob --sbatch rome16q\n");
 }
 
-const char *src_to_obj(const char *src_path)
+bool partition_is_valid(const char* partition)
 {
-    Nob_String_Builder sb = {0};
-    nob_sb_append_cstr(&sb, src_path);
-    // Replace .c with .o
-    if (sb.count >= 2 && sb.items[sb.count-2] == '.' && sb.items[sb.count-1] == 'c') {
-        sb.items[sb.count-1] = 'o';
+    for (size_t i = 0; i < NOB_ARRAY_LEN(partitions); i++) {
+        if (strcmp(partitions[i].name, partition) == 0) return true;
     }
-    nob_sb_append_null(&sb);
-    const char *result = nob_temp_strdup(sb.items);
-    nob_sb_free(sb);
-    return result;
+
+    return false;
+}
+
+int build_paragnn(const char* exec, const char* out_dir)
+{
+    const char* exec_path = nob_temp_sprintf("%s%s", out_dir, exec);
+    struct {
+        const char* obj_path;
+        const char* src_path;
+    } targets[] = {
+        {.obj_path = (const char*)(nob_temp_sprintf("%s%s", out_dir, "benchmark.o")), .src_path = SRC_FOLDER"benchmark.c"},
+        {.obj_path = (const char*)(nob_temp_sprintf("%s%s", out_dir, "gnn.o")),       .src_path = SRC_FOLDER"gnn.c"},
+        {.obj_path = (const char*)(nob_temp_sprintf("%s%s", out_dir, "graph.o")),     .src_path = SRC_FOLDER"graph.c"},
+        {.obj_path = (const char*)(nob_temp_sprintf("%s%s", out_dir, "layers.o")),    .src_path = SRC_FOLDER"layers.c"},
+        {.obj_path = (const char*)(nob_temp_sprintf("%s%s", out_dir, "main.o")),      .src_path = SRC_FOLDER"main.c"},
+        {.obj_path = (const char*)(nob_temp_sprintf("%s%s", out_dir, "matrix.o")),    .src_path = SRC_FOLDER"matrix.c"},
+    };
+
+    // Compile src files
+    for (size_t i = 0; i < NOB_ARRAY_LEN(targets); ++i) {
+        if (NOB_NEEDS_REBUILD1(targets[i].obj_path, targets[i].src_path) > 0) {
+            nob_cc(&cmd);
+            nob_cc_flags(&cmd);
+            nob_cc_error_flags(&cmd);
+            nob_cmd_append(&cmd, "-I.");
+            if (flags.release) {
+                nob_cmd_append(&cmd, "-O3", "-march=native", "-DNDEBUG");
+                nob_cmd_append(&cmd, "-DUSE_OGB_ARXIV");
+            } else {
+                nob_cmd_append(&cmd, "-O0", "-ggdb", "-g3", "-gdwarf-2");
+            }
+            nob_cc_output(&cmd, targets[i].obj_path);
+            nob_cmd_append(&cmd, "-c", targets[i].src_path);
+            if (!nob_cmd_run(&cmd, .async = &procs)) return 1;
+        }
+    }
+
+    if (!nob_procs_flush(&procs)) return 1;
+
+    // Link object files
+    const char* obj_paths[NOB_ARRAY_LEN(targets)];
+    for (size_t i = 0; i < NOB_ARRAY_LEN(targets); ++i) {
+        obj_paths[i] = targets[i].obj_path;
+    }
+
+    if (NOB_NEEDS_REBUILD(exec_path, obj_paths, NOB_ARRAY_LEN(targets)) > 0) {
+        nob_cc(&cmd);
+        nob_cc_flags(&cmd);
+        nob_cc_error_flags(&cmd);
+        if (flags.release) {
+            nob_cmd_append(&cmd, "-O3", "-march=native");
+        } else {
+            nob_cmd_append(&cmd, "-O0", "-ggdb", "-g3", "-gdwarf-2");
+        }
+        nob_cmd_append(&cmd, "-fopenmp");
+        nob_cc_output(&cmd, exec_path);
+        for (size_t i = 0; i < NOB_ARRAY_LEN(targets); ++i) {
+            nob_cc_inputs(&cmd, targets[i].obj_path);
+        }
+        nob_cmd_append(&cmd, "-lm");
+        if (!nob_cmd_run(&cmd)) return 1;
+    }
+
+    return 0;
+}
+
+
+int build_ogb(const char* exec, const char* out_dir){
+    const char* exec_path = nob_temp_sprintf("%s%s", out_dir, exec);
+    const char* obj_path = nob_temp_sprintf("%s%s", out_dir, "ogb.o");
+    const char* src_path = TOOLS_FOLDER"ogb.c";
+
+    // Compile src files
+    if (NOB_NEEDS_REBUILD1(obj_path, src_path) > 0) {
+        nob_cc(&cmd);
+        nob_cc_flags(&cmd);
+        nob_cc_error_flags(&cmd);
+        nob_cmd_append(&cmd, "-I.");
+        nob_cmd_append(&cmd, "-I"SRC_FOLDER);
+        nob_cc_output(&cmd, obj_path);
+        nob_cmd_append(&cmd, "-c", src_path);
+        if (!nob_cmd_run(&cmd)) return 1;
+    }
+
+    // Link object files
+    if (NOB_NEEDS_REBUILD1(exec, obj_path) > 0) {
+        nob_cc(&cmd);
+        nob_cc_flags(&cmd);
+        nob_cc_error_flags(&cmd);
+        nob_cmd_append(&cmd, "-O3");
+        nob_cc_output(&cmd, exec_path);
+        nob_cc_inputs(&cmd, obj_path);
+        nob_cmd_append(&cmd, "-lz");
+        if (!nob_cmd_run(&cmd)) return 1;
+    }
+
+    return 0;
+}
+
+int clean()
+{
+    nob_delete_file(BUILD_FOLDER);
+    nob_delete_file(TOOLS_FOLDER"ogb");
+    nob_delete_file(TOOLS_FOLDER"ogb.o");
+    return 0;
+}
+
+int sbatch(const char* partition)
+{
+    nob_cmd_append(&cmd, "sbatch");
+    nob_cmd_append(&cmd, "-p", partition);
+    if (flags.run_sbatch) nob_cmd_append(&cmd, "run.sbatch");
+    else nob_cmd_append(&cmd, "compile.sbatch");
+
+    if (!nob_cmd_run(&cmd)) return 1;
+
+    return 0;
+}
+
+int main(int argc, char** argv)
+{
+    NOB_GO_REBUILD_URSELF(argc, argv);
+
+    // Parse flags
+    nob_shift(argv, argc);      // jump over executable name in argv[0]
+    while (argc) {
+        const char* arg = nob_shift(argv, argc);
+        if (strcmp(arg, "--clean") == 0) {
+            return clean();
+        } else if (strcmp(arg, "--compile-sbatch") == 0) {
+            if (argc == 0) {
+                list_all_partitions();
+                fprintf(stderr, "Error: --compile-sbatch requires an argument, it should be one of: [list,all,partition name...]\n");
+                return 1;
+            }
+
+            if (flags.run_sbatch) {
+                fprintf(stderr, "Error: --compile-sbatch can not be called together with --run-sbatch\n");
+                return 1;
+            }
+            flags.compile_sbatch = true;
+            flags.partition = nob_shift(argv, argc);
+            if (strcmp(flags.partition, "list") == 0) {
+                list_all_partitions();
+                return 0;
+            } else if (strcmp(flags.partition, "all") != 0 && !partition_is_valid(flags.partition)) {
+                list_all_partitions();
+                fprintf(stderr,
+                        "Error: --compile-sbatch received invalid argument '%s', it should be one of: [list,all,partition name...]\n",
+                        flags.partition);
+                return 1;
+            }
+        } else if (strcmp(arg, "--run-sbatch") == 0) {
+            if (argc == 0) {
+                list_all_partitions();
+                fprintf(stderr, "Error: --run-sbatch requires an argument, it should be one of: [list,all,partition name...]\n");
+                return 1;
+            }
+
+            if (flags.compile_sbatch) {
+                fprintf(stderr, "Error: --compile-run can not be called together with --compile-sbatch\n");
+                return 1;
+            }
+            flags.run_sbatch = true;
+            flags.partition = nob_shift(argv, argc);
+            if (strcmp(flags.partition, "list") == 0) {
+                list_all_partitions();
+                return 0;
+            } else if (strcmp(flags.partition, "all") != 0 && !partition_is_valid(flags.partition)) {
+                list_all_partitions();
+                fprintf(stderr,
+                        "Error: --run-sbatch received invalid argument '%s', it should be one of: [list,all,partition name...]\n",
+                        flags.partition);
+                return 1;
+            }
+        } else if (strcmp(arg, "--out-dir") == 0) {
+            if (argc == 0) {
+                fprintf(stderr, "Error: --out-dir requires an argument\n");
+                return 1;
+            }
+
+            flags.out_dir = nob_shift(argv, argc);
+        }
+
+        else if (strcmp(arg, "--rebuild") == 0) {
+            flags.force_rebuild = true;
+        } else if (strcmp(arg, "--ogb") == 0) {
+            flags.build_ogb = true;
+        } else if (strcmp(arg, "--release") == 0) {
+            flags.release = true;
+        } else {
+            fprintf(stderr, "Got invalid arg: %s\n", arg);
+            abort();
+        }
+    }
+
+    if (flags.build_ogb) {
+        char* out_dir = TOOLS_FOLDER;
+        char* exec_path = "ogb";
+        return build_ogb(exec_path, out_dir);
+    }
+
+    else if (flags.compile_sbatch || flags.run_sbatch) {
+        if (strcmp(flags.partition, "all") == 0) {
+            for (size_t i = 0; i < NOB_ARRAY_LEN(partitions); i++) {
+                if (sbatch(partitions[i].name)) return 1;
+            }
+            return 0;
+        }
+        else return sbatch(flags.partition);
+    }
+    else {
+        char* out_dir = BUILD_FOLDER;
+        char* exec = "paragnn";
+
+        if (flags.out_dir != NULL) {
+            out_dir = nob_temp_sprintf("%s%s/", out_dir, flags.out_dir);;
+        }
+        printf("out_dir: %s\n", out_dir);
+
+        if (!nob_mkdir_if_not_exists(out_dir)) return 1;
+
+        return build_paragnn(exec, out_dir);
+    }
+
+    return 0;
 }

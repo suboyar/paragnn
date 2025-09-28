@@ -33,8 +33,9 @@ typedef struct {
     matrix_t *grad_output;      // Gradients w.r.t. this layer's output (from downstream)
     matrix_t *grad_input;       // Gradients w.r.t. this layer's input (to upstream)
     matrix_t *grad_Wagg, *grad_Wroot;
-    size_t sample_size;
-    size_t agg_size;
+    float    *mean_scale;       // Scaling factors for mean aggregation (1/neighbor_count)
+    size_t    sample_size;
+    size_t    agg_size;
 } SageLayer;
 
 typedef struct {
