@@ -5,8 +5,6 @@
 #include <stdint.h>
 #include <time.h>
 
-#include <zlib.h>
-
 #include "core.h"
 #include "benchmark.h"
 #include "matrix.h"
@@ -21,17 +19,46 @@
 #define BENC_CSV_FILE stdout
 #endif // BENC_CSV_FILE
 
-#define EPOCH 10
-#define LEARNING_RATE 0.1f
+#ifndef EPOCH
+#define EPOCH 10               // Goal is to have 500 epochs
+#endif
 
-size_t K;
-size_t sample_size;
+#ifndef LEARNING_RATE
+#define LEARNING_RATE 0.01f
+#endif
 
-void reset_grad(matrix_t *grad)
+#ifndef NUM_LAYERS
+#define NUM_LAYERS 3
+#endif
+
+#ifndef HIDDEN_DIM
+#    ifdef USE_PREDICTION_HEAD
+#        define HIDDEN_DIM 256
+#    else
+#        define HIDDEN_DIM 5
+#    endif // USE_PREDICTION_HEAD
+#endif // HIDDEN_DIM
+
+// #define USE_PREDICTION_HEAD
+
+void print_config()
 {
-    memset(grad->data, 0, grad->capacity);
+    printf("==============================CONFIG============================\n");
+    printf("Epoch: %zu\n", (size_t)EPOCH);
+    printf("Learning rate: %f\n", (float)LEARNING_RATE);
+    printf("Layers: %zu\n", (size_t)NUM_LAYERS);
+#ifndef USE_OGB_ARXIV
+    printf("Graph Dataset: dev\n");
+#else
+    printf("Graph Dataset: ogb-arxiv\n");
+#endif
+#ifndef USE_PREDICTION_HEAD
+    printf("Prediction Head: Disabled\n");
+#else
+    printf("Prediction Head: Enabled\n");
+#endif
+    printf("================================================================\n\n");
 }
-
 
 // TODO: Check out getrusage from <sys/resource.h>
 void print_memory_usage()
@@ -50,106 +77,97 @@ void print_memory_usage()
     }
 }
 
-void benchmark_layers(K_SageLayers *k_sagelayers, LinearLayer *linearlayer, LogSoftLayer *logsoftlayer, graph_t *g)
+void inference(SageNet *sage_net, LinearLayer *linearlayer, LogSoftLayer *logsoftlayer, graph_t *g)
 {
-    for (size_t k = 0; k < k_sagelayers->k_layers; k++) {
-        BENCH_START("sagelayer");
-        sageconv(k_sagelayers->sagelayer[k], g);
-        BENCH_STOP("sagelayer");
-
-        BENCH_START("relu");
-        relu(k_sagelayers->relulayer[k]);
-        BENCH_STOP("relu");
-
-        BENCH_START("normalize");
-        normalize(k_sagelayers->normalizelayer[k]);
-        BENCH_STOP("normalize");
+    for (size_t i = 0; i < sage_net->num_layers; i++) {
+        sageconv(sage_net->sagelayer[i], g);
+        relu(sage_net->relulayer[i]);
+        normalize(sage_net->normalizelayer[i]);
     }
 
-    BENCH_START("linear");
+#ifdef USE_PREDICTION_HEAD
     linear(linearlayer);
-    BENCH_STOP("linear");
+#else
+    (void) linearlayer;
+#endif
 
-    BENCH_START("logsoft");
     logsoft(logsoftlayer);
-    BENCH_STOP("logsoft");
+}
 
-    BENCH_START("nll_loss");
-    double loss = nll_loss(logsoftlayer->output, g->y) / BATCH_DIM(g->y);
-    BENCH_STOP("nll_loss");
-    printf("[epoch %zu] loss: %f\n", (size_t)EPOCH, loss);
-
-    BENCH_START("cross_entropy_backward");
+void train(SageNet *sage_net, LinearLayer *linearlayer, LogSoftLayer *logsoftlayer, graph_t *g)
+{
     cross_entropy_backward(logsoftlayer, g->y);
-    BENCH_STOP("cross_entropy_backward");
 
-    BENCH_START("linear_backward");
+#ifdef USE_PREDICTION_HEAD
     linear_backward(linearlayer);
-    BENCH_STOP("linear_backward");
+#else
+    (void) linearlayer;
+#endif
 
-    for (size_t k = k_sagelayers->k_layers-1; k < k_sagelayers->k_layers; k--) {
-        BENCH_START("normalize_backward");
-        normalize_backward(k_sagelayers->normalizelayer[k]);
-        BENCH_STOP("normalize_backward");
-
-        BENCH_START("relu_backward");
-        relu_backward(k_sagelayers->relulayer[k]);
-        BENCH_STOP("relu_backward");
-
-        BENCH_START("sageconv_backward");
-        sageconv_backward(k_sagelayers->sagelayer[k], g);
-        BENCH_STOP("sageconv_backward");
+    for (size_t i = sage_net->num_layers-1; i < sage_net->num_layers; i--) {
+        normalize_backward(sage_net->normalizelayer[i]);
+        relu_backward(sage_net->relulayer[i]);
+        sageconv_backward(sage_net->sagelayer[i], g);
     }
 
-    BENCH_START("update_linear_weights");
+#ifdef USE_PREDICTION_HEAD
     update_linear_weights(linearlayer, LEARNING_RATE);
-    BENCH_STOP("update_linear_weights");
+#endif
 
-    for (size_t k = k_sagelayers->k_layers-1; k < k_sagelayers->k_layers; k--) {
-        BENCH_START("update_sageconv_weights");
-        update_sageconv_weights(k_sagelayers->sagelayer[k], LEARNING_RATE);
-        BENCH_STOP("update_sageconv_weights");
+    for (size_t i = sage_net->num_layers-1; i < sage_net->num_layers; i--) {
+        update_sageconv_weights(sage_net->sagelayer[i], LEARNING_RATE);
+
     }
 }
+
 
 int main(void)
 {
     srand(0);
     nob_minimal_log_level = NOB_WARNING;
 
-    // graph_t *g = load_graph();
-    graph_t *train, *valid, *test;
-    load_split_graph(&train, &valid, &test);
+    print_config();
 
-    size_t hidden_dim = 256;
+    // graph_t *train_graph = load_graph();
+    graph_t *train_graph, *valid_graph, *test_graph;
+    load_split_graph(&train_graph, &valid_graph, &test_graph);
 
-    size_t batch_size   = train->num_nodes;
-    size_t num_classes  = train->num_label_classes;
+    size_t batch_size   = train_graph->num_nodes;
+    size_t num_classes  = train_graph->num_label_classes;
 
-    K_SageLayers *k_sagelayers = init_k_sage_layers(1, hidden_dim, train);
-    LinearLayer *linearlayer = init_linear_layer(batch_size, hidden_dim, num_classes);
+#ifdef USE_PREDICTION_HEAD
+    SageNet *sage_net = init_sage_net(NUM_LAYERS, HIDDEN_DIM, HIDDEN_DIM, train_graph);
+    LinearLayer *linearlayer = init_linear_layer(batch_size, HIDDEN_DIM, num_classes);
     LogSoftLayer *logsoftlayer = init_logsoft_layer(batch_size, num_classes);
 
-    CONNECT_SAGE_LAYERS(k_sagelayers);
-    CONNECT_LAYER(LAST_SAGE_LAYER(k_sagelayers), linearlayer);
+    CONNECT_SAGE_NET(sage_net);
+    CONNECT_LAYER(SAGE_NET_OUTPUT(sage_net), linearlayer);
     CONNECT_LAYER(linearlayer, logsoftlayer);
+#else
+    SageNet *sage_net = init_sage_net(NUM_LAYERS, HIDDEN_DIM, num_classes, train_graph);
+    LinearLayer *linearlayer = NULL;
+    LogSoftLayer *logsoftlayer = init_logsoft_layer(batch_size, num_classes);
+
+    CONNECT_SAGE_NET(sage_net);
+    CONNECT_LAYER(SAGE_NET_OUTPUT(sage_net), logsoftlayer);
+#endif // USE_PREDICTION_HEAD
 
     for (size_t epoch = 1; epoch <= EPOCH; epoch++) {
-        benchmark_layers(k_sagelayers, linearlayer, logsoftlayer, train);
+        inference(sage_net, linearlayer, logsoftlayer, train_graph);
+
+        double loss = nll_loss(logsoftlayer->output, train_graph->y) / BATCH_DIM(train_graph->y);
+        printf("[epoch %zu] loss: %f\n", epoch, loss);
+
+        train(sage_net, linearlayer, logsoftlayer, train_graph);
     }
 
-    printf("Benchmark results (%zu epochs):\n", (size_t)EPOCH);
-    BENCH_PRINT();
-
-    BENCH_CSV(BENC_CSV_FILE);
-
-    destroy_logsoft_layer(logsoftlayer);
+    destroy_sage_net(sage_net);
+#ifdef USE_PREDICTION_HEAD
     destroy_linear_layer(linearlayer);
-    destroy_k_sage_layers(k_sagelayers);
-
-    destroy_graph(train);
-    destroy_graph(valid);
-    destroy_graph(test);
+#endif
+    destroy_graph(train_graph);
+    destroy_graph(valid_graph);
+    destroy_graph(test_graph);
 
     return 0;
 }

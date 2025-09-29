@@ -40,7 +40,7 @@ static graph_t* init_graph(size_t num_nodes, size_t num_edges, size_t num_featur
 
 graph_t* load_graph()
 {
-    printf("Loading TEST graph from - %zu nodes", (size_t)NUM_NODES);
+    printf("Loading TEST graph from - %zu nodes\n", (size_t)NUM_NODES);
 
     graph_t* g = init_graph(NUM_NODES, NUM_EDGES, NUM_FEATURES, NUM_LABELS);
 

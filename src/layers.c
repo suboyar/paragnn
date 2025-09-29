@@ -7,30 +7,39 @@
 
 // Init helpers
 
-K_SageLayers* init_k_sage_layers(size_t k_layers, size_t hidden_dim, graph_t *g)
+SageNet* init_sage_net(size_t k_layers, size_t hidden_dim, size_t output_dim, graph_t *g)
 {
-    K_SageLayers *layer = malloc(sizeof(*layer));
-    layer->k_layers = k_layers;
-    layer->sagelayer      = malloc(k_layers * sizeof(*layer->sagelayer));
-    layer->relulayer      = malloc(k_layers * sizeof(*layer->relulayer));
-    layer->normalizelayer = malloc(k_layers * sizeof(*layer->normalizelayer));
+    SageNet *net = malloc(sizeof(*net));
+    net->num_layers = k_layers;
+    net->sagelayer      = malloc(k_layers * sizeof(*net->sagelayer));
+    net->relulayer      = malloc(k_layers * sizeof(*net->relulayer));
+    net->normalizelayer = malloc(k_layers * sizeof(*net->normalizelayer));
 
     size_t batch_size = g->num_nodes;
     size_t num_features = g->num_node_features;
 
-    layer->sagelayer[0] = init_sage_layer(batch_size, num_features, hidden_dim);
-    layer->relulayer[0] = init_relu_layer(batch_size, hidden_dim);
-    layer->normalizelayer[0] = init_l2norm_layer(batch_size, hidden_dim);
+    // First layer: num_features -> hidden_dim
+    net->sagelayer[0] = init_sage_layer(batch_size, num_features, hidden_dim);
+    net->relulayer[0] = init_relu_layer(batch_size, hidden_dim);
+    net->normalizelayer[0] = init_l2norm_layer(batch_size, hidden_dim);
 
-    for (size_t k = 1; k < k_layers; k++) {
-        layer->sagelayer[k] = init_sage_layer(batch_size, hidden_dim, hidden_dim);
-        layer->relulayer[k] = init_relu_layer(batch_size, hidden_dim);
-        layer->normalizelayer[k] = init_l2norm_layer(batch_size, hidden_dim);
+    // Middle layers: hidden_dim -> hidden_dim
+    for (size_t k = 1; k < k_layers - 1; k++) {
+        net->sagelayer[k] = init_sage_layer(batch_size, hidden_dim, hidden_dim);
+        net->relulayer[k] = init_relu_layer(batch_size, hidden_dim);
+        net->normalizelayer[k] = init_l2norm_layer(batch_size, hidden_dim);
     }
 
-    layer->sagelayer[0]->input = g->x;
+    // Last layer: hidden_dim -> output_dim
+    if (k_layers > 1) {
+        net->sagelayer[k_layers - 1] = init_sage_layer(batch_size, hidden_dim, output_dim);
+        net->relulayer[k_layers - 1] = init_relu_layer(batch_size, output_dim);
+        net->normalizelayer[k_layers - 1] = init_l2norm_layer(batch_size, output_dim);
+    }
 
-    return layer;
+    net->sagelayer[0]->input = g->x;
+
+    return net;
 }
 
 SageLayer* init_sage_layer(size_t batch_size, size_t in_dim, size_t out_dim)
@@ -123,17 +132,17 @@ LogSoftLayer* init_logsoft_layer(size_t batch_size, size_t dim)
 }
 
 // We don't free matrices that are references from other layers, i.e input and grad_output
-void destroy_k_sage_layers(K_SageLayers *l)
+void destroy_sage_net(SageNet *n)
 {
-    for (size_t k = 0; k < l->k_layers; k++) {
-        destroy_l2norm_layer(l->normalizelayer[k]);
-        destroy_relu_layer(l->relulayer[k]);
-        destroy_sage_layer(l->sagelayer[k]);
+    for (size_t i = 0; i < n->num_layers; i++) {
+        destroy_l2norm_layer(n->normalizelayer[i]);
+        destroy_relu_layer(n->relulayer[i]);
+        destroy_sage_layer(n->sagelayer[i]);
     }
-    free(l->relulayer);
-    free(l->normalizelayer);
-    free(l->sagelayer);
-    free(l);
+    free(n->relulayer);
+    free(n->normalizelayer);
+    free(n->sagelayer);
+    free(n);
 }
 
 void destroy_sage_layer(SageLayer* l)
@@ -243,12 +252,12 @@ void normalize_layer_info(const NormalizeLayer* const l)
     printf("========================================\n");
 }
 
-void k_sage_layers_info(const K_SageLayers* const l)
+void sage_net_layers_info(const SageNet* const n)
 {
-    for (size_t k = 0; k < l->k_layers; k++) {
-        sage_layer_info(l->sagelayer[k]);
-        relu_layer_info(l->relulayer[k]);
-        normalize_layer_info(l->normalizelayer[k]);
+    for (size_t i = 0; i < n->num_layers; i++) {
+        sage_layer_info(n->sagelayer[i]);
+        relu_layer_info(n->relulayer[i]);
+        normalize_layer_info(n->normalizelayer[i]);
     }
 }
 

@@ -184,7 +184,6 @@ void dot_agg(matrix_t *A, matrix_t *B, matrix_t *C)
     }
 }
 
-
 void dot_ex(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt)
 {
     // Calculate effective dimensions after potential transposition

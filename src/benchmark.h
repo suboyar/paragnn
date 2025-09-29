@@ -22,8 +22,8 @@ typedef struct {
     size_t capacity;
 } HashTable;
 
-// 256 contexts should be enough (famous last words)
-#define HASHTABLE_SIZE 256
+// 1024 contexts should be enough (famous last words)
+#define HASHTABLE_SIZE 1024
 static TimeEntry __benchmark_entries[HASHTABLE_SIZE];
 static HashTable __benchmark_ht = {
     .entries = __benchmark_entries,

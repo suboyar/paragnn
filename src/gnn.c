@@ -348,7 +348,6 @@ void sageconv_backward(SageLayer* const l, graph_t* const g)
     nob_log(NOB_INFO, "sageconv_backward: ok");
 }
 
-
 void update_linear_weights(LinearLayer* const l, float lr)
 {
     MAT_ASSERT(l->W, l->grad_W);
