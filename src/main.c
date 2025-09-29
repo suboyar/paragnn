@@ -32,11 +32,11 @@
 #endif
 
 #ifndef HIDDEN_DIM
-#    ifdef USE_PREDICTION_HEAD
+#    ifdef USE_OGB_ARXIV
 #        define HIDDEN_DIM 256
 #    else
 #        define HIDDEN_DIM 5
-#    endif // USE_PREDICTION_HEAD
+#    endif // USE_OGB_ARXIV
 #endif // HIDDEN_DIM
 
 // #define USE_PREDICTION_HEAD
@@ -47,6 +47,7 @@ void print_config()
     printf("Epoch: %zu\n", (size_t)EPOCH);
     printf("Learning rate: %f\n", (float)LEARNING_RATE);
     printf("Layers: %zu\n", (size_t)NUM_LAYERS);
+    printf("Hidden dim: %zu\n", (size_t)HIDDEN_DIM);
 #ifndef USE_OGB_ARXIV
     printf("Graph Dataset: dev\n");
 #else
@@ -120,7 +121,6 @@ void train(SageNet *sage_net, LinearLayer *linearlayer, LogSoftLayer *logsoftlay
 
     }
 }
-
 
 int main(void)
 {
