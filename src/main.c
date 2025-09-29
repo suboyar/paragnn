@@ -6,7 +6,7 @@
 #include <time.h>
 
 #include "core.h"
-#include "benchmark.h"
+#include "perf.h"
 #include "matrix.h"
 #include "layers.h"
 #include "gnn.h"
@@ -57,6 +57,7 @@ void print_config()
 #else
     printf("Prediction Head: Enabled\n");
 #endif
+    printf("Slurm Partition: %s\n", getenv("SLURM_JOB_PARTITION"));
     printf("================================================================\n\n");
 }
 
@@ -152,14 +153,20 @@ int main(void)
     CONNECT_LAYER(SAGE_NET_OUTPUT(sage_net), logsoftlayer);
 #endif // USE_PREDICTION_HEAD
 
+
     for (size_t epoch = 1; epoch <= EPOCH; epoch++) {
-        inference(sage_net, linearlayer, logsoftlayer, train_graph);
 
-        double loss = nll_loss(logsoftlayer->output, train_graph->y) / BATCH_DIM(train_graph->y);
-        printf("[epoch %zu] loss: %f\n", epoch, loss);
+        BENCH_CALL("inference", inference, sage_net, linearlayer, logsoftlayer, train_graph);
 
-        train(sage_net, linearlayer, logsoftlayer, train_graph);
+        double loss = BENCH_EXPR("nll_loss", nll_loss(logsoftlayer->output, train_graph->y) / BATCH_DIM(train_graph->y));
+        double acc = BENCH_EXPR("accuracy", accuracy(logsoftlayer->output, train_graph->y));
+        // double loss = nll_loss(logsoftlayer->output, train_graph->y) / BATCH_DIM(train_graph->y);
+        printf("[epoch %zu] loss: %f, accuracy: %f\n", epoch, loss, acc);
+
+        BENCH_CALL("train", train, sage_net, linearlayer, logsoftlayer, train_graph);
     }
+
+    BENCH_PRINT();
 
     destroy_sage_net(sage_net);
 #ifdef USE_PREDICTION_HEAD

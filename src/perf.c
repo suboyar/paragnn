@@ -7,10 +7,17 @@
 #include <string.h>
 
 #include "core.h"
-#include "benchmark.h"
+#include "perf.h"
 
 #define FNV_OFFSET 14695981039346656037UL
 #define FNV_PRIME 1099511628211UL
+
+TimeEntry __benchmark_entries[HASHTABLE_SIZE];
+HashTable __benchmark_ht = {
+    .entries = __benchmark_entries,
+    .count = 0,
+    .capacity = HASHTABLE_SIZE,
+};
 
 // This uses FNV-1a hashing algorithm
 static inline uint64_t hash_key(const char* key)

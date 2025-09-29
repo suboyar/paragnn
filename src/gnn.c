@@ -187,7 +187,7 @@ void logsoft(LogSoftLayer* const l)
 
 double nll_loss(matrix_t* const yhat, matrix_t* const y)
 {
-    //TODO: shape assert
+    // TODO: shape assert
     double sum = 0.0;
 	for (size_t i = 0; i < BATCH_DIM(yhat); i++) {
         size_t j;
@@ -205,6 +205,43 @@ double nll_loss(matrix_t* const yhat, matrix_t* const y)
     }
 
     return sum;
+}
+
+double accuracy(matrix_t* const yhat, matrix_t* const y)
+{
+    // TODO: shape assert
+    double acc = 0.0;
+	for (size_t i = 0; i < BATCH_DIM(yhat); i++) {
+        // Find prediction
+        size_t pred_class = 0;
+        double best_pred = MAT_AT(yhat, i, 0);
+	    for (size_t j = 1; j < NODE_DIM(yhat); j++) {
+            MAT_BOUNDS_CHECK(yhat, i, j);
+            double pred = MAT_AT(yhat, i, j);
+            if (best_pred < pred) {
+                best_pred = pred;
+                pred_class = j;
+            }
+        }
+
+
+        // Find the true class
+        size_t true_class = 0;
+        for (size_t j = 1; j < NODE_DIM(y); j++) {
+            MAT_BOUNDS_CHECK(y, i, j);
+            if (MAT_AT(y, i, j) == 1.0) {
+                true_class = j;
+                break;
+            }
+        }
+
+        // Check if prediction matches true label
+        if (pred_class == true_class) {
+            acc += 1.0;
+        }
+    }
+
+    return acc/BATCH_DIM(y);
 }
 
 // Computes gradient flow from both NLLLoss and LogSoftmax.

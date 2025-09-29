@@ -95,12 +95,12 @@ int build_paragnn(const char* exec, const char* out_dir)
         const char* obj_path;
         const char* src_path;
     } targets[] = {
-        {.obj_path = (const char*)(nob_temp_sprintf("%s%s", out_dir, "benchmark.o")), .src_path = SRC_FOLDER"benchmark.c"},
         {.obj_path = (const char*)(nob_temp_sprintf("%s%s", out_dir, "gnn.o")),       .src_path = SRC_FOLDER"gnn.c"},
         {.obj_path = (const char*)(nob_temp_sprintf("%s%s", out_dir, "graph.o")),     .src_path = SRC_FOLDER"graph.c"},
         {.obj_path = (const char*)(nob_temp_sprintf("%s%s", out_dir, "layers.o")),    .src_path = SRC_FOLDER"layers.c"},
         {.obj_path = (const char*)(nob_temp_sprintf("%s%s", out_dir, "main.o")),      .src_path = SRC_FOLDER"main.c"},
         {.obj_path = (const char*)(nob_temp_sprintf("%s%s", out_dir, "matrix.o")),    .src_path = SRC_FOLDER"matrix.c"},
+        {.obj_path = (const char*)(nob_temp_sprintf("%s%s", out_dir, "perf.o")), .src_path = SRC_FOLDER"perf.c"},
     };
 
     // Compile src files
