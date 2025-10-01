@@ -32,6 +32,12 @@ void mat_destroy(matrix_t *mat)
     free(mat);
 }
 
+void mat_zero(matrix_t *matrix)
+{
+    if (!matrix || !matrix->data) return;
+    memset(matrix->data, 0, matrix->capacity * sizeof(*matrix->data));
+}
+
 double mat_get(const matrix_t *m, size_t i, size_t j)
 {
     assert(m != NULL && m->data != NULL);

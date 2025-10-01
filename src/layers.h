@@ -94,6 +94,18 @@ void destroy_l2norm_layer(NormalizeLayer* l);
 void destroy_linear_layer(LinearLayer *l);
 void destroy_logsoft_layer(LogSoftLayer *l);
 
+// Update weights
+void linear_layer_update_weights(LinearLayer* const l, float lr);
+void sage_layer_update_weights(SageLayer* const l, float lr);
+
+// Reset gradient
+void sage_layer_zero_gradients(SageLayer* l);
+void relu_layer_zero_gradients(ReluLayer* l);
+void normalize_layer_zero_gradients(NormalizeLayer* l);
+void linear_layer_zero_gradients(LinearLayer* l);
+void logsoft_layer_zero_gradients(LogSoftLayer* l);
+void sage_net_zero_gradients(SageNet* net);
+
 // Inspect helpers
 void sage_layer_info(const SageLayer* const l);
 void relu_layer_info(const ReluLayer* const l);

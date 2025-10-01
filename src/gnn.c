@@ -17,9 +17,10 @@
 void aggregate(SageLayer* const l, graph_t* const g)
 {
     size_t adj[SAMPLE_SIZE] = {0};
-    size_t neigh_count = 0;
 
     for (size_t v = 0; v < BATCH_DIM(l->input); v++) {
+        size_t neigh_count = 0;
+
         // NOTE: Collects neighbors from only incoming direction.
 
         // Find neighbors of count sample size
@@ -35,8 +36,11 @@ void aggregate(SageLayer* const l, graph_t* const g)
         }
 
         if (neigh_count == 0) {
-            mat_fill(l->agg, 0.0);
-            return;
+            for (size_t f = 0; f < NODE_DIM(l->agg); f++) {
+                MAT_BOUNDS_CHECK(l->agg, v, f);
+                MAT_AT(l->agg, v, f) = 0;
+            }
+            continue;
         }
 
         // Copy the first neighbor features to memory space for aggregation
@@ -383,50 +387,4 @@ void sageconv_backward(SageLayer* const l, graph_t* const g)
     }
 
     nob_log(NOB_INFO, "sageconv_backward: ok");
-}
-
-void update_linear_weights(LinearLayer* const l, float lr)
-{
-    MAT_ASSERT(l->W, l->grad_W);
-    float batch_recip = (float) 1/BATCH_DIM(l->input);
-
-    for (size_t i = 0; i < l->W->height; i++) {
-        for (size_t j = 0; j < l->W->width; j++) {
-            MAT_BOUNDS_CHECK(l->W, i, j);
-            MAT_BOUNDS_CHECK(l->grad_W, i, j);
-            MAT_AT(l->W, i, j) -= batch_recip * lr * MAT_AT(l->grad_W, i, j);
-        }
-    }
-
-    if (l->grad_bias != NULL) {
-        MAT_ASSERT(l->grad_bias, l->bias);
-        for (size_t i = 0; i < NODE_DIM(l->bias); i++) {
-            MAT_BOUNDS_CHECK(l->bias, 0, i);
-            MAT_BOUNDS_CHECK(l->grad_bias, 0, i);
-            MAT_AT(l->bias, 0, i) -= batch_recip * lr * MAT_AT(l->grad_bias, 0, i);
-        }
-    }
-
-    nob_log(NOB_INFO, "update_linear_weights: ok");
-}
-
-void update_sageconv_weights(SageLayer* const l, float lr)
-{
-    MAT_ASSERT(l->Wroot, l->grad_Wroot);
-    MAT_ASSERT(l->Wagg,  l->grad_Wagg);
-    float batch_recip = (float) 1/BATCH_DIM(l->input);
-
-    for (size_t i = 0; i < l->Wroot->height; i++) {
-        for (size_t j = 0; j < l->Wroot->width; j++) {
-            MAT_BOUNDS_CHECK(l->Wroot, i, j);
-            MAT_BOUNDS_CHECK(l->grad_Wroot, i, j);
-            MAT_AT(l->Wroot, i, j) -= batch_recip * lr * MAT_AT(l->grad_Wroot, i, j);
-
-            MAT_BOUNDS_CHECK(l->Wagg, i, j);
-            MAT_BOUNDS_CHECK(l->grad_Wagg, i, j);
-            MAT_AT(l->Wagg, i, j) -= batch_recip * lr * MAT_AT(l->grad_Wagg, i, j);
-        }
-    }
-
-    nob_log(NOB_INFO, "update_sageconv_weights: ok");
 }

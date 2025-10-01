@@ -52,6 +52,7 @@ typedef struct {
 matrix_t* mat_create(size_t height, size_t width);
 void mat_destroy(matrix_t *mat);
 // inline double *mat_at(matrix_t *m, size_t i, size_t j); // Safer variant to MAT_AT()
+void mat_zero(matrix_t *matrix);
 double mat_get(const matrix_t *mat, size_t i, size_t j);
 void mat_set(matrix_t *mat, size_t i, size_t j, double value);
 double* mat_row(matrix_t *mat, size_t i);

@@ -147,50 +147,173 @@ void destroy_sage_net(SageNet *n)
 
 void destroy_sage_layer(SageLayer* l)
 {
-    mat_destroy(l->output);
-    mat_destroy(l->agg);
-    mat_destroy(l->Wagg);
-    mat_destroy(l->Wroot);
-    mat_destroy(l->grad_input);
-    mat_destroy(l->grad_Wagg);
-    mat_destroy(l->grad_Wroot);
-    free(l->mean_scale);
+    if (!l) return;
+
+    if (l->output) mat_destroy(l->output);
+    if (l->agg) mat_destroy(l->agg);
+    if (l->Wagg) mat_destroy(l->Wagg);
+    if (l->Wroot) mat_destroy(l->Wroot);
+    if (l->grad_input) mat_destroy(l->grad_input);
+    if (l->grad_Wagg) mat_destroy(l->grad_Wagg);
+    if (l->grad_Wroot) mat_destroy(l->grad_Wroot);
+    if (l->mean_scale) free(l->mean_scale);
+
     free(l);
 }
 
 void destroy_relu_layer(ReluLayer* l)
 {
-    mat_destroy(l->output);
-    mat_destroy(l->grad_input);
+    if (!l) return;
+
+    if (l->output) mat_destroy(l->output);
+    if (l->grad_input) mat_destroy(l->grad_input);
+
     free(l);
 }
 
 void destroy_l2norm_layer(NormalizeLayer* l)
 {
-    mat_destroy(l->output);
-    mat_destroy(l->grad_input);
-    mat_destroy(l->recip_mag);
+    if (!l) return;
+
+    if (l->output) mat_destroy(l->output);
+    if (l->grad_input) mat_destroy(l->grad_input);
+    if (l->recip_mag) mat_destroy(l->recip_mag);
+
     free(l);
 }
 
 void destroy_linear_layer(LinearLayer *l)
 {
-    mat_destroy(l->output);
-    mat_destroy(l->W);
-    mat_destroy(l->bias);
-    mat_destroy(l->grad_input);
-    mat_destroy(l->grad_W);
-    mat_destroy(l->grad_bias);
+    if (!l) return;
+
+    if (l->output) mat_destroy(l->output);
+    if (l->W) mat_destroy(l->W);
+    if (l->bias) mat_destroy(l->bias);
+    if (l->grad_input) mat_destroy(l->grad_input);
+    if (l->grad_W) mat_destroy(l->grad_W);
+    if (l->grad_bias) mat_destroy(l->grad_bias);
+
     free(l);
 }
-
 void destroy_logsoft_layer(LogSoftLayer *l)
 {
-    mat_destroy(l->output);
-    mat_destroy(l->grad_input);
+    if (!l) return;
+
+    if (!l->output) mat_destroy(l->output);
+    if (!l->grad_input) mat_destroy(l->grad_input);
+
     free(l);
 }
 
+// Update weights
+void linear_layer_update_weights(LinearLayer* const l, float lr)
+{
+    MAT_ASSERT(l->W, l->grad_W);
+    float batch_recip = (float) 1/BATCH_DIM(l->input);
+
+    for (size_t i = 0; i < l->W->height; i++) {
+        for (size_t j = 0; j < l->W->width; j++) {
+            MAT_BOUNDS_CHECK(l->W, i, j);
+            MAT_BOUNDS_CHECK(l->grad_W, i, j);
+            MAT_AT(l->W, i, j) -= batch_recip * lr * MAT_AT(l->grad_W, i, j);
+        }
+    }
+
+    if (l->grad_bias != NULL) {
+        MAT_ASSERT(l->grad_bias, l->bias);
+        for (size_t i = 0; i < NODE_DIM(l->bias); i++) {
+            MAT_BOUNDS_CHECK(l->bias, 0, i);
+            MAT_BOUNDS_CHECK(l->grad_bias, 0, i);
+            MAT_AT(l->bias, 0, i) -= batch_recip * lr * MAT_AT(l->grad_bias, 0, i);
+        }
+    }
+
+    nob_log(NOB_INFO, "update_linear_weights: ok");
+}
+
+void sage_layer_update_weights(SageLayer* const l, float lr)
+{
+    MAT_ASSERT(l->Wroot, l->grad_Wroot);
+    MAT_ASSERT(l->Wagg,  l->grad_Wagg);
+    float batch_recip = (float) 1/BATCH_DIM(l->input);
+
+    for (size_t i = 0; i < l->Wroot->height; i++) {
+        for (size_t j = 0; j < l->Wroot->width; j++) {
+            MAT_BOUNDS_CHECK(l->Wroot, i, j);
+            MAT_BOUNDS_CHECK(l->grad_Wroot, i, j);
+            MAT_AT(l->Wroot, i, j) -= batch_recip * lr * MAT_AT(l->grad_Wroot, i, j);
+
+            MAT_BOUNDS_CHECK(l->Wagg, i, j);
+            MAT_BOUNDS_CHECK(l->grad_Wagg, i, j);
+            MAT_AT(l->Wagg, i, j) -= batch_recip * lr * MAT_AT(l->grad_Wagg, i, j);
+        }
+    }
+
+    nob_log(NOB_INFO, "update_sageconv_weights: ok");
+}
+
+// Reset gradient
+void sage_layer_zero_gradients(SageLayer* l)
+{
+    if (!l) return;
+
+    if (l->grad_output) mat_zero(l->grad_output);
+    if (l->grad_input) mat_zero(l->grad_input);
+    if (l->grad_Wagg) mat_zero(l->grad_Wagg);
+    if (l->grad_Wroot) mat_zero(l->grad_Wroot);
+}
+
+void relu_layer_zero_gradients(ReluLayer* l)
+{
+    if (!l) return;
+
+    if (l->grad_output) mat_zero(l->grad_output);
+    if (l->grad_input) mat_zero(l->grad_input);
+}
+
+void normalize_layer_zero_gradients(NormalizeLayer* l)
+{
+    if (!l) return;
+
+    if (l->grad_output) mat_zero(l->grad_output);
+    if (l->grad_input) mat_zero(l->grad_input);
+}
+
+void linear_layer_zero_gradients(LinearLayer* l)
+{
+    if (!l) return;
+
+    if (l->grad_output) mat_zero(l->grad_output);
+    if (l->grad_input) mat_zero(l->grad_input);
+    if (l->grad_W) mat_zero(l->grad_W);
+    if (l->grad_bias) mat_zero(l->grad_bias);
+}
+
+void logsoft_layer_zero_gradients(LogSoftLayer* l)
+{
+    if (!l) return;
+
+    if (l->grad_output) mat_zero(l->grad_output);
+    if (l->grad_input) mat_zero(l->grad_input);
+}
+
+// Network-wide gradient reset
+void sage_net_zero_gradients(SageNet* net)
+{
+    if (!net) return;
+
+    for (size_t i = 0; i < net->num_layers; i++) {
+        if (net->sagelayer && net->sagelayer[i]) {
+            sage_layer_zero_gradients(net->sagelayer[i]);
+        }
+        if (net->relulayer && net->relulayer[i]) {
+            relu_layer_zero_gradients(net->relulayer[i]);
+        }
+        if (net->normalizelayer && net->normalizelayer[i]) {
+            normalize_layer_zero_gradients(net->normalizelayer[i]);
+        }
+    }
+}
 
 // Inspect helpers
 void sage_layer_info(const SageLayer* const l)

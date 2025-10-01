@@ -112,14 +112,21 @@ void train(SageNet *sage_net, LinearLayer *linearlayer, LogSoftLayer *logsoftlay
         sageconv_backward(sage_net->sagelayer[i], g);
     }
 
+    for (size_t i = sage_net->num_layers-1; i < sage_net->num_layers; i--) {
+        sage_layer_update_weights(sage_net->sagelayer[i], LEARNING_RATE);
+    }
+
 #ifdef USE_PREDICTION_HEAD
-    update_linear_weights(linearlayer, LEARNING_RATE);
+    linear_layer_update_weights(linearlayer, LEARNING_RATE);
 #endif
 
-    for (size_t i = sage_net->num_layers-1; i < sage_net->num_layers; i--) {
-        update_sageconv_weights(sage_net->sagelayer[i], LEARNING_RATE);
+    // Reset grads
+    sage_net_zero_gradients(sage_net);
+#ifdef USE_PREDICTION_HEAD
+    linear_layer_zero_gradients(linearlayer);
+#endif
 
-    }
+    logsoft_layer_zero_gradients(logsoftlayer);
 }
 
 int main(void)
