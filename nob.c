@@ -120,6 +120,36 @@ char* to_define_flag(const char* str)
     return nob_temp_sprintf("-D%s", sb.items);
 }
 
+int run_paragnn()
+{
+    const char *exec = "paragnn";
+    char *out_dir = BUILD_FOLDER;
+
+    if (flags.variant != NULL){
+        out_dir = nob_temp_sprintf("%s%s/", out_dir, flags.variant);
+    }
+
+    // if (flags.partition != NULL){
+    //     out_dir = nob_temp_sprintf("%s%s/", out_dir, flags.partition);
+    //     if (!nob_mkdir_if_not_exists(out_dir)) return 1;
+    // }
+
+    const char* exec_path = nob_temp_sprintf("./%s%s", out_dir, exec);
+    int ret = nob_file_exists(exec_path);
+    if (ret != 1) {
+        if (ret == 0) {
+            nob_log(NOB_ERROR, "Failed to execute %s: executable not found", exec_path);
+        }
+        return 1;
+    }
+
+    nob_cmd_append(&cmd, exec_path);
+    if (!nob_cmd_run(&cmd)) return 1;
+
+
+    return 0;
+}
+
 int build_paragnn()
 {
     const char *exec = "paragnn";
@@ -308,6 +338,13 @@ int main(int argc, char** argv)
 
     else if (flags.submit) {
         return submit_job();
+    }
+
+    if (flags.run) {
+        if (flags.build || flags.rebuild) {
+            if (build_paragnn()) return 1;
+        }
+        return run_paragnn();
     }
 
     if (flags.build || flags.rebuild) {
