@@ -8,16 +8,19 @@
 
 #include "core.h"
 #include "perf.h"
+#include "nob.h"
 
 #define FNV_OFFSET 14695981039346656037UL
 #define FNV_PRIME 1099511628211UL
 
-TimeEntry __benchmark_entries[HASHTABLE_SIZE];
-HashTable __benchmark_ht = {
-    .entries = __benchmark_entries,
+PerfEntry __perf_entries[HASHTABLE_SIZE];
+HashTable __perf_ht = {
+    .entries = __perf_entries,
     .count = 0,
     .capacity = HASHTABLE_SIZE,
 };
+
+_Thread_local PerfEntry* __current_perf_entry = NULL;
 
 // This uses FNV-1a hashing algorithm
 static inline uint64_t hash_key(const char* key)
@@ -35,10 +38,10 @@ static inline size_t get_idx(HashTable* ht, const char* key) {
     return (size_t)(hash & (ht->capacity-1));
 }
 
-static TimeEntry* find_or_create_entry(HashTable* ht, const char* name) {
+static PerfEntry* find_or_create_entry(HashTable* ht, const char* name) {
     size_t idx = get_idx(ht, name);
-    TimeEntry* p = ht->entries + idx;
-    TimeEntry* end = ht->entries + ht->capacity;
+    PerfEntry* p = ht->entries + idx;
+    PerfEntry* end = ht->entries + ht->capacity;
 
     while (p < end && p->name != NULL) {
         if (strcmp(p->name, name) == 0) {
@@ -58,30 +61,33 @@ static TimeEntry* find_or_create_entry(HashTable* ht, const char* name) {
     p->max_time = 0.0;
     p->count = 0;
     p->current_start = 0.0;
+    p->flop = 0;
+    p->bytes = 0;
     p->is_active = false;
     ht->count++;
 
     return p;
 }
 
-
-void benchmark_start(HashTable* ht, const char* name, double start_time)
+void perf_start(HashTable* ht, const char* name, double start_time)
 {
-    TimeEntry* entry = find_or_create_entry(ht, name);
+    PerfEntry* entry = find_or_create_entry(ht, name);
     if (entry == NULL) return;
 
     if (entry->is_active) {
         fprintf(stderr, "WARNING: Benchmark '%s' is already active! Previous timing will be lost.\n", name);
     }
+    __current_perf_entry = entry;
 
     entry->current_start = start_time;
     entry->is_active = true;
 }
 
-void benchmark_stop(HashTable* ht, const char* name, double stop_time)
+void perf_stop(HashTable* ht, const char* name, double stop_time)
 {
-    TimeEntry* entry = find_or_create_entry(ht, name);
-    if (entry == NULL) return;
+    PerfEntry* entry;
+    if (__current_perf_entry == NULL) entry = find_or_create_entry(ht, name);
+    else entry = __current_perf_entry;
 
     if (!entry->is_active) {
         fprintf(stderr, "ERROR: Benchmark '%s' was never started!\n", name);
@@ -97,50 +103,113 @@ void benchmark_stop(HashTable* ht, const char* name, double stop_time)
     entry->is_active = false;
 }
 
-void benchmark_clear(HashTable* ht)
+void perf_add_metric(HashTable* ht, const char* name, OpMetrics metrics)
 {
-    memset(ht->entries, 0, sizeof(TimeEntry) * ht->capacity);
+    PerfEntry* entry;
+    if (__current_perf_entry == NULL) entry = find_or_create_entry(ht, name);
+    else entry = __current_perf_entry;
+
+    if (!entry->is_active) {
+        fprintf(stderr, "ERROR: Benchmark '%s' was never started!\n", name);
+        return;
+    }
+
+    entry->has_metrics = true;
+    entry->flop += metrics.flops;
+    entry->bytes += metrics.bytes;
+}
+
+void perf_clear(HashTable* ht)
+{
+    memset(ht->entries, 0, sizeof(PerfEntry) * ht->capacity);
     ht->count = 0;
 }
 
-void benchmark_print(HashTable* ht)
+static int cmp_by_total_time(const void* a, const void* b)
 {
-    TimeEntry* p = ht->entries;
-    TimeEntry* end = ht->entries + ht->capacity;
+    PerfEntry* ea = (PerfEntry*)a;
+    PerfEntry* eb = (PerfEntry*)b;
 
-    printf("%-30s %-10s %-10s %-10s %-10s %-8s\n",
-           "name", "total(s)", "avg(s)", "min(s)", "max(s)", "calls");
-    const int total_width = 30 + 8 + 10 + 10 + 10 + 10 + 5; // +5 for spaces between columns
-    for (int i = 0; i < total_width; i++) {
-        printf("-");
-    }
-    printf("\n");
-
-    while (p < end) {
-        if (p->name != NULL && p->count > 0) {
-            double avg = p->total_time / p->count;
-            printf("%-30s %-10.6f %-10.6f %-10.6f %-10.6f %-8zu\n",
-                   p->name, p->total_time, avg, p->min_time, p->max_time, p->count);
-        }
-        p++;
-    }
+    // Sort by avg time (descending)
+    if ((eb->total_time) > (ea->total_time)) return 1;
+    if ((eb->total_time) < (ea->total_time)) return -1;
+    return 0;
 }
 
-void benchmark_csv(HashTable* ht, FILE *file)
+static PerfEntry* get_sorted_entries(HashTable* ht)
 {
-    TimeEntry* p = ht->entries;
-    TimeEntry* end = ht->entries + ht->capacity;
+    PerfEntry* valid_entries = malloc(ht->capacity * sizeof(PerfEntry));
 
-    // Write header
-    fprintf(file, "name,total(s),avg(s),min(s),max(s),calls\n");
-
-    // Write entries
+    PerfEntry* p = ht->entries;
+    PerfEntry* end = ht->entries + ht->capacity;
+    size_t i = 0;
     while (p < end) {
         if (p->name != NULL && p->count > 0) {
-            double avg = p->total_time / p->count;
-            fprintf(file, "%s,%f,%f,%f,%f,%zu\n", p->name, p->total_time, avg, p->min_time, p->max_time, p->count);
+            valid_entries[i++] = *p;
         }
         p++;
     }
 
+    qsort(valid_entries, ht->count, sizeof(PerfEntry), cmp_by_total_time);
+    return valid_entries;
+}
+
+void perf_print(HashTable* ht)
+{
+
+    // PerfEntry* p = ht->entries;
+    // PerfEntry* end = ht->entries + ht->capacity;
+
+    printf("%-30s %-12s %-12s %-12s %-12s %-12s %-12s %-12s %-8s\n",
+           "name", "total(s)", "avg(s)", "min(s)", "max(s)",
+           "GFLOP/s", "GB/s", "FLOP/byte", "calls");
+    
+    const int total_width = 30 + 12*7 + 8 + 8;
+    for (int i = 0; i < total_width; i++) printf("-");
+    printf("\n");
+
+    PerfEntry* sorted_entries = get_sorted_entries(ht);
+
+    for (size_t i = 0; i < ht->count; i++) {
+        PerfEntry* e = &sorted_entries[i];
+        double avg = e->total_time / e->count;
+
+        printf("%-30s %-12.6f %-12.6f %-12.6f %-12.6f",
+               e->name, e->total_time, avg, e->min_time, e->max_time);
+
+	    if (e->has_metrics) {
+	        double gflops = e->flop / e->total_time / 1e9;
+	        double bandwidth = e->bytes / e->total_time / 1e9;
+	        double intensity = (double)e->flop / e->bytes;
+	        printf(" %-12.2f %-12.2f %-12.3f", gflops, bandwidth, intensity);
+	    } else {
+	        printf(" %-12s %-12s %-12s", "?", "?", "?");
+	    }
+
+	    printf(" %-8zu\n", e->count);
+    }
+
+    free(sorted_entries);
+}
+
+void perf_csv(HashTable* ht, FILE *file)
+{
+    PerfEntry* p = ht->entries;
+    PerfEntry* end = ht->entries + ht->capacity;
+
+    fprintf(file, "name,total(s),avg(s),min(s),max(s),gflops,calls\n");
+
+    while (p < end) {
+        if (p->name != NULL && p->count > 0) {
+            // double avg = p->total_time / p->count;
+            /* char* gflops_str = (p->total_flop > 0) ? */
+            /*                 nob_temp_sprintf("%.2f", (p->total_flop / p->total_time / 1e9)) : */
+            /*                 nob_temp_sprintf("?"); */
+
+            /* fprintf(file, "%s,%f,%f,%f,%f,%s,%zu\n", */
+            /* p->name, p->total_time, avg, p->min_time, p->max_time, */
+            /* gflops_str, p->count); */
+        }
+        p++;
+    }
 }

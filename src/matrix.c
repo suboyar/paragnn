@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "matrix.h"
+#include "perf.h"
 
 #include "nob.h"
 
@@ -143,7 +144,7 @@ void mat_transpose_to(matrix_t *A, matrix_t *B)
     }
 }
 
-void dot(matrix_t *A, matrix_t *B, matrix_t *C)
+OpMetrics dot(matrix_t *A, matrix_t *B, matrix_t *C)
 {
     // Verify inner dimensions match
     assert(A->width == B->height && "Inner dimensions must match for matrix multiplication");
@@ -155,6 +156,9 @@ void dot(matrix_t *A, matrix_t *B, matrix_t *C)
     size_t N = A->width;
     size_t P = B->width;
 
+    uint64_t flops = 2ULL * M * P * N;
+    uint64_t bytes = (2ULL * M * N * P) + (M * P) * sizeof(double);
+
     for (size_t i = 0; i < M; i++) {
         for (size_t j = 0; j < P; j++) {
             double sum = 0.0;
@@ -164,9 +168,11 @@ void dot(matrix_t *A, matrix_t *B, matrix_t *C)
             MAT_AT(C, i, j) = sum;
         }
     }
+
+    return (OpMetrics){.flops=flops, .bytes=bytes};
 }
 
-void dot_agg(matrix_t *A, matrix_t *B, matrix_t *C)
+OpMetrics dot_agg(matrix_t *A, matrix_t *B, matrix_t *C)
 {
     // Verify inner dimensions match
 
@@ -178,19 +184,23 @@ void dot_agg(matrix_t *A, matrix_t *B, matrix_t *C)
     size_t N = A->width;
     size_t P = B->width;
 
+    uint64_t flops = (2ULL * M * P * N) + (M * P);
+    uint64_t bytes = (2ULL * M * N * P) + (2ULL * M * P) * sizeof(double);
+
     for (size_t i = 0; i < M; i++) {
         for (size_t j = 0; j < P; j++) {
             double sum = 0.0;
             for (size_t k = 0; k < N; k++) {
-
                 sum += MAT_AT(A, i, k) * MAT_AT(B, k, j);
             }
             MAT_AT(C, i, j) += sum;
         }
     }
+
+    return (OpMetrics){.flops=flops, .bytes=bytes};
 }
 
-void dot_ex(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt)
+OpMetrics dot_ex(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt)
 {
     // Calculate effective dimensions after potential transposition
     size_t eff_A_rows = at ? A->width : A->height;
@@ -210,6 +220,9 @@ void dot_ex(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt)
     size_t N = eff_A_cols;
     size_t P = eff_B_cols;
 
+    uint64_t flops = 2ULL * M * N * P;
+    uint64_t bytes = (2ULL * N * P * M) + (P * M) * sizeof(double);
+
     // Precompute strides for each matrix
     size_t a_row_stride = at ? 1 : A->width;
     size_t a_col_stride = at ? A->width : 1;
@@ -227,9 +240,11 @@ void dot_ex(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt)
             MAT_AT(C, i, j) = sum;
         }
     }
+
+    return (OpMetrics){.flops=flops, .bytes=bytes};
 }
 
-void dot_agg_ex(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt)
+OpMetrics dot_agg_ex(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt)
 {
     // Verify inner dimensions match
     assert((at ? A->height : A->width) == (bt ? B->width : B->height));
@@ -246,6 +261,9 @@ void dot_agg_ex(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt)
     size_t b_row_stride = bt ? 1 : B->width;
     size_t b_col_stride = bt ? B->width : 1;
 
+    uint64_t flops = (2ULL * M * P * N) + (M * P);
+    uint64_t bytes = (2ULL * M * N * P) + (2ULL * M * P) * sizeof(double);
+
     // TODO unroll and jam
     for (size_t i = 0; i < M; i++) {
         for (size_t j = 0; j < P; j++) {
@@ -257,6 +275,7 @@ void dot_agg_ex(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt)
             MAT_AT(C, i, j) += sum;
         }
     }
+    return (OpMetrics){.flops=flops, .bytes=bytes};
 }
 
 

@@ -1,7 +1,8 @@
-#ifndef BENCHMARK_H
-#define BENCHMARK_H
+#ifndef PERF_H
+#define PERF_H
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 
 #include <omp.h>
@@ -13,44 +14,68 @@ typedef struct {
     double      max_time;       // Maximum time observed
     size_t      count;          // Number of measurements
     double      current_start;  // Current timing start (for active measurements)
+    uint64_t    flop;           // Optional: FLOP/s tracking
+    uint64_t    bytes;          // Optional: Memory transfer tracking
+    bool        has_metrics;  
     bool        is_active;      // Whether timing is currently active
-} TimeEntry;
+} PerfEntry;
 
 typedef struct {
-    TimeEntry* entries;
+    uint64_t flops;
+    uint64_t bytes;
+} OpMetrics;
+
+typedef struct {
+    PerfEntry* entries;
     size_t count;
     size_t capacity;
 } HashTable;
 
 // 1024 contexts should be enough (famous last words)
 #define HASHTABLE_SIZE 1024
-extern TimeEntry __benchmark_entries[HASHTABLE_SIZE];
-extern HashTable __benchmark_ht;
+extern PerfEntry __perf_entries[HASHTABLE_SIZE];
+extern HashTable __perf_ht;
 
-// Benchmarking: Track statistics across multiple calls
+// Thread-local tracking of current benchmark
+extern _Thread_local PerfEntry* __current_perf_entry;
 
-#define BENCH_START(name) benchmark_start(&__benchmark_ht, (name), omp_get_wtime())
-#define BENCH_STOP(name) benchmark_stop(&__benchmark_ht, (name), omp_get_wtime())
-#define BENCH_CLEAR() benchmark_clear(&__benchmark_ht)
-#define BENCH_PRINT() benchmark_print(&__benchmark_ht)
-#define BENCH_CSV(file) benchmark_csv(&__benchmark_ht, (file))
+// Track benchmarking statistics across multiple calls
 
-#define BENCH_CALL(name, func, ...) do {        \
-        BENCH_START(name);                      \
-        func(__VA_ARGS__);                      \
-        BENCH_STOP(name);                       \
+#define PERF_FUNC_START() perf_start(&__perf_ht, __func__, omp_get_wtime())
+#define PERF_START(name) perf_start(&__perf_ht, (name), omp_get_wtime())
+
+#define PERF_FUNC_END() do {                          \
+    perf_stop(&__perf_ht, __func__, omp_get_wtime()); \
+    __current_perf_entry = NULL;                     \
+} while(0)
+#define PERF_END(name) do {                             \
+        perf_stop(&__perf_ht, (name), omp_get_wtime()); \
+        __current_perf_entry = NULL;                   \
     } while(0)
 
-#define BENCH_EXPR(name, expr) ({               \
-            BENCH_START(name);                  \
-            __typeof__(expr) __result = (expr); \
-            BENCH_STOP(name);                   \
-            __result;                           \
-        })
+#define PERF_OP_METRICS(name, metrics) perf_add_metric(&__perf_ht, (name), (metrics))
 
+#define PERF_CALL(func_name, expr) do {                  \
+        PerfEntry* __parent = __current_perf_entry; \
+        PERF_START((func_name));                         \
+        OpMetrics __op = (expr);                    \
+        PERF_OP_METRICS((func_name), __op);              \
+        PERF_END((func_name));                           \
+        __current_perf_entry = __parent;            \
+        if (__parent) {                             \
+            PERF_OP_METRICS((__parent->name), __op);    \
+        }                                           \
+    } while(0)
 
-// Timing: One-off measurements (e.g., for FLOP/s calculations)
+// Add metrics during function
+#define PERF_ADD_METRICS(flops_val, bytes_val) do {                    \
+    if (__current_perf_entry) {                                       \
+        OpMetrics __m = {.flops = (flops_val), .bytes = (bytes_val)};  \
+        perf_add_metric(&__perf_ht, __current_perf_entry->name, __m); \
+    }                                                                  \
+} while(0)
 
+// One-off time measurements
 #define TIME_IT(code) ({                        \
             double __start = omp_get_wtime();   \
             code;                               \
@@ -64,10 +89,15 @@ extern HashTable __benchmark_ht;
             __result;                                   \
         })
 
-void benchmark_start(HashTable* ht, const char* name, double start_time);
-void benchmark_stop(HashTable* ht, const char* name, double stop_time);
-void benchmark_clear(HashTable* ht);
-void benchmark_print(HashTable* ht);
-void benchmark_csv(HashTable* ht, FILE *f);
+#define PERF_CLEAR() perf_clear(&__perf_ht)
+#define PERF_PRINT() perf_print(&__perf_ht)
+#define PERF_CSV(file) perf_csv(&__perf_ht, (file))
 
-#endif // BENCHMARK_H
+void perf_start(HashTable* ht, const char* name, double start_time);
+void perf_stop(HashTable* ht, const char* name, double stop_time);
+void perf_add_metric(HashTable* ht, const char* name, OpMetrics metrics);
+void perf_clear(HashTable* ht);
+void perf_print(HashTable* ht);
+void perf_csv(HashTable* ht, FILE *f);
+
+#endif // PERF_H

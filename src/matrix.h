@@ -7,6 +7,7 @@
 #include <stdio.h>
 
 #include "core.h"
+#include "perf.h"
 
 #include "nob.h"
 
@@ -63,10 +64,10 @@ void mat_fill(matrix_t *matrix, double value);
 void mat_rand(matrix_t* m, float low, float high);
 void mat_transpose(matrix_t *m);
 void mat_transpose_to(matrix_t *A, matrix_t *B);
-void dot(matrix_t *A, matrix_t *B, matrix_t *C); // C = A @ B
-void dot_agg(matrix_t *A, matrix_t *B, matrix_t *C); // C += A @ B
-void dot_ex(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt);
-void dot_agg_ex(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt);
+OpMetrics dot(matrix_t *A, matrix_t *B, matrix_t *C); // C = A @ B
+OpMetrics dot_agg(matrix_t *A, matrix_t *B, matrix_t *C); // C += A @ B
+OpMetrics dot_ex(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt);
+OpMetrics dot_agg_ex(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt);
 bool mat_equal(matrix_t *A, matrix_t *B, size_t *row, size_t *col);
 void mat_print(matrix_t* mat, const char *name, size_t padding);
 #define MAT_PRINT(m) mat_print(m, #m, 0)

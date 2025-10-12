@@ -6,25 +6,34 @@
 
 #include <omp.h>
 
+#include "core.h"
 #include "gnn.h"
 #include "matrix.h"
 #include "graph.h"
+#include "perf.h"
 
 #include "nob.h"
 
 // Forward propagation
 #define SAMPLE_SIZE 10 // XXX: Placeholder unitl I implement proper neighbor samplig
-void aggregate(SageLayer* const l, graph_t* const g)
+OpMetrics aggregate(SageLayer* const l, graph_t* const g)
 {
+    size_t B = BATCH_DIM(l->input);
+    size_t E = g->num_edges;
+    size_t N = NODE_DIM(l->agg);
+
+    uint64_t bytes = B * (2*E + 3*SAMPLE_SIZE*N + 5*N + 2*SAMPLE_SIZE + 2) * sizeof(double);
+    uint64_t flops = B * (SAMPLE_SIZE*N + N + 1);
+
     size_t adj[SAMPLE_SIZE] = {0};
 
-    for (size_t v = 0; v < BATCH_DIM(l->input); v++) {
+    for (size_t v = 0; v < B; v++) {
         size_t neigh_count = 0;
 
         // NOTE: Collects neighbors from only incoming direction.
 
         // Find neighbors of count sample size
-        for (size_t edge = 0; edge < g->num_edges && neigh_count < SAMPLE_SIZE; edge++) {
+        for (size_t edge = 0; edge < E && neigh_count < SAMPLE_SIZE; edge++) {
             EDGE_BOUNDS_CHECK(g, edge, 0);
             size_t u0 = EDGE_AT(g, edge, 0);
             EDGE_BOUNDS_CHECK(g, edge, 1);
@@ -36,7 +45,7 @@ void aggregate(SageLayer* const l, graph_t* const g)
         }
 
         if (neigh_count == 0) {
-            for (size_t f = 0; f < NODE_DIM(l->agg); f++) {
+            for (size_t f = 0; f < N; f++) {
                 MAT_BOUNDS_CHECK(l->agg, v, f);
                 MAT_AT(l->agg, v, f) = 0;
             }
@@ -45,7 +54,7 @@ void aggregate(SageLayer* const l, graph_t* const g)
 
         // Copy the first neighbor features to memory space for aggregation
         size_t u = adj[0];
-        for (size_t f = 0; f < NODE_DIM(l->agg); f++) {
+        for (size_t f = 0; f < N; f++) {
             // TODO: memcpy(MAT_ROW(out, v), MAT_ROW(in, u), g->num_node_features * sizeof(*out->data));
             MAT_BOUNDS_CHECK(l->agg, v, f);
             MAT_BOUNDS_CHECK(l->input, u, f);
@@ -55,7 +64,7 @@ void aggregate(SageLayer* const l, graph_t* const g)
         // Add remaining neighbors
         for (size_t i = 1; i < neigh_count; i++) {
             u = adj[i];
-            for (size_t f = 0; f < NODE_DIM(l->agg); f++) {
+            for (size_t f = 0; f < N; f++) {
                 MAT_BOUNDS_CHECK(l->agg, v, f);
                 MAT_BOUNDS_CHECK(l->input, u, f);
                 MAT_AT(l->agg, v, f) += MAT_AT(l->input, u, f);
@@ -64,11 +73,12 @@ void aggregate(SageLayer* const l, graph_t* const g)
 
         // Aggregation with mean
         l->mean_scale[v] = (float)1/neigh_count;
-        for (size_t f = 0; f < NODE_DIM(l->agg); f++) {
+        for (size_t f = 0; f < N; f++) {
             MAT_BOUNDS_CHECK(l->agg, v, f);
             MAT_AT(l->agg, v, f) *= l->mean_scale[v];
         }
     }
+    return (OpMetrics){.flops = flops, .bytes = bytes};
 }
 
 void sageconv(SageLayer* const l, graph_t* const g)
@@ -83,10 +93,13 @@ void sageconv(SageLayer* const l, graph_t* const g)
     MAT_ASSERT_BATCH(l->output, l->input);
     MAT_ASSERT_BATCH(l->output, l->agg);
 
-    aggregate(l, g);
+    PERF_FUNC_START();
 
-    dot(l->input, l->Wroot, l->output);
-    dot_agg(l->agg, l->Wagg, l->output);
+    PERF_CALL("aggregate", aggregate(l, g));
+    PERF_CALL("sage_Wroot", dot(l->input, l->Wroot, l->output));
+    PERF_CALL("sage_Wagg", dot_agg(l->agg, l->Wagg, l->output));
+
+    PERF_FUNC_END();
 
     nob_log(NOB_INFO, "sageconv: ok");
 }
@@ -95,23 +108,43 @@ void relu(ReluLayer* const l)
 {
     MAT_ASSERT(l->output, l->input);
 
-    for (size_t i = 0; i < BATCH_DIM(l->input); i++) {
-        for (size_t j = 0; j < NODE_DIM(l->input); j++) {
+    size_t B = BATCH_DIM(l->input);
+    size_t N = NODE_DIM(l->input);
+
+    uint64_t bytes = B * (2ULL * N) * sizeof(double);
+    uint64_t flops = 0;
+
+    PERF_FUNC_START();
+    PERF_ADD_METRICS(flops, bytes);
+
+    for (size_t i = 0; i < B; i++) {
+        for (size_t j = 0; j < N; j++) {
             MAT_BOUNDS_CHECK(l->output, i, j);
             MAT_BOUNDS_CHECK(l->input, i, j);
             MAT_AT(l->output, i, j) = fmax(0.0, MAT_AT(l->input, i, j));
         }
     }
-    nob_log(NOB_INFO, "relu: ok");
+
+    PERF_FUNC_END();
 }
 
 void normalize(NormalizeLayer * const l)
 {
     MAT_ASSERT(l->output, l->input);
 
-    for (size_t i = 0; i < BATCH_DIM(l->input); i++) {
+    size_t B = BATCH_DIM(l->input);
+    size_t N = NODE_DIM(l->input);
+
+
+    uint64_t bytes = B * (4ULL * N + 1) * sizeof(double);
+    uint64_t flops = B * (3ULL * N + 2);
+
+    PERF_FUNC_START();
+    PERF_ADD_METRICS(flops, bytes);
+
+    for (size_t i = 0; i < B; i++) {
         double norm = 0.0;
-        for (size_t j = 0; j < NODE_DIM(l->input); j++) {
+        for (size_t j = 0; j < N; j++) {
             MAT_BOUNDS_CHECK(l->input, i, j);
             double val = MAT_AT(l->input, i, j);
             norm += val * val;
@@ -121,13 +154,16 @@ void normalize(NormalizeLayer * const l)
         MAT_AT(l->recip_mag, i, 0) = (double)1/sqrt(norm);
 
         if (norm > 1e-8) {
-            for (size_t j = 0; j < NODE_DIM(l->input); j++) {
+            for (size_t j = 0; j < N; j++) {
                 MAT_BOUNDS_CHECK(l->output, i, j);
                 MAT_BOUNDS_CHECK(l->input, i, j);
                 MAT_AT(l->output, i, j) = MAT_AT(l->input, i, j) * MAT_AT(l->recip_mag, i, 0);
             }
         }
     }
+
+    PERF_FUNC_END();
+
     nob_log(NOB_INFO, "normalize: ok");
 }
 
@@ -137,14 +173,23 @@ void linear(LinearLayer* const l)
     MAT_ASSERT_NODE(l->output, l->W);
     MAT_ASSERT_BATCH(l->output, l->input);
 
+    PERF_FUNC_START();
+
     dot(l->input, l->W, l->output);
 
     if (l->bias) {
         MAT_ASSERT_NODE(l->output, l->bias);
         assert(BATCH_DIM(l->bias) == 1);
 
-        for (size_t i = 0; i < BATCH_DIM(l->output); i++) {
-            for (size_t j = 0; j < NODE_DIM(l->output); j++) {
+        size_t B = BATCH_DIM(l->output);
+        size_t N = NODE_DIM(l->output);
+
+        uint64_t flops = B * N * sizeof(double);
+        uint64_t bytes = 3ULL * B * N * sizeof(double);
+        PERF_ADD_METRICS(flops, bytes);
+
+        for (size_t i = 0; i < B; i++) {
+            for (size_t j = 0; j < N; j++) {
                 MAT_BOUNDS_CHECK(l->output, i, j);
                 MAT_BOUNDS_CHECK(l->bias, 0, j);
                 MAT_AT(l->output, i, j) += MAT_AT(l->bias, 0, j);
@@ -152,6 +197,7 @@ void linear(LinearLayer* const l)
         }
     }
 
+    PERF_FUNC_END();
     nob_log(NOB_INFO, "linear: ok");
 }
 
@@ -162,64 +208,97 @@ void logsoft(LogSoftLayer* const l)
 {
     MAT_ASSERT(l->output, l->input);
 
-    for (size_t i = 0; i < BATCH_DIM(l->input); i++) {
+    size_t B = BATCH_DIM(l->input);
+    size_t N = NODE_DIM(l->input);
+
+    uint64_t flops = B * (1ULL + 5ULL * N);
+    uint64_t bytes = B * (1ULL + 3ULL * N) * sizeof(double);
+
+    PERF_FUNC_START();
+    PERF_ADD_METRICS(flops, bytes);
+
+    for (size_t i = 0; i < B; i++) {
         MAT_BOUNDS_CHECK(l->input, i, 0);
         double max = MAT_AT(l->input, i, 0);
 
-        for (size_t j = 1; j < NODE_DIM(l->input); j++) {
+        for (size_t j = 1; j < N; j++) {
             MAT_BOUNDS_CHECK(l->input, i, j);
             max = fmax(max, MAT_AT(l->input, i, j));
         }
 
         double logsumexp = 0.0;
-        for (size_t j = 0; j < NODE_DIM(l->input); j++) {
+        for (size_t j = 0; j < N; j++) {
             MAT_BOUNDS_CHECK(l->input, i, j);
             logsumexp += exp(MAT_AT(l->input, i, j) - max);
         }
 
         logsumexp = log(logsumexp);
 
-        for (size_t j = 0; j < NODE_DIM(l->input); j++) {
+        for (size_t j = 0; j < N; j++) {
             MAT_BOUNDS_CHECK(l->output, i, j);
             MAT_BOUNDS_CHECK(l->input, i, j);
             MAT_AT(l->output, i, j) = MAT_AT(l->input, i, j) - max - logsumexp;
         }
     }
 
+    PERF_FUNC_END();
     nob_log(NOB_INFO, "log_softmax: ok");
 }
 
 double nll_loss(matrix_t* const yhat, matrix_t* const y)
 {
     // TODO: shape assert
-    double sum = 0.0;
-	for (size_t i = 0; i < BATCH_DIM(yhat); i++) {
+
+    size_t B = BATCH_DIM(yhat);
+    size_t N = NODE_DIM(yhat);
+
+    uint64_t flops = B;
+    uint64_t bytes = (B * (3ULL * N)) * sizeof(double);
+
+    PERF_FUNC_START();
+    PERF_ADD_METRICS(flops, bytes);
+
+    double loss = 0.0;
+	for (size_t i = 0; i < B; i++) {
         size_t j;
-	    for (j = 0; j < NODE_DIM(yhat); j++) {
+	    for (j = 0; j < N; j++) {
             MAT_BOUNDS_CHECK(y, i, j);
             double class = MAT_AT(y, i, j);
             if (class == 1.0) { break; }
         }
 
-        assert(j < NODE_DIM(yhat) && "No true class was found");
+        assert(j < N && "No true class was found");
 
         MAT_BOUNDS_CHECK(y, i, j);
         double logits = MAT_AT(yhat, i, j);
-        sum -= logits;
+
+        loss -= logits;
     }
 
-    return sum;
+    PERF_FUNC_END();
+    return loss;
 }
 
 double accuracy(matrix_t* const yhat, matrix_t* const y)
 {
     // TODO: shape assert
+    MAT_ASSERT(yhat, y);
+
+    size_t B = BATCH_DIM(yhat);
+    size_t N = NODE_DIM(yhat);
+
+    uint64_t bytes = B * (1 + N) * sizeof(double);
+    uint64_t flops = B;
+
+    PERF_FUNC_START();
+    PERF_ADD_METRICS(flops, bytes);
+
     double acc = 0.0;
-	for (size_t i = 0; i < BATCH_DIM(yhat); i++) {
+	for (size_t i = 0; i < B; i++) {
         // Find prediction
         size_t pred_class = 0;
         double best_pred = MAT_AT(yhat, i, 0);
-	    for (size_t j = 1; j < NODE_DIM(yhat); j++) {
+	    for (size_t j = 1; j < N; j++) {
             MAT_BOUNDS_CHECK(yhat, i, j);
             double pred = MAT_AT(yhat, i, j);
             if (best_pred < pred) {
@@ -245,6 +324,7 @@ double accuracy(matrix_t* const yhat, matrix_t* const y)
         }
     }
 
+    PERF_FUNC_END();
     return acc/BATCH_DIM(y);
 }
 
@@ -254,15 +334,24 @@ void cross_entropy_backward(LogSoftLayer* const l, matrix_t* const y)
     MAT_ASSERT(l->output, y);
     MAT_ASSERT(l->output, l->output);
 
-    for (size_t i = 0; i < BATCH_DIM(l->output); i++) {
-        for (size_t j = 0; j < NODE_DIM(l->output); j++) {
+    size_t B = BATCH_DIM(l->output);
+    size_t N =  NODE_DIM(l->output);
+
+    uint64_t flops = N * (N + 1ULL);
+    uint64_t bytes = B * (3ULL * N + 2ULL) * sizeof(double);
+
+    PERF_FUNC_START();
+    PERF_ADD_METRICS(flops, bytes);
+
+    for (size_t i = 0; i < B; i++) {
+        for (size_t j = 0; j < N; j++) {
             MAT_BOUNDS_CHECK(l->grad_input, i, j);
             MAT_BOUNDS_CHECK(l->output, i, j);
             MAT_AT(l->grad_input, i, j) = exp(MAT_AT(l->output, i, j));
         }
 
-        for (size_t j = 0; j < NODE_DIM(l->output); j++) {
-            MAT_BOUNDS_CHECK(l->output, i, j);
+        for (size_t j = 0; j < N; j++) {
+            MAT_BOUNDS_CHECK(y, i, j);
             if (MAT_AT(y, i, j) == 1.0) { //  True class
                 MAT_BOUNDS_CHECK(l->grad_input, i, j);
                 MAT_AT(l->grad_input, i, j) -= 1;
@@ -271,30 +360,45 @@ void cross_entropy_backward(LogSoftLayer* const l, matrix_t* const y)
         }
     }
 
+    PERF_FUNC_END();
     nob_log(NOB_INFO, "cross_entropy_backward: ok");
 }
 
 void linear_backward(LinearLayer* const l)
 {
+    // TODO shape assert
+
+    PERF_FUNC_START();
+
     // Downstream:
     // Column-major: grad_input = W^T @ grad_output
     // Row-major:    grad_input = grad_output @ W^T
     // Note: Row-major storage causes W to be implicitly transposed
-    dot_ex(l->grad_output, l->W, l->grad_input, false, true);
+    PERF_CALL("linear_bwd_grad_input",
+             dot_ex(l->grad_output, l->W, l->grad_input, false, true));
 
     // Cost of weights:
     // Column-major: grad_W = grad_output @ input^T
     // Row-major:    grad_W = input^T @ grad_output
     // Note: Similar reasoning - Row-major storage causes input to be implicitly transposed
-    dot_ex(l->input, l->grad_output, l->grad_W, true, false);
+    PERF_CALL("linear_bwd_grad_W",
+              dot_ex(l->input, l->grad_output, l->grad_W, true, false));
 
     if (l->grad_bias != NULL) {
         MAT_ASSERT(l->bias, l->grad_bias);
         MAT_ASSERT_NODE(l->grad_output, l->grad_bias);
 
+        // linear_bias_backward: bytes_coeff={'BN': 3}, flops_coeff={'BN': 1}
+        size_t B = BATCH_DIM(l->grad_output);
+        size_t N = NODE_DIM(l->grad_output);
+
+        uint64_t flops = B * N;
+        uint64_t bytes = 3ULL * B * N * sizeof(double);
+        PERF_ADD_METRICS(flops, bytes);
+
         // Sum gradients across batch dimension
-        for (size_t batch = 0; batch < BATCH_DIM(l->grad_output); batch++) {
-            for (size_t i = 0; i < NODE_DIM(l->grad_output); i++) {
+        for (size_t batch = 0; batch < B; batch++) {
+            for (size_t i = 0; i < N; i++) {
                 MAT_BOUNDS_CHECK(l->grad_bias, 0, i);
                 MAT_BOUNDS_CHECK(l->grad_output, batch, i);
 
@@ -305,6 +409,7 @@ void linear_backward(LinearLayer* const l)
 
     }
 
+    PERF_FUNC_END();
     nob_log(NOB_INFO, "linear_backward: ok");
 }
 
@@ -312,31 +417,58 @@ void normalize_backward(NormalizeLayer* const l)
 {
     // TODO: add the asserts for matrix dims
 
-    for (size_t i = 0; i < BATCH_DIM(l->input); i++) {
-        double grad_local_data[NODE_DIM(l->input) * NODE_DIM(l->input)];
+    MAT_ASSERT(l->input, l->output);
+    MAT_ASSERT(l->input, l->grad_input);
+    MAT_ASSERT(l->output, l->grad_output);
+
+    size_t B = BATCH_DIM(l->input);
+    size_t N = NODE_DIM(l->input);
+
+    uint64_t flops = 6ULL * B * N * N;
+    uint64_t bytes = B * N * (8ULL * N + 3ULL);
+
+    PERF_FUNC_START();
+    PERF_ADD_METRICS(flops, bytes);
+
+    for (size_t i = 0; i < B; i++) {
+        double grad_local_data[N * N];
         matrix_t grad_local = {
-            .height = NODE_DIM(l->input),
-            .width = NODE_DIM(l->input),
+            .height = N,
+            .width = N,
             .data = grad_local_data
         };
-        for (size_t j = 0; j < NODE_DIM(l->input); j++) {
-            for (size_t k = 0; k < NODE_DIM(l->input); k++) {
+        for (size_t j = 0; j < N; j++) {
+            for (size_t k = 0; k < N; k++) {
+                MAT_BOUNDS_CHECK(&grad_local, j, k);
+                MAT_BOUNDS_CHECK(l->output, i, j);
+                MAT_BOUNDS_CHECK(l->output, i, k);
+                MAT_BOUNDS_CHECK(l->recip_mag, i, 0);
+
                 MAT_AT(&grad_local, j, k) = - MAT_AT(l->output, i, j) * MAT_AT(l->output, i, k);
+
                 if (j == k) {     // Kronecker delta
                     MAT_AT(&grad_local, j, k) = 1 + MAT_AT(&grad_local, j, k);
                 }
+
                 MAT_AT(&grad_local, j, k) *= MAT_AT(l->recip_mag, i, 0);
             }
         }
 
-        for (size_t j = 0; j < NODE_DIM(l->grad_input); j++) {
+        for (size_t j = 0; j < N; j++) {
             double sum = 0.0;
-            for (size_t k = 0; k < NODE_DIM(l->grad_output); k++) {
+            for (size_t k = 0; k < N; k++) {
+                MAT_BOUNDS_CHECK(l->grad_output, i, k);
+                MAT_BOUNDS_CHECK(&grad_local, k, j);
+
                 sum += MAT_AT(l->grad_output, i, k) * MAT_AT(&grad_local, k, j);
             }
+
+            MAT_BOUNDS_CHECK(l->grad_input, i, j);
             MAT_AT(l->grad_input, i, j) = sum;
         }
     }
+
+    PERF_FUNC_END();
     nob_log(NOB_INFO, "normalize_backward: ok");
 }
 
@@ -344,6 +476,15 @@ void relu_backward(ReluLayer* const l)
 {
     MAT_ASSERT(l->output, l->grad_output);
     MAT_ASSERT(l->output, l->grad_input);
+
+    // bytes_coeff={'BN': 4}, flops_coeff={}
+    size_t B = BATCH_DIM(l->output);
+    size_t N = NODE_DIM(l->output);
+    uint64_t flops = 0;
+    uint64_t bytes = (4ULL * B * N) * sizeof(double);
+
+    PERF_FUNC_START();
+    PERF_ADD_METRICS(flops, bytes);
 
     // TODO: grad_input = grad_output * fmaxf(0.0f, copysignf(1.0f, output));
     for (size_t i = 0; i < BATCH_DIM(l->output); i++) {
@@ -355,6 +496,7 @@ void relu_backward(ReluLayer* const l)
         }
     }
 
+    PERF_FUNC_END();
     nob_log(NOB_INFO, "relu_backward: ok");
 }
 
@@ -362,21 +504,36 @@ void sageconv_backward(SageLayer* const l, graph_t* const g)
 {
     // TODO: shape assert
 
+    size_t E = g->num_edges;
+    size_t B = BATCH_DIM(l->Wagg);
+    size_t N = NODE_DIM(l->grad_output);
+
+    uint64_t edge_flops = (2ULL * E * B * N) + (2ULL * E * B);
+    uint64_t edge_bytes = ((2ULL * E) + (2ULL * E * B * N) + (3ULL * E * B)) * sizeof(double);
+
+    PERF_FUNC_START();
+
     // Weight gradient
-    dot_ex(l->input, l->grad_output, l->grad_Wroot, true, false);
-    dot_ex(l->agg,   l->grad_output, l->grad_Wagg,   true, false);
+    PERF_CALL("sage_bwd_grad_Wroot",
+              dot_ex(l->input, l->grad_output, l->grad_Wroot, true, false));
 
-    dot_ex(l->grad_output, l->Wroot, l->grad_input, false, true);
+    PERF_CALL("sage_bwd_grad_Wagg",
+               dot_ex(l->agg, l->grad_output, l->grad_Wagg, true, false));
 
-    for (size_t edge = 0; edge < g->num_edges; edge++) {
+    PERF_CALL("sage_bwd_grad_input",
+             dot_ex(l->grad_output, l->Wroot, l->grad_input, false, true));
+
+    PERF_ADD_METRICS(edge_flops, edge_bytes);
+
+    for (size_t edge = 0; edge < E; edge++) {
         size_t u0 = EDGE_AT(g, edge, 0);  // source
         size_t u1 = EDGE_AT(g, edge, 1);  // target
 
         // u0 gets gradient from u1's computation (outgoing gradient)
         // grad_input[u0] += grad_output[u1] @ Wagg^T
-        for (size_t i = 0; i < l->Wagg->height; i++) {
+        for (size_t i = 0; i < B; i++) {
             double sum = 0.0;
-            for (size_t j = 0; j < l->grad_output->width; j++) {
+            for (size_t j = 0; j < N; j++) {
                 MAT_BOUNDS_CHECK(l->grad_output, u1, j);
                 MAT_BOUNDS_CHECK(l->Wagg, i, j);
                 sum += MAT_AT(l->grad_output, u1, j) * MAT_AT(l->Wagg, i, j);
@@ -386,5 +543,6 @@ void sageconv_backward(SageLayer* const l, graph_t* const g)
         }
     }
 
+    PERF_FUNC_END();
     nob_log(NOB_INFO, "sageconv_backward: ok");
 }

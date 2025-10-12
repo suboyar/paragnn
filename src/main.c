@@ -20,7 +20,7 @@
 #endif // BENC_CSV_FILE
 
 #ifndef EPOCH
-#define EPOCH 10               // Goal is to have 500 epochs
+#define EPOCH 1               // Goal is to have 500 epochs
 #endif
 
 #ifndef LEARNING_RATE
@@ -48,6 +48,7 @@ void print_config()
     printf("Learning rate: %f\n", (float)LEARNING_RATE);
     printf("Layers: %zu\n", (size_t)NUM_LAYERS);
     printf("Hidden dim: %zu\n", (size_t)HIDDEN_DIM);
+    printf("FLOPS/transient: %zu\n", (size_t)FLOPS_PER_TRANSIENT);
 #ifndef USE_OGB_ARXIV
     printf("Graph Dataset: dev\n");
 #else
@@ -81,6 +82,8 @@ void print_memory_usage()
 
 void inference(SageNet *sage_net, LinearLayer *linearlayer, LogSoftLayer *logsoftlayer, graph_t *g)
 {
+    PERF_FUNC_START();
+
     for (size_t i = 0; i < sage_net->num_layers; i++) {
         sageconv(sage_net->sagelayer[i], g);
         relu(sage_net->relulayer[i]);
@@ -94,11 +97,15 @@ void inference(SageNet *sage_net, LinearLayer *linearlayer, LogSoftLayer *logsof
 #endif
 
     logsoft(logsoftlayer);
+
+    PERF_FUNC_END();
 }
 
 void train(SageNet *sage_net, LinearLayer *linearlayer, LogSoftLayer *logsoftlayer, graph_t *g)
 {
-    cross_entropy_backward(logsoftlayer, g->y);
+    PERF_FUNC_START();
+
+   cross_entropy_backward(logsoftlayer, g->y);
 
 #ifdef USE_PREDICTION_HEAD
     linear_backward(linearlayer);
@@ -112,6 +119,7 @@ void train(SageNet *sage_net, LinearLayer *linearlayer, LogSoftLayer *logsoftlay
         sageconv_backward(sage_net->sagelayer[i], g);
     }
 
+    // Update weights
     for (size_t i = sage_net->num_layers-1; i < sage_net->num_layers; i--) {
         sage_layer_update_weights(sage_net->sagelayer[i], LEARNING_RATE);
     }
@@ -122,11 +130,14 @@ void train(SageNet *sage_net, LinearLayer *linearlayer, LogSoftLayer *logsoftlay
 
     // Reset grads
     sage_net_zero_gradients(sage_net);
+
 #ifdef USE_PREDICTION_HEAD
     linear_layer_zero_gradients(linearlayer);
 #endif
 
     logsoft_layer_zero_gradients(logsoftlayer);
+
+    PERF_FUNC_END();
 }
 
 int main(void)
@@ -163,17 +174,16 @@ int main(void)
 
     for (size_t epoch = 1; epoch <= EPOCH; epoch++) {
 
-        BENCH_CALL("inference", inference, sage_net, linearlayer, logsoftlayer, train_graph);
+        inference(sage_net, linearlayer, logsoftlayer, train_graph);
 
-        double loss = BENCH_EXPR("nll_loss", nll_loss(logsoftlayer->output, train_graph->y) / BATCH_DIM(train_graph->y));
-        double acc = BENCH_EXPR("accuracy", accuracy(logsoftlayer->output, train_graph->y));
-        // double loss = nll_loss(logsoftlayer->output, train_graph->y) / BATCH_DIM(train_graph->y);
+        double loss = nll_loss(logsoftlayer->output, train_graph->y) / BATCH_DIM(train_graph->y);
+        double acc = accuracy(logsoftlayer->output, train_graph->y);
         printf("[epoch %zu] loss: %f, accuracy: %f\n", epoch, loss, acc);
 
-        BENCH_CALL("train", train, sage_net, linearlayer, logsoftlayer, train_graph);
+        train(sage_net, linearlayer, logsoftlayer, train_graph);
     }
 
-    BENCH_PRINT();
+    PERF_PRINT();
 
     destroy_sage_net(sage_net);
 #ifdef USE_PREDICTION_HEAD
@@ -186,9 +196,7 @@ int main(void)
     return 0;
 }
 
-// TODO: Finish benchmarking tool (Friday)
-// TODO: Implement orchestration tool within nob.h (Saturday)
-// TODO: Perform benchmarking and gather results (Sunday)
-// TODO: Find out how you should run each of the splits
 // TODO: Use CRS format for edges
 // TODO: Xavier Initialization for weight matrices
+// TODO: Fast exp: https://jrfonseca.blogspot.com/2008/09/fast-sse2-pow-tables-or-polynomials.html
+// TODO: Print

@@ -30,4 +30,6 @@
     #define BREAKPOINT() ((void)0)
 #endif // NDEBUG
 
+#define FLOPS_PER_TRANSIENT 1
+
 #endif // CORE_H
