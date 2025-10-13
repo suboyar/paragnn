@@ -31,12 +31,12 @@ typedef struct {
     bool  build;
     bool  run;
     bool  rebuild;
-    bool  build_ogb;
     bool  release;
-    bool  submit;
-    char* outdir;
-    char* partition;
-    char* variant;
+    bool  ogb;
+    // bool  submit;
+    char* out_dir;
+    // char* partition;
+    // char* variant;
 } Flags;
 
 Flags flags = {0};
@@ -69,6 +69,28 @@ struct {
     // For testing
     {.name = "rome16q",  .arch = "amd",   .testing = true},
 };
+
+bool nob_mkdir_if_not_exists_recursvily(const char *path)
+{
+    if (path == NULL || path[0] == '\0') {
+        nob_log(NOB_ERROR, "cannot create directory from empty path");
+        return false;
+    }
+
+    Nob_String_View sv = nob_sv_from_cstr(path);
+    Nob_String_Builder sb = {0};
+
+    while (sv.count > 0) {
+        Nob_String_View dir = nob_sv_chop_by_delim(&sv, '/');
+
+        if (dir.count == 0) continue;
+
+        nob_sb_appendf(&sb, "%s/", nob_temp_sv_to_cstr(dir));
+        const char* dir_path = sb.items;
+
+        if (!nob_mkdir_if_not_exists(dir_path)) return false;
+    }
+}
 
 void list_all_partitions()
 {
@@ -125,9 +147,9 @@ int run_paragnn()
     const char *exec = "paragnn";
     char *out_dir = BUILD_FOLDER;
 
-    if (flags.variant != NULL){
-        out_dir = nob_temp_sprintf("%s%s/", out_dir, flags.variant);
-    }
+    // if (flags.variant != NULL){
+    //     out_dir = nob_temp_sprintf("%s%s/", out_dir, flags.variant);
+    // }
 
     // if (flags.partition != NULL){
     //     out_dir = nob_temp_sprintf("%s%s/", out_dir, flags.partition);
@@ -154,23 +176,25 @@ int build_paragnn()
 {
     const char *exec = "paragnn";
     char *out_dir = BUILD_FOLDER;
-    if (!nob_mkdir_if_not_exists(out_dir)) return 1;
-
-    if (flags.variant != NULL){
-        out_dir = nob_temp_sprintf("%s%s/", out_dir, flags.variant);
-        if (!nob_mkdir_if_not_exists(out_dir)) return 1;
+    if (flags.out_dir != NULL) {
+        out_dir = flags.out_dir;
     }
 
-    if (flags.partition != NULL){
-        out_dir = nob_temp_sprintf("%s%s/", out_dir, flags.partition);
-        if (!nob_mkdir_if_not_exists(out_dir)) return 1;
+    // nob_cmd_append(&cmd, "mkdir", "-p", out_dir)
+    // if (!nob_cmd_run(&cmd)) return 1;
+
+    if ((out_dir[strlen(out_dir)-1]) != '/') {
+        out_dir = nob_temp_sprintf("%s/", out_dir);
     }
+
+    nob_mkdir_if_not_exists_recursvily(out_dir);
 
     const char* exec_path = nob_temp_sprintf("%s%s", out_dir, exec);
     const char* variant_path = SRC_FOLDER;
-    if (flags.variant != NULL) {
-        variant_path = nob_temp_sprintf("%s%s/", variant_path, flags.variant);
-    }
+    // if (flags.variant != NULL) {
+    //     variant_path = nob_temp_sprintf("%s%s/", variant_path, flags.variant);
+    // }
+
     struct {
         const char* obj_path;
         const char* src_path;
@@ -193,12 +217,12 @@ int build_paragnn()
 	        nob_cmd_append(&cmd, "-I"SRC_FOLDER);
 	        nob_cmd_append(&cmd, nob_temp_sprintf("-I%s", variant_path));
 
-            if (flags.variant != NULL) {
-                if (strcmp(flags.variant, "baseline") == 0) {
-                    // Default optimizations
-                    nob_cmd_append(&cmd, "-DBASELINE");
-                }
-            }
+            // if (flags.variant != NULL) {
+            //     if (strcmp(flags.variant, "baseline") == 0) {
+            //         // Default optimizations
+            //         nob_cmd_append(&cmd, "-DBASELINE");
+            //     }
+            // }
 
             if (flags.release) {
                 nob_cmd_append(&cmd, "-O3", "-march=native", "-DNDEBUG");
@@ -289,15 +313,15 @@ int submit_job()
         if (!nob_mkdir_if_not_exists("./logs/compile")) return 1;
 
         nob_cmd_append(&cmd, "sbatch");
-        nob_cmd_append(&cmd, "-p", flags.partition);
-        nob_cmd_append(&cmd, "--export", nob_temp_sprintf("ALL,EXPERIMENT=%s", flags.variant));
+        // nob_cmd_append(&cmd, "-p", flags.partition);
+        // nob_cmd_append(&cmd, "--export", nob_temp_sprintf("ALL,EXPERIMENT=%s", flags.variant));
         nob_cmd_append(&cmd, "ex3/compile.sbatch");
         if (!nob_cmd_run(&cmd)) return 1;
     } else if (flags.run) {
         nob_cmd_append(&cmd, "sbatch");
-        nob_cmd_append(&cmd, "-p", flags.partition);
-        nob_cmd_append(&cmd, "--export", nob_temp_sprintf("ALL,EXPERIMENT=%s", flags.variant));
-        nob_cmd_append(&cmd, nob_temp_sprintf("%s-run.sbatch", flags.partition));
+        // nob_cmd_append(&cmd, "-p", flags.partition);
+        // nob_cmd_append(&cmd, "--export", nob_temp_sprintf("ALL,EXPERIMENT=%s", flags.variant));
+        // nob_cmd_append(&cmd, nob_temp_sprintf("%s-run.sbatch", flags.partition));
     } else {
         nob_log(NOB_ERROR, "No job valid job");
     }
@@ -320,11 +344,12 @@ int main(int argc, char** argv)
     flag_bool_var(&flags.build,         "build",     false,      "Build the project");
     flag_bool_var(&flags.run,           "run",       false,      "Run the project");
     flag_bool_var(&flags.rebuild,       "rebuild",   false,      "Force a complete rebuild");
-    flag_bool_var(&flags.build_ogb,     "build-ogb", false,      "Build OGB decoder");
+    flag_str_var(&flags.out_dir,        "outdir",    NULL,       "Where to build to");
+    flag_bool_var(&flags.ogb,           "ogb",       false,      "Build OGB decoder");
     flag_bool_var(&flags.release,       "release",   false,      "Build in release mode");
-    flag_bool_var(&flags.submit,        "submit",    false,      "Submit build job to SLURM instead of building locally");
-    flag_str_var(&flags.partition,      "partition", NULL,       "SLURM partition to use");
-    flag_str_var(&flags.variant,        "variant",   NULL, "Build variant (baseline, etc.)");
+    // flag_bool_var(&flags.submit,        "submit",    false,      "Submit build job to SLURM instead of building locally");
+    // flag_str_var(&flags.partition,      "partition", NULL,       "SLURM partition to use");
+    // flag_str_var(&flags.variant,        "variant",   NULL, "Build variant (baseline, etc.)");
 
     if (!flag_parse(argc, argv)) {
         usage(stderr);
@@ -332,13 +357,13 @@ int main(int argc, char** argv)
         exit(1);
     }
 
-    if (flags.build_ogb) {
+    if (flags.ogb) {
         return build_ogb();
     }
 
-    else if (flags.submit) {
-        return submit_job();
-    }
+    // else if (flags.submit) {
+    //     return submit_job();
+    // }
 
     if (flags.run) {
         if (flags.build || flags.rebuild) {
