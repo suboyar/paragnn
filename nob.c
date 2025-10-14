@@ -35,8 +35,9 @@ typedef struct {
     bool  ogb;
     // bool  submit;
     char* out_dir;
-    // char* partition;
     // char* variant;
+    int rest_argc;
+    char** rest_argv;
 } Flags;
 
 Flags flags = {0};
@@ -151,11 +152,6 @@ int run_paragnn()
     //     out_dir = nob_temp_sprintf("%s%s/", out_dir, flags.variant);
     // }
 
-    // if (flags.partition != NULL){
-    //     out_dir = nob_temp_sprintf("%s%s/", out_dir, flags.partition);
-    //     if (!nob_mkdir_if_not_exists(out_dir)) return 1;
-    // }
-
     const char* exec_path = nob_temp_sprintf("./%s%s", out_dir, exec);
     int ret = nob_file_exists(exec_path);
     if (ret != 1) {
@@ -166,6 +162,9 @@ int run_paragnn()
     }
 
     nob_cmd_append(&cmd, exec_path);
+    for (int i = 0; i < flags.rest_argc; i++) {
+        nob_cmd_append(&cmd, flags.rest_argv[i]);
+    }
     if (!nob_cmd_run(&cmd)) return 1;
 
 
@@ -230,6 +229,8 @@ int build_paragnn()
             } else {
                 nob_cmd_append(&cmd, "-O0", "-ggdb", "-g3", "-gdwarf-2");
             }
+
+            nob_cmd_append(&cmd, "-fopenmp");
 
             nob_cc_output(&cmd, targets[i].obj_path);
             nob_cmd_append(&cmd, "-c", targets[i].src_path);
@@ -336,7 +337,6 @@ void usage(FILE *stream)
     flag_print_options(stream);
 }
 
-
 int main(int argc, char** argv)
 {
     NOB_GO_REBUILD_URSELF(argc, argv);
@@ -348,14 +348,26 @@ int main(int argc, char** argv)
     flag_bool_var(&flags.ogb,           "ogb",       false,      "Build OGB decoder");
     flag_bool_var(&flags.release,       "release",   false,      "Build in release mode");
     // flag_bool_var(&flags.submit,        "submit",    false,      "Submit build job to SLURM instead of building locally");
-    // flag_str_var(&flags.partition,      "partition", NULL,       "SLURM partition to use");
     // flag_str_var(&flags.variant,        "variant",   NULL, "Build variant (baseline, etc.)");
+
+    printf("argc before: %d\n", argc);
 
     if (!flag_parse(argc, argv)) {
         usage(stderr);
         flag_print_error(stderr);
         exit(1);
     }
+
+    argc = flag_rest_argc();
+    argv = flag_rest_argv();
+
+    if (argc > 0 && strcmp(argv[0], "--") == 0) {
+        argv += 1;
+        argc -= 1;
+    }
+
+    flags.rest_argc = argc;
+    flags.rest_argv = argv;
 
     if (flags.ogb) {
         return build_ogb();
