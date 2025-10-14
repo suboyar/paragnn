@@ -1,6 +1,8 @@
 #ifndef CORE_H
 #define CORE_H
 
+#include <stdio.h>
+
 #define ERROR(fmt, ...) do { \
     fprintf(stderr, "%s:%d: error: %s: " fmt "\n", __FILE__, __LINE__, __func__, ##__VA_ARGS__); \
     abort(); \
@@ -30,6 +32,9 @@
     #define BREAKPOINT() ((void)0)
 #endif // NDEBUG
 
-#define FLOPS_PER_TRANSIENT 1
+typedef struct {
+    FILE* fp;
+    char* filename;
+} FileHandler;
 
 #endif // CORE_H

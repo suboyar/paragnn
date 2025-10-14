@@ -1,4 +1,6 @@
+#define _GNU_SOURCE
 #include <math.h>
+#include <sched.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -15,9 +17,9 @@
 #define NOB_IMPLEMENTATION
 #include "nob.h"
 
-#ifndef BENC_CSV_FILE
-#define BENC_CSV_FILE stdout
-#endif // BENC_CSV_FILE
+#define FLAG_IMPLEMENTATION
+#define FLAG_PUSH_DASH_DASH_BACK
+#include "flag.h"
 
 #ifndef EPOCH
 #define EPOCH 1               // Goal is to have 500 epochs
@@ -39,7 +41,31 @@
 #    endif // USE_OGB_ARXIV
 #endif // HIDDEN_DIM
 
-// #define USE_PREDICTION_HEAD
+FileHandler csv_out = {0};
+
+void print_cpu_affinity()
+{
+    cpu_set_t mask;
+    CPU_ZERO(&mask);
+
+    if (sched_getaffinity(0, sizeof(mask), &mask) == -1) {
+        perror("sched_getaffinity");
+        return;
+    }
+
+    int num_cpus = CPU_COUNT(&mask);
+    printf("CPUs in affinity mask: %d [", num_cpus);
+
+    int first = 1;
+    for (int i = 0; i < CPU_SETSIZE; i++) {
+        if (CPU_ISSET(i, &mask)) {
+            if (!first) printf(",");
+            printf("%d", i);
+            first = 0;
+        }
+    }
+    printf("]\n");
+}
 
 void print_config()
 {
@@ -48,7 +74,7 @@ void print_config()
     printf("Learning rate: %f\n", (float)LEARNING_RATE);
     printf("Layers: %zu\n", (size_t)NUM_LAYERS);
     printf("Hidden dim: %zu\n", (size_t)HIDDEN_DIM);
-    printf("FLOPS/transient: %zu\n", (size_t)FLOPS_PER_TRANSIENT);
+    printf("CSV file: %s\n", csv_out.filename);
 #ifndef USE_OGB_ARXIV
     printf("Graph Dataset: dev\n");
 #else
@@ -59,7 +85,9 @@ void print_config()
 #else
     printf("Prediction Head: Enabled\n");
 #endif
+    printf("OpenMP Threads: %d\n", omp_get_max_threads());
     printf("Slurm Partition: %s\n", getenv("SLURM_JOB_PARTITION"));
+    print_cpu_affinity();
     printf("================================================================\n\n");
 }
 
@@ -140,10 +168,26 @@ void train(SageNet *sage_net, LinearLayer *linearlayer, LogSoftLayer *logsoftlay
     PERF_FUNC_END();
 }
 
-int main(void)
+int main(int argc, char** argv)
 {
     srand(0);
     nob_minimal_log_level = NOB_WARNING;
+
+    csv_out.fp       = stdout;
+    csv_out.filename = "stdout";
+    flag_str_var(&csv_out.filename, "csv", csv_out.filename, "Name of the csv file to output to");
+
+    if (!flag_parse(argc, argv)) {
+        flag_print_error(stderr);
+        exit(1);
+    }
+
+    if (strcmp(csv_out.filename, "stdout") != 0) {
+        csv_out.fp = fopen(csv_out.filename, "w");
+        if (csv_out.fp == NULL) {
+            ERROR("Could not open file %s: %s", csv_out.filename, strerror(errno));
+        }
+    }
 
     print_config();
 
@@ -171,7 +215,6 @@ int main(void)
     CONNECT_LAYER(SAGE_NET_OUTPUT(sage_net), logsoftlayer);
 #endif // USE_PREDICTION_HEAD
 
-
     for (size_t epoch = 1; epoch <= EPOCH; epoch++) {
 
         inference(sage_net, linearlayer, logsoftlayer, train_graph);
@@ -184,6 +227,7 @@ int main(void)
     }
 
     PERF_PRINT();
+    if (csv_out.fp != NULL) PERF_CSV(csv_out.fp);
 
     destroy_sage_net(sage_net);
 #ifdef USE_PREDICTION_HEAD
