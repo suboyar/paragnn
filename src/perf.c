@@ -194,22 +194,28 @@ void perf_print(HashTable* ht)
 
 void perf_csv(HashTable* ht, FILE *file)
 {
-    PerfEntry* p = ht->entries;
-    PerfEntry* end = ht->entries + ht->capacity;
+    fprintf(file, "name,total(s),avg(s),min(s),max(s),GFLOP/s,GB/s,FLOP/byte,calls\n");
 
-    fprintf(file, "name,total(s),avg(s),min(s),max(s),gflops,calls\n");
+    PerfEntry* sorted_entries = get_sorted_entries(ht);
 
-    while (p < end) {
-        if (p->name != NULL && p->count > 0) {
-            // double avg = p->total_time / p->count;
-            /* char* gflops_str = (p->total_flop > 0) ? */
-            /*                 nob_temp_sprintf("%.2f", (p->total_flop / p->total_time / 1e9)) : */
-            /*                 nob_temp_sprintf("?"); */
+    for (size_t i = 0; i < ht->count; i++) {
+        PerfEntry* e = &sorted_entries[i];
+        double avg = e->total_time / e->count;
 
-            /* fprintf(file, "%s,%f,%f,%f,%f,%s,%zu\n", */
-            /* p->name, p->total_time, avg, p->min_time, p->max_time, */
-            /* gflops_str, p->count); */
+        fprintf(file, "%s,%.6f,%.6f,%.6f,%.6f,",
+                e->name, e->total_time, avg, e->min_time, e->max_time);
+
+        if (e->has_metrics) {
+            double gflops = e->flop / e->total_time / 1e9;
+            double bandwidth = e->bytes / e->total_time / 1e9;
+            double intensity = (double)e->flop / e->bytes;
+            fprintf(file, "%.2f,%.2f,%.3f,", gflops, bandwidth, intensity);
+        } else {
+            fprintf(file, ",,,");  // Empty fields for missing metrics
         }
-        p++;
+
+        fprintf(file, "%zu\n", e->count);
     }
+
+    free(sorted_entries);
 }
