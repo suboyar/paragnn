@@ -1,3 +1,4 @@
+#define NOB_EXPERIMENTAL_DELETE_OLD
 #define NOB_IMPLEMENTATION
 #define NOB_WARN_DEPRECATED
 #define nob_cc(cmd) nob_cmd_append(cmd, "gcc")
@@ -33,7 +34,8 @@ typedef struct {
     bool  rebuild;
     bool  release;
     bool  ogb;
-    // bool  submit;
+    bool  help;
+    char*  submit;
     char* out_dir;
     // char* variant;
     int rest_argc;
@@ -58,17 +60,17 @@ Nob_Procs procs = {0};
 struct {
     const char* name;
     const char* arch;
-    bool testing;
+    bool dev;
 } partitions[] = {
     // For benchmarking
-    {.name = "defq",     .arch = "arm",   .testing = false},
-    {.name = "fpgaq",    .arch = "amd",   .testing = false},
-    {.name = "genoaxq",  .arch = "amd",   .testing = false},
-    {.name = "gh200q",   .arch = "arm",   .testing = false},
-    {.name = "milanq",   .arch = "amd",   .testing = false},
-    {.name = "xeonmaxq", .arch = "intel", .testing = false},
-    // For testing
-    {.name = "rome16q",  .arch = "amd",   .testing = true},
+    {.name = "defq",     .arch = "arm",   .dev = false},
+    {.name = "fpgaq",    .arch = "amd",   .dev = false},
+    {.name = "genoaxq",  .arch = "amd",   .dev = false},
+    {.name = "gh200q",   .arch = "arm",   .dev = false},
+    {.name = "milanq",   .arch = "amd",   .dev = false},
+    {.name = "xeonmaxq", .arch = "intel", .dev = false},
+    // For devlopment
+    {.name = "rome16q",  .arch = "amd",   .dev = true},
 };
 
 bool nob_mkdir_if_not_exists_recursvily(const char *path)
@@ -105,14 +107,14 @@ void list_all_partitions()
 
     printf("Partitions for benchmarking:\n");
     for (size_t i = 0; i < NOB_ARRAY_LEN(partitions); i++) {
-        if (!partitions[i].testing) {
+        if (!partitions[i].dev) {
             printf("\t%-*s (%s)\n", max_len, partitions[i].name, partitions[i].arch);
         }
     }
 
     printf("Partitions for testing:\n");
     for (size_t i = 0; i < NOB_ARRAY_LEN(partitions); i++) {
-        if (partitions[i].testing) {
+        if (partitions[i].dev) {
             printf("\t%-*s (%s)\n", max_len, partitions[i].name, partitions[i].arch);
         }
     }
@@ -213,8 +215,8 @@ int build_paragnn()
             nob_cc_flags(&cmd);
             nob_cc_error_flags(&cmd);
             nob_cmd_append(&cmd, "-I.");
-	        nob_cmd_append(&cmd, "-I"SRC_FOLDER);
-	        nob_cmd_append(&cmd, nob_temp_sprintf("-I%s", variant_path));
+            nob_cmd_append(&cmd, "-I"SRC_FOLDER);
+            nob_cmd_append(&cmd, nob_temp_sprintf("-I%s", variant_path));
 
             // if (flags.variant != NULL) {
             //     if (strcmp(flags.variant, "baseline") == 0) {
@@ -308,26 +310,40 @@ int clean()
     return 0;
 }
 
-int submit_job()
-{
-    if (flags.build) {
-        if (!nob_mkdir_if_not_exists("./logs/compile")) return 1;
+int run_benchmark(const char* partition)
+{    
+    nob_cmd_append(&cmd, "sbatch");    
+    nob_cmd_append(&cmd, "-p", partition);
+    nob_cmd_append(&cmd, "-o", nob_temp_sprintf("logs/%s-%%x-%%j.out", partition));
+    nob_cmd_append(&cmd, "run_benchmark.sbatch");
+    if (!nob_cmd_run(&cmd)) return 1;
+    return 0;
+}
 
-        nob_cmd_append(&cmd, "sbatch");
-        // nob_cmd_append(&cmd, "-p", flags.partition);
-        // nob_cmd_append(&cmd, "--export", nob_temp_sprintf("ALL,EXPERIMENT=%s", flags.variant));
-        nob_cmd_append(&cmd, "ex3/compile.sbatch");
-        if (!nob_cmd_run(&cmd)) return 1;
-    } else if (flags.run) {
-        nob_cmd_append(&cmd, "sbatch");
-        // nob_cmd_append(&cmd, "-p", flags.partition);
-        // nob_cmd_append(&cmd, "--export", nob_temp_sprintf("ALL,EXPERIMENT=%s", flags.variant));
-        // nob_cmd_append(&cmd, nob_temp_sprintf("%s-run.sbatch", flags.partition));
-    } else {
-        nob_log(NOB_ERROR, "No job valid job");
+int submit_job()
+{    
+    if (!nob_mkdir_if_not_exists("logs/")) return 1;
+
+    bool is_bench = strcmp(flags.submit, "bench") == 0;
+    bool is_dev = strcmp(flags.submit, "dev") == 0;
+
+    if (is_bench || is_dev) {
+        for (size_t i = 0; i < NOB_ARRAY_LEN(partitions); i++) {
+            if (partitions[i].dev != is_dev) continue;
+            
+            if (run_benchmark(partitions[i].name)) return 1;
+        }
+        
+        return 0;
     }
 
-    return 0;
+    if (partition_is_valid(flags.submit)) {
+        return run_benchmark(flags.submit);
+    } else {
+        list_all_partitions();
+    }
+
+    return 1;
 }
 
 void usage(FILE *stream)
@@ -341,21 +357,25 @@ int main(int argc, char** argv)
 {
     NOB_GO_REBUILD_URSELF(argc, argv);
 
-    flag_bool_var(&flags.build,         "build",     false,      "Build the project");
-    flag_bool_var(&flags.run,           "run",       false,      "Run the project");
-    flag_bool_var(&flags.rebuild,       "rebuild",   false,      "Force a complete rebuild");
-    flag_str_var(&flags.out_dir,        "outdir",    NULL,       "Where to build to");
-    flag_bool_var(&flags.ogb,           "ogb",       false,      "Build OGB decoder");
-    flag_bool_var(&flags.release,       "release",   false,      "Build in release mode");
-    // flag_bool_var(&flags.submit,        "submit",    false,      "Submit build job to SLURM instead of building locally");
-    // flag_str_var(&flags.variant,        "variant",   NULL, "Build variant (baseline, etc.)");
-
-    printf("argc before: %d\n", argc);
+    flag_bool_var(&flags.build,   "build",   false,     "Build the project");
+    flag_bool_var(&flags.run,     "run",     false,     "Run the project");
+    flag_bool_var(&flags.rebuild, "rebuild", false,     "Force a complete rebuild");
+    flag_str_var(&flags.out_dir,  "outdir",  NULL,      "Where to build to");
+    flag_bool_var(&flags.release, "release", false,     "Build in release mode");
+    flag_str_var(&flags.submit,   "submit",  NULL, "Job submission partition\n"
+                                                        "        Valid: defq, fpgaq, genoaxq, gh200q, milanq, xeonmaxq, rome16q, bench, dev, list");
+    flag_bool_var(&flags.ogb,     "ogb",     false,     "Build OGB decoder");
+    flag_bool_var(&flags.help,    "help",    false,     "Print this help message");
 
     if (!flag_parse(argc, argv)) {
         usage(stderr);
         flag_print_error(stderr);
-        exit(1);
+        return 1;
+    }
+
+    if (flags.help) {
+        usage(stdout);
+        return 0;
     }
 
     argc = flag_rest_argc();
@@ -373,9 +393,14 @@ int main(int argc, char** argv)
         return build_ogb();
     }
 
-    // else if (flags.submit) {
-    //     return submit_job();
-    // }
+    else if (flags.submit != NULL) {
+        if (strcmp(flags.submit, "list") == 0) {
+            list_all_partitions();
+            return 0;
+        }
+
+        return submit_job();
+    }
 
     if (flags.run) {
         if (flags.build || flags.rebuild) {

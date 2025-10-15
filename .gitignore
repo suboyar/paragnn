@@ -1,4 +1,5 @@
 build/
+logs/
 arxiv/
 asm/
 .cache/
