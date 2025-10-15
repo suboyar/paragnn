@@ -20,6 +20,16 @@ typedef struct {
     bool        is_active;      // Whether timing is currently active
 } PerfEntry;
 
+typedef enum {
+    TOTAL_TIME,
+    MIN_TIME,
+    MAX_TIME,
+    COUNT,
+    CURRENT_START,
+    FLOP,
+    BYTES,
+} PerfMetric;
+
 typedef struct {
     uint64_t flops;
     uint64_t bytes;
@@ -92,6 +102,7 @@ extern _Thread_local PerfEntry* __current_perf_entry;
 #define PERF_CLEAR() perf_clear(&__perf_ht)
 #define PERF_PRINT() perf_print(&__perf_ht)
 #define PERF_CSV(file) perf_csv(&__perf_ht, (file))
+#define PERF_GET_METRIC(name, metric, ret) perf_get_metric(&__perf_ht, (name), (metric), (ret))
 
 void perf_start(HashTable* ht, const char* name, double start_time);
 void perf_stop(HashTable* ht, const char* name, double stop_time);
@@ -99,5 +110,6 @@ void perf_add_metric(HashTable* ht, const char* name, OpMetrics metrics);
 void perf_clear(HashTable* ht);
 void perf_print(HashTable* ht);
 void perf_csv(HashTable* ht, FILE *f);
+void perf_get_metric(HashTable* ht, const char* name, PerfMetric metric, void* ret);
 
 #endif // PERF_H

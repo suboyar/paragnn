@@ -25,9 +25,9 @@ OpMetrics aggregate(SageLayer* const l, graph_t* const g)
     uint64_t bytes = B * (2*E + 3*SAMPLE_SIZE*N + 5*N + 2*SAMPLE_SIZE + 2) * sizeof(double);
     uint64_t flops = B * (SAMPLE_SIZE*N + N + 1);
 
-    size_t adj[SAMPLE_SIZE] = {0};
-
+#pragma omp parallel for
     for (size_t v = 0; v < B; v++) {
+        size_t adj[SAMPLE_SIZE] = {0};
         size_t neigh_count = 0;
 
         // NOTE: Collects neighbors from only incoming direction.
@@ -117,6 +117,7 @@ void relu(ReluLayer* const l)
     PERF_FUNC_START();
     PERF_ADD_METRICS(flops, bytes);
 
+#pragma omp parallel for
     for (size_t i = 0; i < B; i++) {
         for (size_t j = 0; j < N; j++) {
             MAT_BOUNDS_CHECK(l->output, i, j);
@@ -142,6 +143,7 @@ void normalize(NormalizeLayer * const l)
     PERF_FUNC_START();
     PERF_ADD_METRICS(flops, bytes);
 
+#pragma omp parallel for
     for (size_t i = 0; i < B; i++) {
         double norm = 0.0;
         for (size_t j = 0; j < N; j++) {
@@ -188,6 +190,7 @@ void linear(LinearLayer* const l)
         uint64_t bytes = 3ULL * B * N * sizeof(double);
         PERF_ADD_METRICS(flops, bytes);
 
+#pragma omp parallel for
         for (size_t i = 0; i < B; i++) {
             for (size_t j = 0; j < N; j++) {
                 MAT_BOUNDS_CHECK(l->output, i, j);
@@ -217,6 +220,7 @@ void logsoft(LogSoftLayer* const l)
     PERF_FUNC_START();
     PERF_ADD_METRICS(flops, bytes);
 
+#pragma omp parallel for
     for (size_t i = 0; i < B; i++) {
         MAT_BOUNDS_CHECK(l->input, i, 0);
         double max = MAT_AT(l->input, i, 0);
@@ -259,6 +263,7 @@ double nll_loss(matrix_t* const yhat, matrix_t* const y)
     PERF_ADD_METRICS(flops, bytes);
 
     double loss = 0.0;
+#pragma omp parallel for reduction(+:loss)
 	for (size_t i = 0; i < B; i++) {
         size_t j;
 	    for (j = 0; j < N; j++) {
@@ -294,6 +299,7 @@ double accuracy(matrix_t* const yhat, matrix_t* const y)
     PERF_ADD_METRICS(flops, bytes);
 
     double acc = 0.0;
+#pragma omp parallel for reduction(+:acc)
 	for (size_t i = 0; i < B; i++) {
         // Find prediction
         size_t pred_class = 0;
@@ -343,6 +349,7 @@ void cross_entropy_backward(LogSoftLayer* const l, matrix_t* const y)
     PERF_FUNC_START();
     PERF_ADD_METRICS(flops, bytes);
 
+#pragma omp parallel for
     for (size_t i = 0; i < B; i++) {
         for (size_t j = 0; j < N; j++) {
             MAT_BOUNDS_CHECK(l->grad_input, i, j);
@@ -374,6 +381,7 @@ void linear_backward(LinearLayer* const l)
     // Column-major: grad_input = W^T @ grad_output
     // Row-major:    grad_input = grad_output @ W^T
     // Note: Row-major storage causes W to be implicitly transposed
+    // printf("linear_bwd_grad_input\n");
     PERF_CALL("linear_bwd_grad_input",
              dot_ex(l->grad_output, l->W, l->grad_input, false, true));
 
@@ -381,6 +389,7 @@ void linear_backward(LinearLayer* const l)
     // Column-major: grad_W = grad_output @ input^T
     // Row-major:    grad_W = input^T @ grad_output
     // Note: Similar reasoning - Row-major storage causes input to be implicitly transposed
+    // printf("linear_bwd_grad_W");
     PERF_CALL("linear_bwd_grad_W",
               dot_ex(l->input, l->grad_output, l->grad_W, true, false));
 
@@ -397,6 +406,7 @@ void linear_backward(LinearLayer* const l)
         PERF_ADD_METRICS(flops, bytes);
 
         // Sum gradients across batch dimension
+#pragma omp parallel for
         for (size_t batch = 0; batch < B; batch++) {
             for (size_t i = 0; i < N; i++) {
                 MAT_BOUNDS_CHECK(l->grad_bias, 0, i);
@@ -430,6 +440,7 @@ void normalize_backward(NormalizeLayer* const l)
     PERF_FUNC_START();
     PERF_ADD_METRICS(flops, bytes);
 
+#pragma omp parallel for
     for (size_t i = 0; i < B; i++) {
         double grad_local_data[N * N];
         matrix_t grad_local = {
@@ -487,6 +498,7 @@ void relu_backward(ReluLayer* const l)
     PERF_ADD_METRICS(flops, bytes);
 
     // TODO: grad_input = grad_output * fmaxf(0.0f, copysignf(1.0f, output));
+#pragma omp parallel for
     for (size_t i = 0; i < BATCH_DIM(l->output); i++) {
         for (size_t j = 0; j < NODE_DIM(l->output); j++) {
             MAT_AT(l->grad_input, i, j) = MAT_AT(l->grad_output, i, j);
@@ -514,17 +526,21 @@ void sageconv_backward(SageLayer* const l, graph_t* const g)
     PERF_FUNC_START();
 
     // Weight gradient
+    // printf("sage_bwd_grad_Wroot: ");
     PERF_CALL("sage_bwd_grad_Wroot",
               dot_ex(l->input, l->grad_output, l->grad_Wroot, true, false));
 
+    // printf("sage_bwd_grad_Wagg: ");
     PERF_CALL("sage_bwd_grad_Wagg",
                dot_ex(l->agg, l->grad_output, l->grad_Wagg, true, false));
 
+    // printf("sage_bwd_grad_input: ");
     PERF_CALL("sage_bwd_grad_input",
              dot_ex(l->grad_output, l->Wroot, l->grad_input, false, true));
 
     PERF_ADD_METRICS(edge_flops, edge_bytes);
 
+#pragma omp parallel for
     for (size_t edge = 0; edge < E; edge++) {
         size_t u0 = EDGE_AT(g, edge, 0);  // source
         size_t u1 = EDGE_AT(g, edge, 1);  // target

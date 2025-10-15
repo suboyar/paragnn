@@ -7,6 +7,8 @@
 #include <stdint.h>
 #include <time.h>
 
+#include <omp.h>
+
 #include "core.h"
 #include "perf.h"
 #include "matrix.h"
@@ -22,8 +24,12 @@
 #include "flag.h"
 
 #ifndef EPOCH
-#define EPOCH 1               // Goal is to have 500 epochs
-#endif
+#    ifdef USE_OGB_ARXIV
+#        define EPOCH 20               // Goal is to have 500 epochs
+#    else
+#        define EPOCH 1
+#    endif // USE_OGB_ARXIV
+#endif // EPOCH
 
 #ifndef LEARNING_RATE
 #define LEARNING_RATE 0.01f
@@ -42,6 +48,13 @@
 #endif // HIDDEN_DIM
 
 FileHandler csv_out = {0};
+
+void usage(FILE *stream)
+{
+    fprintf(stream, "Usage: ./paragnn [OPTIONS]\n");
+    fprintf(stream, "OPTIONS:\n");
+    flag_print_options(stream);
+}
 
 void print_cpu_affinity()
 {
@@ -178,6 +191,7 @@ int main(int argc, char** argv)
     flag_str_var(&csv_out.filename, "csv", csv_out.filename, "Name of the csv file to output to");
 
     if (!flag_parse(argc, argv)) {
+        usage(stderr);
         flag_print_error(stderr);
         exit(1);
     }
@@ -215,8 +229,9 @@ int main(int argc, char** argv)
     CONNECT_LAYER(SAGE_NET_OUTPUT(sage_net), logsoftlayer);
 #endif // USE_PREDICTION_HEAD
 
+    PERF_START("run_time");
     for (size_t epoch = 1; epoch <= EPOCH; epoch++) {
-
+        PERF_START("epoch");
         inference(sage_net, linearlayer, logsoftlayer, train_graph);
 
         double loss = nll_loss(logsoftlayer->output, train_graph->y) / BATCH_DIM(train_graph->y);
@@ -224,15 +239,23 @@ int main(int argc, char** argv)
         printf("[epoch %zu] loss: %f, accuracy: %f\n", epoch, loss, acc);
 
         train(sage_net, linearlayer, logsoftlayer, train_graph);
+        PERF_END("epoch");
     }
-
+    PERF_END("run_time");
+    
     PERF_PRINT();
     if (csv_out.fp != NULL) PERF_CSV(csv_out.fp);
+
+    double total_time;
+    PERF_GET_METRIC("run_time", TOTAL_TIME, &total_time);
+    printf("Total run time: %f\n", total_time);
 
     destroy_sage_net(sage_net);
 #ifdef USE_PREDICTION_HEAD
     destroy_linear_layer(linearlayer);
 #endif
+    destroy_logsoft_layer(logsoftlayer);
+
     destroy_graph(train_graph);
     destroy_graph(valid_graph);
     destroy_graph(test_graph);

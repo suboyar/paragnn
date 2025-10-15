@@ -38,7 +38,7 @@ static inline size_t get_idx(HashTable* ht, const char* key) {
     return (size_t)(hash & (ht->capacity-1));
 }
 
-static PerfEntry* find_or_create_entry(HashTable* ht, const char* name) {
+static PerfEntry* find_entry(HashTable* ht, const char* name) {
     size_t idx = get_idx(ht, name);
     PerfEntry* p = ht->entries + idx;
     PerfEntry* end = ht->entries + ht->capacity;
@@ -50,9 +50,24 @@ static PerfEntry* find_or_create_entry(HashTable* ht, const char* name) {
         p++;
     }
 
-    if (p >= end) {
-        fprintf(stderr, "ERROR: Benchmark hash table is full! Cannot create entry for '%s'\n", name);
+    return NULL;
+}
+
+static PerfEntry* find_or_create_entry(HashTable* ht, const char* name) {
+    if (ht->count >= ht->capacity) {
+        fprintf(stderr, "ERROR: Benchmark hash-table is full! Cannot create entry for '%s'\n", name);
         return NULL;
+    }
+
+    size_t idx = get_idx(ht, name);
+    PerfEntry* p = ht->entries + idx;
+    PerfEntry* end = ht->entries + ht->capacity;
+
+    while (p < end && p->name != NULL) {
+        if (strcmp(p->name, name) == 0) {
+            return p;
+        }
+        p++;
     }
 
     p->name = name;
@@ -124,6 +139,38 @@ void perf_clear(HashTable* ht)
     memset(ht->entries, 0, sizeof(PerfEntry) * ht->capacity);
     ht->count = 0;
 }
+
+void perf_get_metric(HashTable* ht, const char* name, PerfMetric metric, void* ret)
+{
+    PerfEntry* entry = find_entry(ht, name);
+    if (entry == NULL) {
+        ERROR("Benchmark entry '%s' not found", name);
+    }
+
+    switch (metric) {
+    case TOTAL_TIME:
+        *(double*)ret = entry->total_time;
+        break;
+    case MIN_TIME:
+        *(double*)ret = entry->min_time;
+        break;
+    case MAX_TIME:
+        *(double*)ret = entry->max_time;
+        break;
+    case COUNT:
+        *(size_t*)ret = entry->count;
+        break;
+    case FLOP:
+        *(size_t*)ret = entry->flop;
+        break;
+    case BYTES:
+        *(size_t*)ret = entry->bytes;
+        break;
+    default:
+        assert(false && "Unreachable code");
+    }
+}
+
 
 static int cmp_by_total_time(const void* a, const void* b)
 {

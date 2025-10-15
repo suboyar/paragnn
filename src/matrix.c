@@ -4,6 +4,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <omp.h>
+
 #include "matrix.h"
 #include "perf.h"
 
@@ -159,6 +161,7 @@ OpMetrics dot(matrix_t *A, matrix_t *B, matrix_t *C)
     uint64_t flops = 2ULL * M * P * N;
     uint64_t bytes = (2ULL * M * N * P) + (M * P) * sizeof(double);
 
+#pragma omp parallel for
     for (size_t i = 0; i < M; i++) {
         for (size_t j = 0; j < P; j++) {
             double sum = 0.0;
@@ -187,6 +190,7 @@ OpMetrics dot_agg(matrix_t *A, matrix_t *B, matrix_t *C)
     uint64_t flops = (2ULL * M * P * N) + (M * P);
     uint64_t bytes = (2ULL * M * N * P) + (2ULL * M * P) * sizeof(double);
 
+#pragma omp parallel for
     for (size_t i = 0; i < M; i++) {
         for (size_t j = 0; j < P; j++) {
             double sum = 0.0;
@@ -230,6 +234,7 @@ OpMetrics dot_ex(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt)
     size_t b_col_stride = bt ? B->width : 1;
 
     // TODO unroll and jam
+#pragma omp parallel for
     for (size_t i = 0; i < M; i++) {
         for (size_t j = 0; j < P; j++) {
             double sum = 0.0;
@@ -265,6 +270,7 @@ OpMetrics dot_agg_ex(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt)
     uint64_t bytes = (2ULL * M * N * P) + (2ULL * M * P) * sizeof(double);
 
     // TODO unroll and jam
+#pragma omp parallel for
     for (size_t i = 0; i < M; i++) {
         for (size_t j = 0; j < P; j++) {
             double sum = 0.0;
