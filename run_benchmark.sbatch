@@ -239,19 +239,19 @@ function rome16q_affinity()
 
 case ${SLURM_JOB_PARTITION} in
     defq)
-        defq_affinity ;;
+        time defq_affinity ;;
     fpgaq)
-        fpgaq_affinity ;;
+        time fpgaq_affinity ;;
     genoaxq)
-        genoaxq_affinity ;;
+        time genoaxq_affinity ;;
     gh200q)
-        gh200q_affinity ;;
+        time gh200q_affinity ;;
     milanq)
-        milanq_affinity ;;
+        time milanq_affinity ;;
     xeonmaxq)
-        xeonmaxq_affinity ;;
+        time xeonmaxq_affinity ;;
     rome16q)
-        rome16q_affinity ;;
+        time rome16q_affinity ;;
     *)
         echo "Unknown partition: ${SLURM_JOB_PARTITION}"
         exit 1
