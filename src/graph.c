@@ -7,7 +7,7 @@ static graph_t* init_graph(size_t num_nodes, size_t num_edges, size_t num_featur
 {
     graph_t* g = malloc(sizeof(*g));
 
-    g->num_edges = 0;   // Edges needs to be counted one by one while partitioning the graph into train/valid/test splits
+    g->num_edges = num_edges;
     g->num_nodes = num_nodes;
     g->num_node_features = num_features;
     g->num_label_classes = num_labels;
