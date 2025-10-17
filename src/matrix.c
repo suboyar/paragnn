@@ -225,7 +225,7 @@ OpMetrics dot_ex(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt)
     size_t P = eff_B_cols;
 
     uint64_t flops = 2ULL * M * N * P;
-    uint64_t bytes = (2ULL * N * P * M) + (P * M) * sizeof(double);
+    uint64_t bytes = ((2ULL * N * P * M) + (P * M)) * sizeof(double);
 
     // Precompute strides for each matrix
     size_t a_row_stride = at ? 1 : A->width;

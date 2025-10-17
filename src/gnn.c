@@ -186,7 +186,7 @@ void linear(LinearLayer* const l)
         size_t B = BATCH_DIM(l->output);
         size_t N = NODE_DIM(l->output);
 
-        uint64_t flops = B * N * sizeof(double);
+        uint64_t flops = B * N;
         uint64_t bytes = 3ULL * B * N * sizeof(double);
         PERF_ADD_METRICS(flops, bytes);
 
@@ -435,7 +435,7 @@ void normalize_backward(NormalizeLayer* const l)
     size_t N = NODE_DIM(l->input);
 
     uint64_t flops = 6ULL * B * N * N;
-    uint64_t bytes = B * N * (8ULL * N + 3ULL);
+    uint64_t bytes = B * N * (8ULL * N + 3ULL) * sizeof(double);
 
     PERF_FUNC_START();
     PERF_ADD_METRICS(flops, bytes);
@@ -514,16 +514,15 @@ void relu_backward(ReluLayer* const l)
 
 void sageconv_backward(SageLayer* const l, graph_t* const g)
 {
-    // TODO: shape assert
-
     size_t E = g->num_edges;
     size_t B = BATCH_DIM(l->Wagg);
     size_t N = NODE_DIM(l->grad_output);
 
-    uint64_t edge_flops = (2ULL * E * B * N) + (2ULL * E * B);
-    uint64_t edge_bytes = ((2ULL * E) + (2ULL * E * B * N) + (3ULL * E * B)) * sizeof(double);
+    uint64_t neighbor_flops = (2ULL * E * B * N) + (2ULL * E * B);
+    uint64_t neighbor_bytes = ((2ULL * E) + (2ULL * E * B * N) + (3ULL * E * B)) * sizeof(double);
 
     PERF_FUNC_START();
+    PERF_ADD_METRICS(neighbor_flops, neighbor_bytes);
 
     // Weight gradient
     // printf("sage_bwd_grad_Wroot: ");
@@ -535,10 +534,11 @@ void sageconv_backward(SageLayer* const l, graph_t* const g)
                dot_ex(l->agg, l->grad_output, l->grad_Wagg, true, false));
 
     // printf("sage_bwd_grad_input: ");
-    PERF_CALL("sage_bwd_grad_input",
+    PERF_CALL("sage_bwd_grad_input_self",
              dot_ex(l->grad_output, l->Wroot, l->grad_input, false, true));
 
-    PERF_ADD_METRICS(edge_flops, edge_bytes);
+    PERF_START("sageconv_bwd_grad_neighbor");
+    PERF_ADD_METRICS(neighbor_flops, neighbor_bytes);
 
 #pragma omp parallel for
     for (size_t edge = 0; edge < E; edge++) {
@@ -558,6 +558,8 @@ void sageconv_backward(SageLayer* const l, graph_t* const g)
             MAT_AT(l->grad_input, u0, i) += sum * l->mean_scale[u1];
         }
     }
+
+    PERF_END("sageconv_bwd_grad_neighbor");
 
     PERF_FUNC_END();
     nob_log(NOB_INFO, "sageconv_backward: ok");
