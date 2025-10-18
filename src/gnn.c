@@ -15,25 +15,29 @@
 #include "nob.h"
 
 // Forward propagation
-#define SAMPLE_SIZE 10 // XXX: Placeholder unitl I implement proper neighbor samplig
+// #define SAMPLE_SIZE 10 // XXX: Placeholder unitl I implement proper neighbor samplig
 OpMetrics aggregate(SageLayer* const l, graph_t* const g)
 {
     size_t B = BATCH_DIM(l->input);
     size_t E = g->num_edges;
     size_t N = NODE_DIM(l->agg);
 
-    uint64_t bytes = B * (2*E + 3*SAMPLE_SIZE*N + 5*N + 2*SAMPLE_SIZE + 2) * sizeof(double);
-    uint64_t flops = B * (SAMPLE_SIZE*N + N + 1);
+    uint64_t bytes = 3ULL*E*B*sizeof(size_t) + 2ULL*N*B*sizeof(double) + (E-1ULL)*B*sizeof(size_t) +
+                     3ULL*N*(E-1)*B*sizeof(double) + B*sizeof(double) + 3ULL*N*B*sizeof(double);
+    uint64_t flops = N*(E-1ULL)*B + B + N*B;
 
-#pragma omp parallel for
+#pragma omp parallel
+{
+    size_t* adj = malloc(E * sizeof(size_t));
+
+#pragma omp for
     for (size_t v = 0; v < B; v++) {
-        size_t adj[SAMPLE_SIZE] = {0};
         size_t neigh_count = 0;
 
         // NOTE: Collects neighbors from only incoming direction.
 
         // Find neighbors of count sample size
-        for (size_t edge = 0; edge < E && neigh_count < SAMPLE_SIZE; edge++) {
+        for (size_t edge = 0; edge < E; edge++) {
             EDGE_BOUNDS_CHECK(g, edge, 0);
             size_t u0 = EDGE_AT(g, edge, 0);
             EDGE_BOUNDS_CHECK(g, edge, 1);
@@ -43,6 +47,7 @@ OpMetrics aggregate(SageLayer* const l, graph_t* const g)
                 adj[neigh_count++] = u0;
             }
         }
+        // 3bytes * E * B * sizeof(size_t)
 
         if (neigh_count == 0) {
             for (size_t f = 0; f < N; f++) {
@@ -51,15 +56,17 @@ OpMetrics aggregate(SageLayer* const l, graph_t* const g)
             }
             continue;
         }
+        // Skiped as this isn't worst-case
 
         // Copy the first neighbor features to memory space for aggregation
-        size_t u = adj[0];
+        size_t u = adj[0];      //  B*szof(size_t)
         for (size_t f = 0; f < N; f++) {
-            // TODO: memcpy(MAT_ROW(out, v), MAT_ROW(in, u), g->num_node_features * sizeof(*out->data));
+         // TODO: memcpy(MAT_ROW(out, v), MAT_ROW(in, u), g->num_node_features * sizeof(*out->data));
             MAT_BOUNDS_CHECK(l->agg, v, f);
             MAT_BOUNDS_CHECK(l->input, u, f);
             MAT_AT(l->agg, v, f) = MAT_AT(l->input, u, f);
         }
+        // 2bytes * N * B * sizeof(double)
 
         // Add remaining neighbors
         for (size_t i = 1; i < neigh_count; i++) {
@@ -70,14 +77,22 @@ OpMetrics aggregate(SageLayer* const l, graph_t* const g)
                 MAT_AT(l->agg, v, f) += MAT_AT(l->input, u, f);
             }
         }
+        // 1byte * (E-1) * B * sizeof(size_t) + 3bytes * N * (E-1) * B * sizeof(double)
+        // 1FLOP * N * (E-1) * B
 
         // Aggregation with mean
-        l->mean_scale[v] = (float)1/neigh_count;
+        l->mean_scale[v] = (double)1/neigh_count;
         for (size_t f = 0; f < N; f++) {
             MAT_BOUNDS_CHECK(l->agg, v, f);
             MAT_AT(l->agg, v, f) *= l->mean_scale[v];
         }
+        // 1 Byte * B * sizeof(double) + 3bytes * N * B * sizeof(double)
+        // 1 FLOP * B + 1FLOP * N * B
     }
+
+    free(adj);
+}
+
     return (OpMetrics){.flops = flops, .bytes = bytes};
 }
 
@@ -524,8 +539,6 @@ void sageconv_backward(SageLayer* const l, graph_t* const g)
     PERF_FUNC_START();
     PERF_ADD_METRICS(neighbor_flops, neighbor_bytes);
 
-    // Weight gradient
-    // printf("sage_bwd_grad_Wroot: ");
     PERF_CALL("sage_bwd_grad_Wroot",
               dot_ex(l->input, l->grad_output, l->grad_Wroot, true, false));
 
