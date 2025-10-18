@@ -2,8 +2,7 @@
 
 #SBATCH --job-name="paragnn"
 #SBATCH --exclusive
-#SBATCH --output=logs/%j-%x.out
-#SBATCH --error=logs/%j-%x.err
+#SBATCH --output=logs/%j_%x.out
 
 set -e
 
@@ -12,7 +11,15 @@ RESULT_DIR="results/${SLURM_JOB_PARTITION}/${TIMESTAMP}"
 BUILD_DIR=build/${SLURM_JOB_PARTITION}
 EXEC=${BUILD_DIR}/paragnn
 
-./nob -rebuild -release -outdir ${BUILD_DIR}
+ARCH=$(uname -m)
+NOB="./nob_${ARCH}"
+
+if [ ! -f "${NOB}" ]; then
+    gcc -o "${NOB}" nob.c
+fi
+
+${NOB} -rebuild -release -outdir ${BUILD_DIR}
+
 mkdir -p ${RESULT_DIR}
 module load numactl
 
