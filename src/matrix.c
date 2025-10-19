@@ -138,7 +138,7 @@ void mat_transpose_to(matrix_t *A, matrix_t *B)
     assert(A->width == B->height);
 
     size_t height = A->height;
-    size_t width = B->width;
+    size_t width = A->width;
     for (size_t i = 0; i < height; i++) {
         for (size_t j = 0; j < width; j++) {
             MAT_AT(B, j, i) = MAT_AT(A, i, j);
