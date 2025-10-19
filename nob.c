@@ -28,6 +28,14 @@
                    "-Werror=implicit-function-declaration",             \
                    "-Werror=incompatible-pointer-types")
 
+#define SUBMIT_DESC "Job submission partition\n        Valid: defq, fpgaq, genoaxq, gh200q, milanq, xeonmaxq, rome16q, bench, dev, list"
+
+typedef struct {
+    const char* obj_path;
+    const char* src_path;
+    const char* exec_path;
+} BuildTarget;
+
 typedef struct {
     bool  build;
     bool  run;
@@ -37,7 +45,7 @@ typedef struct {
     bool  help;
     char*  submit;
     char* out_dir;
-    // char* variant;
+    char* kernel;
     int rest_argc;
     char** rest_argv;
 } Flags;
@@ -145,32 +153,86 @@ char* to_define_flag(const char* str)
     return nob_temp_sprintf("-D%s", sb.items);
 }
 
-int run_paragnn()
+int compile_src_files(BuildTarget* targets, size_t len)
 {
-    const char *exec = "paragnn";
-    char *out_dir = BUILD_FOLDER;
+    for (size_t i = 0; i < len; ++i) {
+        if (NOB_NEEDS_REBUILD1(targets[i].obj_path, targets[i].src_path) > 0) {
+            nob_cc(&cmd);
+            nob_cc_flags(&cmd);
+            nob_cc_error_flags(&cmd);
+            nob_cmd_append(&cmd, "-I.");
+            nob_cmd_append(&cmd, "-I"SRC_FOLDER);
 
-    // if (flags.variant != NULL){
-    //     out_dir = nob_temp_sprintf("%s%s/", out_dir, flags.variant);
-    // }
+            if (flags.release) {
+                nob_cmd_append(&cmd, "-O3", "-march=native", "-DNDEBUG");
+                nob_cmd_append(&cmd, "-DUSE_OGB_ARXIV");
+            } else {
+                nob_cmd_append(&cmd, "-O0", "-ggdb", "-g3", "-gdwarf-2");
+            }
 
-    const char* exec_path = nob_temp_sprintf("./%s%s", out_dir, exec);
-    int ret = nob_file_exists(exec_path);
-    if (ret != 1) {
-        if (ret == 0) {
-            nob_log(NOB_ERROR, "Failed to execute %s: executable not found", exec_path);
+            nob_cmd_append(&cmd, "-fopenmp");
+
+            nob_cc_output(&cmd, targets[i].obj_path);
+            nob_cmd_append(&cmd, "-c", targets[i].src_path);
+            if (!nob_cmd_run(&cmd, .async = &procs)) return 1;
         }
-        return 1;
     }
 
-    nob_cmd_append(&cmd, exec_path);
-    for (int i = 0; i < flags.rest_argc; i++) {
-        nob_cmd_append(&cmd, flags.rest_argv[i]);
+    if (!nob_procs_flush(&procs)) return 1;
+}
+
+int build_kernel_bench()
+{
+    char *out_dir = BUILD_FOLDER"kernels/";
+    char *src_dir = "kernels/";
+
+    nob_mkdir_if_not_exists_recursvily(out_dir);
+
+    BuildTarget commons[] = {
+        {.obj_path = (nob_temp_sprintf("%s%s", out_dir, "matrix.o")), .src_path = SRC_FOLDER"matrix.c"},
+        {.obj_path = (nob_temp_sprintf("%s%s", out_dir, "perf.o")),   .src_path = SRC_FOLDER"perf.c"},
+    };
+
+    const char* exec_path = nob_temp_sprintf("%s%s", out_dir, "dot_ex");
+    const char* src_path = nob_temp_sprintf("%s%s", src_dir, "dot_ex.c");
+
+    // Compile src files
+    if (compile_src_files(commons, NOB_ARRAY_LEN(commons)) != 0) return 1;
+
+    const char* deps[NOB_ARRAY_LEN(commons)+1];
+    deps[0] = src_path;
+    for (size_t i = 1; i < NOB_ARRAY_LEN(commons)+1; ++i) {
+        deps[i] = commons[i].obj_path;
     }
-    if (!nob_cmd_run(&cmd)) return 1;
 
 
-    return 0;
+    // Link object files
+    if (NOB_NEEDS_REBUILD(exec_path, deps, NOB_ARRAY_LEN(commons)+1) > 0) {
+        nob_cc(&cmd);
+        nob_cc_flags(&cmd);
+        nob_cc_error_flags(&cmd);
+        nob_cmd_append(&cmd, "-I.");
+        nob_cmd_append(&cmd, "-I"SRC_FOLDER);
+        if (flags.release) {
+            nob_cmd_append(&cmd, "-O3", "-march=native", "-DNDEBUG");
+        } else {
+            nob_cmd_append(&cmd, "-O0", "-ggdb", "-g3", "-gdwarf-2");
+        }
+        nob_cmd_append(&cmd, "-fopenmp");
+        nob_cmd_append(&cmd, "-ffast-math");
+        nob_cc_output(&cmd, exec_path);
+        nob_cc_inputs(&cmd, src_path);
+        for (size_t i = 0; i < NOB_ARRAY_LEN(commons); ++i) {
+            nob_cc_inputs(&cmd, commons[i].obj_path);
+        }
+        nob_cmd_append(&cmd, "-lm");
+        if (!nob_cmd_run(&cmd)) return 1;
+    }
+
+    if (flags.run) {
+        nob_cmd_append(&cmd, exec_path);
+        if (!nob_cmd_run(&cmd)) return 1;
+    }
 }
 
 int build_paragnn()
@@ -181,9 +243,6 @@ int build_paragnn()
         out_dir = flags.out_dir;
     }
 
-    // nob_cmd_append(&cmd, "mkdir", "-p", out_dir)
-    // if (!nob_cmd_run(&cmd)) return 1;
-
     if ((out_dir[strlen(out_dir)-1]) != '/') {
         out_dir = nob_temp_sprintf("%s/", out_dir);
     }
@@ -191,20 +250,13 @@ int build_paragnn()
     nob_mkdir_if_not_exists_recursvily(out_dir);
 
     const char* exec_path = nob_temp_sprintf("%s%s", out_dir, exec);
-    const char* variant_path = SRC_FOLDER;
-    // if (flags.variant != NULL) {
-    //     variant_path = nob_temp_sprintf("%s%s/", variant_path, flags.variant);
-    // }
 
-    struct {
-        const char* obj_path;
-        const char* src_path;
-    } targets[] = {
-        {.obj_path = (nob_temp_sprintf("%s%s", out_dir, "gnn.o")),    .src_path = nob_temp_sprintf("%s%s", variant_path, "gnn.c")},
+    BuildTarget targets[] = {
+        {.obj_path = (nob_temp_sprintf("%s%s", out_dir, "gnn.o")),    .src_path = SRC_FOLDER"gnn.c"},
         {.obj_path = (nob_temp_sprintf("%s%s", out_dir, "graph.o")),  .src_path = SRC_FOLDER"graph.c"},
-        {.obj_path = (nob_temp_sprintf("%s%s", out_dir, "layers.o")), .src_path = nob_temp_sprintf("%s%s", variant_path, "layers.c")},
+        {.obj_path = (nob_temp_sprintf("%s%s", out_dir, "layers.o")), .src_path = SRC_FOLDER"layers.c"},
         {.obj_path = (nob_temp_sprintf("%s%s", out_dir, "main.o")),   .src_path = SRC_FOLDER"main.c"},
-        {.obj_path = (nob_temp_sprintf("%s%s", out_dir, "matrix.o")), .src_path = nob_temp_sprintf("%s%s", variant_path, "matrix.c")},
+        {.obj_path = (nob_temp_sprintf("%s%s", out_dir, "matrix.o")), .src_path = SRC_FOLDER"matrix.c"},
         {.obj_path = (nob_temp_sprintf("%s%s", out_dir, "perf.o")),   .src_path = SRC_FOLDER"perf.c"},
     };
 
@@ -216,19 +268,13 @@ int build_paragnn()
             nob_cc_error_flags(&cmd);
             nob_cmd_append(&cmd, "-I.");
             nob_cmd_append(&cmd, "-I"SRC_FOLDER);
-            nob_cmd_append(&cmd, nob_temp_sprintf("-I%s", variant_path));
-
-            // if (flags.variant != NULL) {
-            //     if (strcmp(flags.variant, "baseline") == 0) {
-            //         // Default optimizations
-            //         nob_cmd_append(&cmd, "-DBASELINE");
-            //     }
-            // }
 
             if (flags.release) {
                 nob_cmd_append(&cmd, "-O3", "-march=native", "-DNDEBUG");
                 nob_cmd_append(&cmd, "-DUSE_OGB_ARXIV");
             } else {
+                // nob_cmd_append(&cmd, "-DUSE_OGB_ARXIV");
+                            // nob_cmd_append(&cmd, "-DEPOCH=3");
                 nob_cmd_append(&cmd, "-O0", "-ggdb", "-g3", "-gdwarf-2");
             }
 
@@ -263,6 +309,14 @@ int build_paragnn()
             nob_cc_inputs(&cmd, targets[i].obj_path);
         }
         nob_cmd_append(&cmd, "-lm");
+        if (!nob_cmd_run(&cmd)) return 1;
+    }
+
+    if (flags.run) {
+        nob_cmd_append(&cmd, exec_path);
+        for (int i = 0; i < flags.rest_argc; i++) {
+            nob_cmd_append(&cmd, flags.rest_argv[i]);
+        }
         if (!nob_cmd_run(&cmd)) return 1;
     }
 
@@ -311,8 +365,8 @@ int clean()
 }
 
 int run_benchmark(const char* partition)
-{    
-    nob_cmd_append(&cmd, "sbatch");    
+{
+    nob_cmd_append(&cmd, "sbatch");
     nob_cmd_append(&cmd, "-p", partition);
     nob_cmd_append(&cmd, "-o", nob_temp_sprintf("logs/%s-%%x-%%j.out", partition));
     nob_cmd_append(&cmd, "run_benchmark.sbatch");
@@ -321,7 +375,7 @@ int run_benchmark(const char* partition)
 }
 
 int submit_job()
-{    
+{
     if (!nob_mkdir_if_not_exists("logs/")) return 1;
 
     bool is_bench = strcmp(flags.submit, "bench") == 0;
@@ -330,10 +384,10 @@ int submit_job()
     if (is_bench || is_dev) {
         for (size_t i = 0; i < NOB_ARRAY_LEN(partitions); i++) {
             if (partitions[i].dev != is_dev) continue;
-            
+
             if (run_benchmark(partitions[i].name)) return 1;
         }
-        
+
         return 0;
     }
 
@@ -357,15 +411,15 @@ int main(int argc, char** argv)
 {
     NOB_GO_REBUILD_URSELF(argc, argv);
 
-    flag_bool_var(&flags.build,   "build",   false,     "Build the project");
-    flag_bool_var(&flags.run,     "run",     false,     "Run the project");
-    flag_bool_var(&flags.rebuild, "rebuild", false,     "Force a complete rebuild");
-    flag_str_var(&flags.out_dir,  "outdir",  NULL,      "Where to build to");
-    flag_bool_var(&flags.release, "release", false,     "Build in release mode");
-    flag_str_var(&flags.submit,   "submit",  NULL, "Job submission partition\n"
-                                                        "        Valid: defq, fpgaq, genoaxq, gh200q, milanq, xeonmaxq, rome16q, bench, dev, list");
-    flag_bool_var(&flags.ogb,     "ogb",     false,     "Build OGB decoder");
-    flag_bool_var(&flags.help,    "help",    false,     "Print this help message");
+    flag_bool_var(&flags.build,         "build",   false, "Build the project");
+    flag_bool_var(&flags.run,           "run",     false, "Run the project");
+    flag_bool_var(&flags.rebuild,       "rebuild", false, "Force a complete rebuild");
+    flag_str_var(&flags.out_dir,        "outdir",  NULL,  "Where to build to");
+    flag_bool_var(&flags.release,       "release", false, "Build in release mode");
+    flag_str_var(&flags.submit,         "submit",  NULL,  SUBMIT_DESC);
+    flag_bool_var(&flags.ogb,           "ogb",     false, "Build OGB decoder");
+    flag_str_var(&flags.kernel,         "kernel",  NULL,  "Build kernel benchmarks (aggregate, normalize_bwd, dot_ex)");
+    flag_bool_var(&flags.help,          "help",    false, "Print this help message");
 
     if (!flag_parse(argc, argv)) {
         usage(stderr);
@@ -393,6 +447,10 @@ int main(int argc, char** argv)
         return build_ogb();
     }
 
+    if (flags.kernel != NULL) {
+        return build_kernel_bench();
+    }
+
     else if (flags.submit != NULL) {
         if (strcmp(flags.submit, "list") == 0) {
             list_all_partitions();
@@ -400,13 +458,6 @@ int main(int argc, char** argv)
         }
 
         return submit_job();
-    }
-
-    if (flags.run) {
-        if (flags.build || flags.rebuild) {
-            if (build_paragnn()) return 1;
-        }
-        return run_paragnn();
     }
 
     if (flags.build || flags.rebuild) {
