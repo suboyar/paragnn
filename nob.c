@@ -183,31 +183,40 @@ int compile_src_files(BuildTarget* targets, size_t len)
 
 int build_kernel_bench()
 {
-    char *out_dir = BUILD_FOLDER"kernels/";
-    char *src_dir = "kernels/";
+    char *out_dir = BUILD_FOLDER;
+    char *kernel_dir = "kernels/";
 
     nob_mkdir_if_not_exists_recursvily(out_dir);
 
-    BuildTarget commons[] = {
-        {.obj_path = (nob_temp_sprintf("%s%s", out_dir, "matrix.o")), .src_path = SRC_FOLDER"matrix.c"},
-        {.obj_path = (nob_temp_sprintf("%s%s", out_dir, "perf.o")),   .src_path = SRC_FOLDER"perf.c"},
-    };
+    const char* exec_path = NULL;
+    const char* kernel_src = NULL;
+    const char* kernel_obj = NULL;
 
-    const char* exec_path = nob_temp_sprintf("%s%s", out_dir, "dot_ex");
-    const char* src_path = nob_temp_sprintf("%s%s", src_dir, "dot_ex.c");
-
-    // Compile src files
-    if (compile_src_files(commons, NOB_ARRAY_LEN(commons)) != 0) return 1;
-
-    const char* deps[NOB_ARRAY_LEN(commons)+1];
-    deps[0] = src_path;
-    for (size_t i = 1; i < NOB_ARRAY_LEN(commons)+1; ++i) {
-        deps[i] = commons[i].obj_path;
+    if (strcmp(flags.kernel, "dot-ex") == 0) {
+        exec_path = nob_temp_sprintf("%s%s", out_dir, "dot-ex");
+        kernel_src = nob_temp_sprintf("%s%s", kernel_dir, "dot_ex.c");
+        kernel_obj = nob_temp_sprintf("%s%s", out_dir, "dot_ex.o");
+    } else {
+        nob_log(NOB_ERROR, "Wrong value passed to '-kernel': %s", flags.kernel);
+        return 1;
     }
 
+    BuildTarget targets[] = {
+        {.obj_path = (nob_temp_sprintf("%s%s", out_dir, "matrix.o")), .src_path = SRC_FOLDER"matrix.c"},
+        {.obj_path = (nob_temp_sprintf("%s%s", out_dir, "perf.o")),   .src_path = SRC_FOLDER"perf.c"},
+        {.obj_path = kernel_obj,                                      .src_path = kernel_src}
+    };
+
+    // Compile src files
+    if (compile_src_files(targets, NOB_ARRAY_LEN(targets)) != 0) return 1;
+
+    const char* deps[NOB_ARRAY_LEN(targets)];
+    for (size_t i = 0; i < NOB_ARRAY_LEN(targets); ++i) {
+        deps[i] = targets[i].obj_path;
+    }
 
     // Link object files
-    if (NOB_NEEDS_REBUILD(exec_path, deps, NOB_ARRAY_LEN(commons)+1) > 0) {
+    if (NOB_NEEDS_REBUILD(exec_path, deps, NOB_ARRAY_LEN(deps)) > 0) {
         nob_cc(&cmd);
         nob_cc_flags(&cmd);
         nob_cc_error_flags(&cmd);
@@ -221,9 +230,9 @@ int build_kernel_bench()
         nob_cmd_append(&cmd, "-fopenmp");
         nob_cmd_append(&cmd, "-ffast-math");
         nob_cc_output(&cmd, exec_path);
-        nob_cc_inputs(&cmd, src_path);
-        for (size_t i = 0; i < NOB_ARRAY_LEN(commons); ++i) {
-            nob_cc_inputs(&cmd, commons[i].obj_path);
+        // nob_cc_inputs(&cmd, kernel_path);
+        for (size_t i = 0; i < NOB_ARRAY_LEN(targets); ++i) {
+            nob_cc_inputs(&cmd, targets[i].obj_path);
         }
         nob_cmd_append(&cmd, "-lm");
         if (!nob_cmd_run(&cmd)) return 1;
@@ -233,6 +242,8 @@ int build_kernel_bench()
         nob_cmd_append(&cmd, exec_path);
         if (!nob_cmd_run(&cmd)) return 1;
     }
+
+    return 0;
 }
 
 int build_paragnn()
@@ -368,6 +379,10 @@ int run_benchmark(const char* partition)
 {
     nob_cmd_append(&cmd, "sbatch");
     nob_cmd_append(&cmd, "-p", partition);
+    if (flags.kernel != NULL) {
+        nob_cmd_append(&cmd, nob_temp_sprintf("--export=BENCHMARK_TARGET=%s", flags.kernel));
+        nob_cmd_append(&cmd, "-J", flags.kernel);
+    }
     nob_cmd_append(&cmd, "-o", nob_temp_sprintf("logs/%s-%%x-%%j.out", partition));
     nob_cmd_append(&cmd, "run_benchmark.sbatch");
     if (!nob_cmd_run(&cmd)) return 1;
@@ -447,17 +462,17 @@ int main(int argc, char** argv)
         return build_ogb();
     }
 
-    if (flags.kernel != NULL) {
-        return build_kernel_bench();
-    }
-
-    else if (flags.submit != NULL) {
+    if (flags.submit != NULL) {
         if (strcmp(flags.submit, "list") == 0) {
             list_all_partitions();
             return 0;
         }
 
         return submit_job();
+    }
+
+    if (flags.kernel != NULL) {
+        return build_kernel_bench();
     }
 
     if (flags.build || flags.rebuild) {
