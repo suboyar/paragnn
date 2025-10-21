@@ -15,85 +15,74 @@
 #include "nob.h"
 
 // Forward propagation
-// #define SAMPLE_SIZE 10 // XXX: Placeholder unitl I implement proper neighbor samplig
-OpMetrics aggregate(SageLayer* const l, graph_t* const g)
+void aggregate(SageLayer* const l, graph_t* const g)
 {
     size_t B = BATCH_DIM(l->input);
     size_t E = g->num_edges;
     size_t N = NODE_DIM(l->agg);
 
-    uint64_t bytes = 3ULL*E*B*sizeof(size_t) + 2ULL*N*B*sizeof(double) + (E-1ULL)*B*sizeof(size_t) +
-                     3ULL*N*(E-1)*B*sizeof(double) + B*sizeof(double) + 3ULL*N*B*sizeof(double);
-    uint64_t flops = N*(E-1ULL)*B + B + N*B;
+    // uint64_t flops = N*(E-1ULL)*B + B + N*B;
 
 #pragma omp parallel
-{
-    size_t* adj = malloc(E * sizeof(size_t));
+    {
+        size_t* adj = malloc(E * sizeof(size_t));
 
 #pragma omp for
-    for (size_t v = 0; v < B; v++) {
-        size_t neigh_count = 0;
+        for (size_t v = 0; v < B; v++) {
+            size_t neigh_count = 0;
 
-        // NOTE: Collects neighbors from only incoming direction.
+            // NOTE: Collects neighbors from only incoming direction.
 
-        // Find neighbors of count sample size
-        for (size_t edge = 0; edge < E; edge++) {
-            EDGE_BOUNDS_CHECK(g, edge, 0);
-            size_t u0 = EDGE_AT(g, edge, 0);
-            EDGE_BOUNDS_CHECK(g, edge, 1);
-            size_t u1 = EDGE_AT(g, edge, 1);
+            // Find neighbors of count sample size
+            for (size_t edge = 0; edge < E; edge++) {
+                EDGE_BOUNDS_CHECK(g, edge, 0);
+                size_t u0 = EDGE_AT(g, edge, 0);
+                EDGE_BOUNDS_CHECK(g, edge, 1);
+                size_t u1 = EDGE_AT(g, edge, 1);
 
-            if (v == u1) {  // Paper v cites u1
-                adj[neigh_count++] = u0;
+                if (v == u1) {  // Paper v cites u1
+                    adj[neigh_count++] = u0;
+                }
             }
-        }
-        // 3bytes * E * B * sizeof(size_t)
 
-        if (neigh_count == 0) {
-            for (size_t f = 0; f < N; f++) {
-                MAT_BOUNDS_CHECK(l->agg, v, f);
-                MAT_AT(l->agg, v, f) = 0;
+            if (neigh_count == 0) {
+                for (size_t f = 0; f < N; f++) {
+                    MAT_BOUNDS_CHECK(l->agg, v, f);
+                    MAT_AT(l->agg, v, f) = 0;
+                }
+                continue;
             }
-            continue;
-        }
-        // Skiped as this isn't worst-case
+            // Skiped as this isn't worst-case
 
-        // Copy the first neighbor features to memory space for aggregation
-        size_t u = adj[0];      //  B*szof(size_t)
-        for (size_t f = 0; f < N; f++) {
-         // TODO: memcpy(MAT_ROW(out, v), MAT_ROW(in, u), g->num_node_features * sizeof(*out->data));
-            MAT_BOUNDS_CHECK(l->agg, v, f);
-            MAT_BOUNDS_CHECK(l->input, u, f);
-            MAT_AT(l->agg, v, f) = MAT_AT(l->input, u, f);
-        }
-        // 2bytes * N * B * sizeof(double)
-
-        // Add remaining neighbors
-        for (size_t i = 1; i < neigh_count; i++) {
-            u = adj[i];
+            // Copy the first neighbor features to memory space for aggregation
+            size_t u = adj[0];
             for (size_t f = 0; f < N; f++) {
+                // TODO: memcpy(MAT_ROW(out, v), MAT_ROW(in, u), g->num_node_features * sizeof(*out->data));
                 MAT_BOUNDS_CHECK(l->agg, v, f);
                 MAT_BOUNDS_CHECK(l->input, u, f);
-                MAT_AT(l->agg, v, f) += MAT_AT(l->input, u, f);
+                MAT_AT(l->agg, v, f) = MAT_AT(l->input, u, f);
+            }
+
+            // Add remaining neighbors
+            for (size_t i = 1; i < neigh_count; i++) {
+                u = adj[i];
+                for (size_t f = 0; f < N; f++) {
+                    MAT_BOUNDS_CHECK(l->agg, v, f);
+                    MAT_BOUNDS_CHECK(l->input, u, f);
+                    MAT_AT(l->agg, v, f) += MAT_AT(l->input, u, f);
+                }
+            }
+
+            // Aggregation with mean
+            l->mean_scale[v] = (double)1/neigh_count;
+            for (size_t f = 0; f < N; f++) {
+                MAT_BOUNDS_CHECK(l->agg, v, f);
+                MAT_AT(l->agg, v, f) *= l->mean_scale[v];
             }
         }
-        // 1byte * (E-1) * B * sizeof(size_t) + 3bytes * N * (E-1) * B * sizeof(double)
-        // 1FLOP * N * (E-1) * B
 
-        // Aggregation with mean
-        l->mean_scale[v] = (double)1/neigh_count;
-        for (size_t f = 0; f < N; f++) {
-            MAT_BOUNDS_CHECK(l->agg, v, f);
-            MAT_AT(l->agg, v, f) *= l->mean_scale[v];
-        }
-        // 1 Byte * B * sizeof(double) + 3bytes * N * B * sizeof(double)
-        // 1 FLOP * B + 1FLOP * N * B
+        free(adj);
     }
-
-    free(adj);
-}
-
-    return (OpMetrics){.flops = flops, .bytes = bytes};
 }
 
 void sageconv(SageLayer* const l, graph_t* const g)
@@ -110,9 +99,17 @@ void sageconv(SageLayer* const l, graph_t* const g)
 
     PERF_FUNC_START();
 
-    PERF_CALL("aggregate", aggregate(l, g));
-    PERF_CALL("sage_Wroot", dot(l->input, l->Wroot, l->output));
-    PERF_CALL("sage_Wagg", dot_agg(l->agg, l->Wagg, l->output));
+    PERF_START("aggregate");
+    aggregate(l, g);
+    PERF_END("aggregate");
+
+    PERF_START("sage_Wroot");
+    dot(l->input, l->Wroot, l->output);
+    PERF_END("sage_Wroot");
+
+    PERF_START("sage_Wagg");
+    dot_agg(l->agg, l->Wagg, l->output);
+    PERF_END("sage_Wagg");
 
     PERF_FUNC_END();
 
@@ -126,11 +123,9 @@ void relu(ReluLayer* const l)
     size_t B = BATCH_DIM(l->input);
     size_t N = NODE_DIM(l->input);
 
-    uint64_t bytes = B * (2ULL * N) * sizeof(double);
-    uint64_t flops = 0;
+    // uint64_t flops = 0;
 
     PERF_FUNC_START();
-    PERF_ADD_METRICS(flops, bytes);
 
 #pragma omp parallel for
     for (size_t i = 0; i < B; i++) {
@@ -151,12 +146,9 @@ void normalize(NormalizeLayer * const l)
     size_t B = BATCH_DIM(l->input);
     size_t N = NODE_DIM(l->input);
 
-
-    uint64_t bytes = B * (4ULL * N + 1) * sizeof(double);
-    uint64_t flops = B * (3ULL * N + 2);
+    // uint64_t flops = B * (3ULL * N + 2);
 
     PERF_FUNC_START();
-    PERF_ADD_METRICS(flops, bytes);
 
 #pragma omp parallel for
     for (size_t i = 0; i < B; i++) {
@@ -229,11 +221,9 @@ void logsoft(LogSoftLayer* const l)
     size_t B = BATCH_DIM(l->input);
     size_t N = NODE_DIM(l->input);
 
-    uint64_t flops = B * (1ULL + 5ULL * N);
-    uint64_t bytes = B * (1ULL + 3ULL * N) * sizeof(double);
+    // uint64_t flops = B * (1ULL + 5ULL * N);
 
     PERF_FUNC_START();
-    PERF_ADD_METRICS(flops, bytes);
 
 #pragma omp parallel for
     for (size_t i = 0; i < B; i++) {
@@ -271,11 +261,9 @@ double nll_loss(matrix_t* const yhat, matrix_t* const y)
     size_t B = BATCH_DIM(yhat);
     size_t N = NODE_DIM(yhat);
 
-    uint64_t flops = B;
-    uint64_t bytes = (B * (3ULL * N)) * sizeof(double);
+    // uint64_t flops = B;
 
     PERF_FUNC_START();
-    PERF_ADD_METRICS(flops, bytes);
 
     double loss = 0.0;
 #pragma omp parallel for reduction(+:loss)
@@ -307,11 +295,9 @@ double accuracy(matrix_t* const yhat, matrix_t* const y)
     size_t B = BATCH_DIM(yhat);
     size_t N = NODE_DIM(yhat);
 
-    uint64_t bytes = B * (1 + N) * sizeof(double);
-    uint64_t flops = B;
+    // uint64_t flops = B;
 
     PERF_FUNC_START();
-    PERF_ADD_METRICS(flops, bytes);
 
     double acc = 0.0;
 #pragma omp parallel for reduction(+:acc)
@@ -358,11 +344,9 @@ void cross_entropy_backward(LogSoftLayer* const l, matrix_t* const y)
     size_t B = BATCH_DIM(l->output);
     size_t N =  NODE_DIM(l->output);
 
-    uint64_t flops = N * (N + 1ULL);
-    uint64_t bytes = B * (3ULL * N + 2ULL) * sizeof(double);
+    // uint64_t flops = N * (N + 1ULL);
 
     PERF_FUNC_START();
-    PERF_ADD_METRICS(flops, bytes);
 
 #pragma omp parallel for
     for (size_t i = 0; i < B; i++) {
@@ -396,19 +380,22 @@ void linear_backward(LinearLayer* const l)
     // Column-major: grad_input = W^T @ grad_output
     // Row-major:    grad_input = grad_output @ W^T
     // Note: Row-major storage causes W to be implicitly transposed
-    // printf("linear_bwd_grad_input\n");
-    PERF_CALL("linear_bwd_grad_input",
-             dot_ex(l->grad_output, l->W, l->grad_input, false, true));
+    // printf("linear_grad_input\n");
+    PERF_START("linear_grad_input");
+    dot_ex(l->grad_output, l->W, l->grad_input, false, true);
+    PERF_END("linear_grad_input");
 
     // Cost of weights:
     // Column-major: grad_W = grad_output @ input^T
     // Row-major:    grad_W = input^T @ grad_output
     // Note: Similar reasoning - Row-major storage causes input to be implicitly transposed
-    // printf("linear_bwd_grad_W");
-    PERF_CALL("linear_bwd_grad_W",
-              dot_ex(l->input, l->grad_output, l->grad_W, true, false));
+    // printf("linear_grad_W");
+    PERF_START("linear_grad_W");
+    dot_ex(l->input, l->grad_output, l->grad_W, true, false);
+    PERF_END("linear_grad_W");
 
     if (l->grad_bias != NULL) {
+        PERF_START("linear_grad_bias");
         MAT_ASSERT(l->bias, l->grad_bias);
         MAT_ASSERT_NODE(l->grad_output, l->grad_bias);
 
@@ -416,9 +403,7 @@ void linear_backward(LinearLayer* const l)
         size_t B = BATCH_DIM(l->grad_output);
         size_t N = NODE_DIM(l->grad_output);
 
-        uint64_t flops = B * N;
-        uint64_t bytes = 3ULL * B * N * sizeof(double);
-        PERF_ADD_METRICS(flops, bytes);
+        // uint64_t flops = B * N;
 
         // Sum gradients across batch dimension
 #pragma omp parallel for
@@ -432,6 +417,7 @@ void linear_backward(LinearLayer* const l)
             }
         }
 
+        PERF_END("linear_grad_bias");
     }
 
     PERF_FUNC_END();
@@ -449,11 +435,9 @@ void normalize_backward(NormalizeLayer* const l)
     size_t B = BATCH_DIM(l->input);
     size_t N = NODE_DIM(l->input);
 
-    uint64_t flops = 6ULL * B * N * N;
-    uint64_t bytes = B * N * (8ULL * N + 3ULL) * sizeof(double);
+    // uint64_t flops = 6ULL * B * N * N;
 
     PERF_FUNC_START();
-    PERF_ADD_METRICS(flops, bytes);
 
 #pragma omp parallel for
     for (size_t i = 0; i < B; i++) {
@@ -503,19 +487,17 @@ void relu_backward(ReluLayer* const l)
     MAT_ASSERT(l->output, l->grad_output);
     MAT_ASSERT(l->output, l->grad_input);
 
-    // bytes_coeff={'BN': 4}, flops_coeff={}
     size_t B = BATCH_DIM(l->output);
     size_t N = NODE_DIM(l->output);
-    uint64_t flops = 0;
-    uint64_t bytes = (4ULL * B * N) * sizeof(double);
+
+    // uint64_t flops = 0;
 
     PERF_FUNC_START();
-    PERF_ADD_METRICS(flops, bytes);
 
     // TODO: grad_input = grad_output * fmaxf(0.0f, copysignf(1.0f, output));
 #pragma omp parallel for
-    for (size_t i = 0; i < BATCH_DIM(l->output); i++) {
-        for (size_t j = 0; j < NODE_DIM(l->output); j++) {
+    for (size_t i = 0; i < B; i++) {
+        for (size_t j = 0; j < N; j++) {
             MAT_AT(l->grad_input, i, j) = MAT_AT(l->grad_output, i, j);
             if (MAT_AT(l->output, i, j) <= 0.0) {
                 MAT_AT(l->grad_input, i, j) = 0;
@@ -533,26 +515,23 @@ void sageconv_backward(SageLayer* const l, graph_t* const g)
     size_t B = BATCH_DIM(l->Wagg);
     size_t N = NODE_DIM(l->grad_output);
 
-    uint64_t neighbor_flops = (2ULL * E * B * N) + (2ULL * E * B);
-    uint64_t neighbor_bytes = ((2ULL * E) + (2ULL * E * B * N) + (3ULL * E * B)) * sizeof(double);
-
     PERF_FUNC_START();
-    PERF_ADD_METRICS(neighbor_flops, neighbor_bytes);
 
-    PERF_CALL("sage_bwd_grad_Wroot",
-              dot_ex(l->input, l->grad_output, l->grad_Wroot, true, false));
+    PERF_START("sage_grad_Wroot");
+    dot_ex(l->input, l->grad_output, l->grad_Wroot, true, false);
+    PERF_END("sage_grad_Wroot");
 
-    // printf("sage_bwd_grad_Wagg: ");
-    PERF_CALL("sage_bwd_grad_Wagg",
-               dot_ex(l->agg, l->grad_output, l->grad_Wagg, true, false));
+    PERF_START("sage_grad_Wagg");
+    dot_ex(l->agg, l->grad_output, l->grad_Wagg, true, false);
+    PERF_END("sage_grad_Wagg");
 
-    // printf("sage_bwd_grad_input: ");
-    PERF_CALL("sage_bwd_grad_input_self",
-             dot_ex(l->grad_output, l->Wroot, l->grad_input, false, true));
+    // printf("sage_grad_input: ");
+    PERF_START("sage_grad_input_self");
+    dot_ex(l->grad_output, l->Wroot, l->grad_input, false, true);
+    PERF_END("sage_grad_input_self");
 
-    PERF_START("sageconv_bwd_grad_neighbor");
-    PERF_ADD_METRICS(neighbor_flops, neighbor_bytes);
-
+    // uint64_t neighbor_flops = (2ULL * E * B * N) + (2ULL * E * B);
+    PERF_START("sageconv_grad_neighbor");
 #pragma omp parallel for
     for (size_t edge = 0; edge < E; edge++) {
         size_t u0 = EDGE_AT(g, edge, 0);  // source
@@ -572,7 +551,7 @@ void sageconv_backward(SageLayer* const l, graph_t* const g)
         }
     }
 
-    PERF_END("sageconv_bwd_grad_neighbor");
+    PERF_END("sageconv_grad_neighbor");
 
     PERF_FUNC_END();
     nob_log(NOB_INFO, "sageconv_backward: ok");

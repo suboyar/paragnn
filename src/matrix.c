@@ -146,7 +146,7 @@ void mat_transpose_to(matrix_t *A, matrix_t *B)
     }
 }
 
-OpMetrics dot(matrix_t *A, matrix_t *B, matrix_t *C)
+void dot(matrix_t *A, matrix_t *B, matrix_t *C)
 {
     // Verify inner dimensions match
     assert(A->width == B->height && "Inner dimensions must match for matrix multiplication");
@@ -158,8 +158,7 @@ OpMetrics dot(matrix_t *A, matrix_t *B, matrix_t *C)
     size_t N = A->width;
     size_t P = B->width;
 
-    uint64_t flops = 2ULL * M * P * N;
-    uint64_t bytes = (2ULL * M * N * P) + (M * P) * sizeof(double);
+    // uint64_t flops = 2ULL * M * P * N;
 
 #pragma omp parallel for
     for (size_t i = 0; i < M; i++) {
@@ -171,11 +170,9 @@ OpMetrics dot(matrix_t *A, matrix_t *B, matrix_t *C)
             MAT_AT(C, i, j) = sum;
         }
     }
-
-    return (OpMetrics){.flops=flops, .bytes=bytes};
 }
 
-OpMetrics dot_agg(matrix_t *A, matrix_t *B, matrix_t *C)
+void dot_agg(matrix_t *A, matrix_t *B, matrix_t *C)
 {
     // Verify inner dimensions match
 
@@ -187,8 +184,7 @@ OpMetrics dot_agg(matrix_t *A, matrix_t *B, matrix_t *C)
     size_t N = A->width;
     size_t P = B->width;
 
-    uint64_t flops = (2ULL * M * P * N) + (M * P);
-    uint64_t bytes = (2ULL * M * N * P) + (2ULL * M * P) * sizeof(double);
+    // uint64_t flops = (2ULL * M * P * N) + (M * P);
 
 #pragma omp parallel for
     for (size_t i = 0; i < M; i++) {
@@ -200,11 +196,9 @@ OpMetrics dot_agg(matrix_t *A, matrix_t *B, matrix_t *C)
             MAT_AT(C, i, j) += sum;
         }
     }
-
-    return (OpMetrics){.flops=flops, .bytes=bytes};
 }
 
-OpMetrics dot_ex(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt)
+void dot_ex(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt)
 {
     // Calculate effective dimensions after potential transposition
     size_t eff_A_rows = at ? A->width : A->height;
@@ -224,8 +218,7 @@ OpMetrics dot_ex(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt)
     size_t N = eff_A_cols;
     size_t P = eff_B_cols;
 
-    uint64_t flops = 2ULL * M * N * P;
-    uint64_t bytes = ((2ULL * N * P * M) + (P * M)) * sizeof(double);
+    // uint64_t flops = 2ULL * M * N * P;
 
     // Precompute strides for each matrix
     size_t a_row_stride = at ? 1 : A->width;
@@ -245,45 +238,7 @@ OpMetrics dot_ex(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt)
             MAT_AT(C, i, j) = sum;
         }
     }
-
-    return (OpMetrics){.flops=flops, .bytes=bytes};
 }
-
-OpMetrics dot_agg_ex(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt)
-{
-    // Verify inner dimensions match
-    assert((at ? A->height : A->width) == (bt ? B->width : B->height));
-    assert(C->height == (at ? A->width : A->height));
-    assert(C->width == (bt ? B->height : B->width));
-
-    size_t M = at ? A->width : A->height;
-    size_t N = at ? A->height : A->width;
-    size_t P = bt ? B->height : B->width;
-
-    // Precompute strides for each matrix
-    size_t a_row_stride = at ? 1 : A->width;
-    size_t a_col_stride = at ? A->width : 1;
-    size_t b_row_stride = bt ? 1 : B->width;
-    size_t b_col_stride = bt ? B->width : 1;
-
-    uint64_t flops = (2ULL * M * P * N) + (M * P);
-    uint64_t bytes = (2ULL * M * N * P) + (2ULL * M * P) * sizeof(double);
-
-    // TODO unroll and jam
-#pragma omp parallel for
-    for (size_t i = 0; i < M; i++) {
-        for (size_t j = 0; j < P; j++) {
-            double sum = 0.0;
-            for (size_t k = 0; k < N; k++) {
-                sum += A->data[i*a_row_stride + k*a_col_stride] *
-                       B->data[k*b_row_stride + j*b_col_stride];
-            }
-            MAT_AT(C, i, j) += sum;
-        }
-    }
-    return (OpMetrics){.flops=flops, .bytes=bytes};
-}
-
 
 // https://randomascii.wordpress.com/2012/02/25/comparing-floating-point-numbers-2012-edition/
 bool mat_equal(matrix_t *A, matrix_t *B, size_t *row, size_t *col)

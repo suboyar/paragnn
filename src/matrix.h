@@ -21,19 +21,19 @@
 #define MAT_COL(m, col) NOB_TODO("MAT_COL is depricated")
 
 #ifndef NDEBUG
-    #define MAT_BOUNDS_CHECK(m, i, j) do {                                                           \
-            if ((i) >= BATCH_DIM(m)) {                                                               \
-                ERROR("Batch index %zu out of bounds (max %zu)", (size_t)(i), (size_t)BATCH_DIM(m)); \
-                abort();                                                                             \
-            }                                                                                        \
-            if ((j) >= NODE_DIM(m)) {                                                                \
-                ERROR("Node index %zu out of bounds (max %zu)", (size_t)(j), (size_t)NODE_DIM(m));   \
-                abort();                                                                             \
-            }                                                                                        \
+#define MAT_BOUNDS_CHECK(m, i, j) do {                                  \
+        if ((i) >= BATCH_DIM(m)) {                                      \
+            ERROR("Batch index %zu out of bounds (max %zu)", (size_t)(i), (size_t)BATCH_DIM(m)); \
+            abort();                                                    \
+        }                                                               \
+        if ((j) >= NODE_DIM(m)) {                                       \
+            ERROR("Node index %zu out of bounds (max %zu)", (size_t)(j), (size_t)NODE_DIM(m)); \
+            abort();                                                    \
+        }                                                               \
     } while(0)
 #else
     #define MAT_BOUNDS_CHECK(m, i, j) (void)(0)
-#endif
+#endif // NDEBUG
 
 #define MAT_ASSERT(A, B) do {assert((A)->height == (B)->height); assert((A)->width == (B)->width);} while(0)
 #define MAT_ASSERT_BATCH(A, B) do {assert(BATCH_DIM((A)) == BATCH_DIM((B)));} while(0)
@@ -65,10 +65,10 @@ void mat_fill(matrix_t *matrix, double value);
 void mat_rand(matrix_t* m, float low, float high);
 void mat_transpose(matrix_t *m);
 void mat_transpose_to(matrix_t *A, matrix_t *B);
-OpMetrics dot(matrix_t *A, matrix_t *B, matrix_t *C); // C = A @ B
-OpMetrics dot_agg(matrix_t *A, matrix_t *B, matrix_t *C); // C += A @ B
-OpMetrics dot_ex(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt);
-OpMetrics dot_agg_ex(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt);
+void dot(matrix_t *A, matrix_t *B, matrix_t *C); // C = A @ B
+void dot_agg(matrix_t *A, matrix_t *B, matrix_t *C); // C += A @ B
+void dot_ex(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt);
+void dot_agg_ex(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt);
 bool mat_equal(matrix_t *A, matrix_t *B, size_t *row, size_t *col);
 void mat_print(matrix_t* mat, const char *name, size_t padding);
 #define MAT_PRINT(m) mat_print(m, #m, 0)
