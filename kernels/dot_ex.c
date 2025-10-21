@@ -38,14 +38,10 @@ typedef struct {
 
 typedef enum {
     BASELINE,
-    BASELINE_SIMD,
     COLLAPSE,
-    COLLAPSE_SIMD,
     UNROLL,
-    UNROLL_SIMD,
     BLOCKED,
     BLOCKED_UNROLL,
-    BLOCKED_UNROLL_SIMD,
 } Strategy;
 
 typedef struct {
@@ -551,7 +547,9 @@ void run_benchmark(matrix_t* A, matrix_t* B, matrix_t* C, matrix_t* ref, const B
     }
 
     // Timed runs
+    double total_time = 0.0;
     for (size_t i = 0; i < NTIMES; i++) {
+        double start = omp_get_wtime();
         switch (conf->strategy) {
         case BASELINE:
             baseline(A, B, C, conf->at, conf->bt, conf->pre_trans);
@@ -571,11 +569,34 @@ void run_benchmark(matrix_t* A, matrix_t* B, matrix_t* C, matrix_t* ref, const B
         default:
             ERROR("Got a unknown strategy type, exiting...");
         }
-
+        total_time += omp_get_wtime() - start;
         mat_zero(C);
     }
 
-    printf("%s finished\n", conf->name);
+    double avg_time = total_time / NTIMES;
+
+    // Compute FLOPs
+    if (conf->pre_trans) {
+        matrix_t* At = mat_create(A->width, A->height);
+        matrix_t* Bt = mat_create(B->width, B->height);
+
+        transpose(A, At);
+        transpose(B, Bt);
+
+        A = At;
+        B = Bt;
+    }
+
+    PrologueCtx ctx = {0};
+    prologue(A, B, C, conf->at, conf->bt, &ctx);
+    uint64_t flops = 2ULL * ctx.M * ctx.N * ctx.P;
+
+    printf("%s finished: %fs, %.2fGFLOP/s\n", conf->name, avg_time, (double) flops / avg_time / 1e9);
+
+    if (conf->pre_trans) {
+        mat_destroy(A);
+        mat_destroy(B);
+    }
 }
 
 int main(void)
