@@ -77,6 +77,35 @@ MatrixSizes get_sizes_for_target_memory(size_t base_M, size_t base_N, size_t bas
     return (MatrixSizes){.M = M, .N = N, .P = P};
 }
 
+typedef struct {
+    size_t M, N, P;
+    size_t ar, ac;
+    size_t br, bc;
+} PrologueCtx;
+
+void prologue(matrix_t* A, matrix_t* B, matrix_t* C, bool at, bool bt, PrologueCtx* ctx)
+{
+    // Calculate effective dimensions after potential transposition
+    size_t eff_A_rows = at ? A->width : A->height;
+    size_t eff_A_cols = at ? A->height : A->width;
+    size_t eff_B_rows = bt ? B->width : B->height;
+    size_t eff_B_cols = bt ? B->height : B->width;
+
+    assert(eff_A_cols == eff_B_rows && "Inner dimensions must match");
+    assert(C->height == eff_A_rows && "Output height must match");
+    assert(C->width == eff_B_cols && "Output width must match");
+
+    ctx->M = eff_A_rows;
+    ctx->N = eff_A_cols;
+    ctx->P = eff_B_cols;
+
+    // Precompute strides for each matrix
+    ctx->ar = at ? 1 : A->width;
+    ctx->ac = at ? A->width : 1;
+    ctx->br = bt ? 1 : B->width;
+    ctx->bc = bt ? B->width : 1;
+}
+
 void transpose(matrix_t* src, matrix_t* dst)
 {
     PERF_FUNC_START();
@@ -115,9 +144,9 @@ void transpose(matrix_t* src, matrix_t* dst)
     PERF_FUNC_END();
 }
 
-OpMetrics bench_dot_ex(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt, bool pre_trans, Strategy strat)
+void baseline(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt, bool pre_trans)
 {
-    matrix_t *At, *Bt;//*Ct, *Corig;
+    matrix_t *At, *Bt;
 
     if (pre_trans) {
         At = mat_create(A->width, A->height);
@@ -130,239 +159,290 @@ OpMetrics bench_dot_ex(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt, 
         B = Bt;
     }
 
-    // Calculate effective dimensions after potential transposition
-    size_t eff_A_rows = at ? A->width : A->height;
-    size_t eff_A_cols = at ? A->height : A->width;
-    size_t eff_B_rows = bt ? B->width : B->height;
-    size_t eff_B_cols = bt ? B->height : B->width;
+    PrologueCtx ctx = {0};
+    prologue(A, B, C, at, bt, &ctx);
 
-    assert(eff_A_cols == eff_B_rows && "Inner dimensions must match");
-    assert(C->height == eff_A_rows && "Output height must match");
-    assert(C->width == eff_B_cols && "Output width must match");
-
-    size_t M = eff_A_rows;
-    size_t N = eff_A_cols;
-    size_t P = eff_B_cols;
-
-    uint64_t flops = 2ULL * M * N * P;
-    uint64_t bytes = ((2ULL * N * P * M) + (P * M)) * sizeof(double);
-
-    // Precompute strides for each matrix
-    size_t a_row_stride = at ? 1 : A->width;
-    size_t a_col_stride = at ? A->width : 1;
-    size_t b_row_stride = bt ? 1 : B->width;
-    size_t b_col_stride = bt ? B->width : 1;xo
-
-    // Used for unroll variants
-    size_t m = 4;
-
-    // Used for block variants
-    size_t ib = 64;
-    size_t jb = 64;
-    size_t kb = 64;
-    size_t m_block = 2;
-
-    switch (strat) {
-
-    case BASELINE: {
 #pragma omp parallel for SIMD
-        for (size_t i = 0; i < M; i++) {
-            for (size_t j = 0; j < P; j++) {
-                double sum = 0.0;
-                for (size_t k = 0; k < N; k++) {
-                    sum += A->data[i*a_row_stride + k*a_col_stride] *
-                           B->data[k*b_row_stride + j*b_col_stride];
-                }
-                MAT_AT(C, i, j) = sum;
+    for (size_t i = 0; i < ctx.M; i++) {
+        for (size_t j = 0; j < ctx.P; j++) {
+            double sum = 0.0;
+            for (size_t k = 0; k < ctx.N; k++) {
+                sum += MAT_STRIDED(A, i, k, ctx.ar, ctx.ac) * MAT_STRIDED(B, k, j, ctx.br, ctx.bc);
             }
+            MAT_AT(C, i, j) = sum;
         }
-    }break;
-
-    case COLLAPSE: {
-#pragma omp parallel for SIMD collapse(2)
-        for (size_t i = 0; i < M; i++) {
-            for (size_t j = 0; j < P; j++) {
-                double sum = 0.0;
-                for (size_t k = 0; k < N; k++) {
-                    sum += A->data[i*a_row_stride + k*a_col_stride] *
-                           B->data[k*b_row_stride + j*b_col_stride];
-                }
-                MAT_AT(C, i, j) = sum;
-            }
-        }
-    }break;
-
-    case UNROLL: {
-        // bytes = ((5ULL * N * (P/4) * M) + (P * M)) * sizeof(double);
-#pragma omp parallel for SIMD
-        for (size_t i = 0; i < M; i++) {
-            size_t j;
-            for (j = 0; j + 3 < P; j+=m) {
-                double sum0 = 0.0, sum1 = 0.0, sum2 = 0.0, sum3 = 0.0;
-                for (size_t k = 0; k < N; k++) {
-                    double a_ik = A->data[i*a_row_stride + k*a_col_stride];
-                    sum0 += a_ik * B->data[k*b_row_stride + ((j+0)*b_col_stride)];
-                    sum1 += a_ik * B->data[k*b_row_stride + ((j+1)*b_col_stride)];
-                    sum2 += a_ik * B->data[k*b_row_stride + ((j+2)*b_col_stride)];
-                    sum3 += a_ik * B->data[k*b_row_stride + ((j+3)*b_col_stride)];
-                }
-
-                MAT_AT(C, i, j+0) = sum0;
-                MAT_AT(C, i, j+1) = sum1;
-                MAT_AT(C, i, j+2) = sum2;
-                MAT_AT(C, i, j+3) = sum3;
-            }
-
-            for (; j < P; j++) {
-                double sum = 0.0;
-                for (size_t k = 0; k < N; k++) {
-                    sum += A->data[i*a_row_stride + k*a_col_stride] *
-                           B->data[k*b_row_stride + j*b_col_stride];
-                }
-                MAT_AT(C, i, j) = sum;
-            }
-        }
-    } break;
-
-    case BLOCKED: {
-#pragma omp parallel for collapse(2)
-        for (size_t ii = 0; ii < M; ii += ib) {
-            for (size_t jj = 0; jj < P; jj += jb) {
-                for (size_t kk = 0; kk < N; kk += kb) {
-                    size_t i_end = (ii + ib < M) ? ii + ib : M;
-                    size_t j_end = (jj + jb < P) ? jj + jb : P;
-                    size_t k_end = (kk + kb < N) ? kk + kb : N;
-
-                    for (size_t j = jj; j < j_end; j++) {
-                        size_t i;
-                        for (i = ii; i + 1 < i_end; i += m_block) {
-                            double sum0 = MAT_AT(C, i+0, j);
-                            double sum1 = MAT_AT(C, i+1, j);
-
-#pragma omp SIMD
-                            for (size_t k = kk; k < k_end; k++) {
-                                double b_kj = MAT_STRIDED(B, k, j, b_row_stride, b_col_stride);
-                                sum0 += MAT_STRIDED(A, i+0, k, a_row_stride, a_col_stride) * b_kj;
-                                sum1 += MAT_STRIDED(A, i+1, k, a_row_stride, a_col_stride) * b_kj;
-                            }
-                            MAT_AT(C, i+0, j) += sum0;
-                            MAT_AT(C, i+1, j) += sum1;
-                        }
-
-                        // Handle remaining row
-                        for (; i < i_end; i++) {
-                            double sum = MAT_AT(C, i, j);
-#pragma omp SIMD
-                            for (size_t k = kk; k < k_end; k++) {
-                                sum += MAT_STRIDED(A, i, k, a_row_stride, a_col_stride)
-                                    * MAT_STRIDED(B, k, j, b_row_stride, b_col_stride);
-                            }
-                            MAT_AT(C, i, j) = sum;
-                        }
-                    }
-                }
-            }
-        }
-    } break;
-
-    case BLOCKED_UNROLL: {
-#pragma omp parallel for collapse(2)
-        for (size_t ii = 0; ii < M; ii += ib) {
-            for (size_t jj = 0; jj < P; jj += jb) {
-                for (size_t kk = 0; kk < N; kk += kb) {
-                    size_t i_end = (ii + ib < M) ? ii + ib : M;
-                    size_t j_end = (jj + jb < P) ? jj + jb : P;
-                    size_t k_end = (kk + kb < N) ? kk + kb : N;
-
-                    size_t j;
-                    for (j = jj; j + 1 < j_end; j += m_block) {
-                        size_t i;
-                        for (i = ii; i + 1 < i_end; i += m_block) {
-                            double sum00 = MAT_AT(C, i+0, j+0);
-                            double sum01 = MAT_AT(C, i+0, j+1);
-                             double sum10 = MAT_AT(C, i+1, j+0);
-                            double sum11 = MAT_AT(C, i+1, j+1);
-
-#pragma omp SIMD
-                            for (size_t k = kk; k < k_end; k++) {
-                                double a_i0k = MAT_STRIDED(A, i+0, k, a_row_stride, a_col_stride);
-                                double a_i1k = MAT_STRIDED(A, i+1, k, a_row_stride, a_col_stride);
-                                double b_kj0 = MAT_STRIDED(B, k, j+0, b_row_stride, b_col_stride);
-                                double b_kj1 = MAT_STRIDED(B, k, j+1, b_row_stride, b_col_stride);
-
-                                sum00 += a_i0k * b_kj0;
-                                sum01 += a_i0k * b_kj1;
-                                sum10 += a_i1k * b_kj0;
-                                sum11 += a_i1k * b_kj1;
-                            }
-
-                            MAT_AT(C, i+0, j+0) = sum00;
-                            MAT_AT(C, i+0, j+1) = sum01;
-                            MAT_AT(C, i+1, j+0) = sum10;
-                            MAT_AT(C, i+1, j+1) = sum11;
-                        }
-
-                        for (; i < i_end; i++) {
-                            double sum0 = MAT_AT(C, i, j+0);
-                            double sum1 = MAT_AT(C, i, j+1);
-
-#pragma omp SIMD
-                            for (size_t k = kk; k < k_end; k++) {
-                                double a_ik = MAT_STRIDED(A, i, k, a_row_stride, a_col_stride);
-                                sum0 += a_ik * MAT_STRIDED(B, k, j+0, b_row_stride, b_col_stride);
-                                sum1 += a_ik * MAT_STRIDED(B, k, j+1, b_row_stride, b_col_stride);
-                            }
-
-                            MAT_AT(C, i, j+0) = sum0;
-                            MAT_AT(C, i, j+1) = sum1;
-                        }
-                    }
-
-                    for (; j < j_end; j++) {
-                        size_t i;
-
-                        for (i = ii; i + 1 < i_end; i += m_block) {
-                            double sum0 = MAT_AT(C, i+0, j);
-                            double sum1 = MAT_AT(C, i+1, j);
-
-#pragma omp SIMD
-                            for (size_t k = kk; k < k_end; k++) {
-                                double b_kj = MAT_STRIDED(B, k, j, b_row_stride, b_col_stride);
-                                sum0 += MAT_STRIDED(A, i+0, k, a_row_stride, a_col_stride) * b_kj;
-                                sum1 += MAT_STRIDED(A, i+1, k, a_row_stride, a_col_stride) * b_kj;
-                            }
-                            MAT_AT(C, i+0, j) = sum0;
-                            MAT_AT(C, i+1, j) = sum1;
-                        }
-
-                        for (; i < i_end; i++) {
-                            double sum = MAT_AT(C, i, j);
-#pragma omp SIMD
-                            for (size_t k = kk; k < k_end; k++) {
-                                sum += MAT_STRIDED(A, i, k, a_row_stride, a_col_stride)
-                                    * MAT_STRIDED(B, k, j, b_row_stride, b_col_stride);
-                            }
-                            MAT_AT(C, i, j) = sum;
-                        }
-                    }
-                }
-            }
-        }
-    } break;
-
-    default:
-        ERROR("Got a unknown strat type, exiting...");
     }
 
     if (pre_trans) {
         mat_destroy(At);
         mat_destroy(Bt);
-        // transpose(C, Corig);
+    }
+}
+
+void collapse(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt, bool pre_trans)
+{
+    matrix_t *At, *Bt;
+
+    if (pre_trans) {
+        At = mat_create(A->width, A->height);
+        Bt = mat_create(B->width, B->height);
+
+        transpose(A, At);
+        transpose(B, Bt);
+
+        A = At;
+        B = Bt;
     }
 
+    PrologueCtx ctx = {0};
+    prologue(A, B, C, at, bt, &ctx);
 
-    return (OpMetrics){.flops=flops, .bytes=bytes};
+#pragma omp parallel for SIMD collapse(2)
+    for (size_t i = 0; i < ctx.M; i++) {
+        for (size_t j = 0; j < ctx.P; j++) {
+            double sum = 0.0;
+            for (size_t k = 0; k < ctx.N; k++) {
+                sum += MAT_STRIDED(A, i, k, ctx.ar, ctx.ac) * MAT_STRIDED(B, k, j, ctx.br, ctx.bc);
+            }
+            MAT_AT(C, i, j) = sum;
+        }
+    }
+
+    if (pre_trans) {
+        mat_destroy(At);
+        mat_destroy(Bt);
+    }
 }
+
+void unroll(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt, bool pre_trans)
+{
+    matrix_t *At, *Bt;
+
+    if (pre_trans) {
+        At = mat_create(A->width, A->height);
+        Bt = mat_create(B->width, B->height);
+
+        transpose(A, At);
+        transpose(B, Bt);
+
+        A = At;
+        B = Bt;
+    }
+
+    PrologueCtx ctx = {0};
+    prologue(A, B, C, at, bt, &ctx);
+
+
+#pragma omp parallel for SIMD
+    for (size_t i = 0; i < ctx.M; i++) {
+        size_t j;
+        for (j = 0; j + 3 < ctx.P; j+=4) {
+            double sum0 = 0.0, sum1 = 0.0, sum2 = 0.0, sum3 = 0.0;
+            for (size_t k = 0; k < ctx.N; k++) {
+                double a_ik = MAT_STRIDED(A, i, k, ctx.ar, ctx.ac);
+                sum0 += a_ik * MAT_STRIDED(B, k, (j+0), ctx.br, ctx.bc);
+                sum1 += a_ik * MAT_STRIDED(B, k, (j+1), ctx.br, ctx.bc);
+                sum2 += a_ik * MAT_STRIDED(B, k, (j+2), ctx.br, ctx.bc);
+                sum3 += a_ik * MAT_STRIDED(B, k, (j+3), ctx.br, ctx.bc);
+            }
+
+            MAT_AT(C, i, j+0) = sum0;
+            MAT_AT(C, i, j+1) = sum1;
+            MAT_AT(C, i, j+2) = sum2;
+            MAT_AT(C, i, j+3) = sum3;
+        }
+
+        for (; j < ctx.P; j++) {
+            double sum = 0.0;
+            for (size_t k = 0; k < ctx.N; k++) {
+                sum += MAT_STRIDED(A, i, k, ctx.ar, ctx.ac) * MAT_STRIDED(B, k, j, ctx.br, ctx.bc);
+            }
+            MAT_AT(C, i, j) = sum;
+        }
+    }
+
+    if (pre_trans) {
+        mat_destroy(At);
+        mat_destroy(Bt);
+    }
+}
+
+void blocked(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt, bool pre_trans)
+{
+    matrix_t *At, *Bt;
+
+    if (pre_trans) {
+        At = mat_create(A->width, A->height);
+        Bt = mat_create(B->width, B->height);
+
+        transpose(A, At);
+        transpose(B, Bt);
+
+        A = At;
+        B = Bt;
+    }
+
+    PrologueCtx ctx = {0};
+    prologue(A, B, C, at, bt, &ctx);
+
+    size_t ib = 64;
+    size_t jb = 64;
+    size_t kb = 64;
+
+#pragma omp parallel for collapse(2)
+    for (size_t ii = 0; ii < ctx.M; ii += ib) {
+        for (size_t jj = 0; jj < ctx.P; jj += jb) {
+            for (size_t kk = 0; kk < ctx.N; kk += kb) {
+                size_t i_end = (ii + ib < ctx.M) ? ii + ib : ctx.M;
+                size_t j_end = (jj + jb < ctx.P) ? jj + jb : ctx.P;
+                size_t k_end = (kk + kb < ctx.N) ? kk + kb : ctx.N;
+
+                for (size_t j = jj; j < j_end; j++) {
+                    size_t i;
+                    for (i = ii; i + 1 < i_end; i += 2) {
+                        double sum0 = 0.0;
+                        double sum1 = 0.0;
+
+#pragma omp SIMD
+                        for (size_t k = kk; k < k_end; k++) {
+                            double b_kj = MAT_STRIDED(B, k, j, ctx.br, ctx.bc);
+                            sum0 += MAT_STRIDED(A, i+0, k, ctx.ar, ctx.ac) * b_kj;
+                            sum1 += MAT_STRIDED(A, i+1, k, ctx.ar, ctx.ac) * b_kj;
+                        }
+
+                        MAT_AT(C, i+0, j) += sum0;
+                        MAT_AT(C, i+1, j) += sum1;
+                    }
+
+                    for (; i < i_end; i++) {
+                        double sum = 0.0;
+#pragma omp SIMD
+                        for (size_t k = kk; k < k_end; k++) {
+                            sum += MAT_STRIDED(A, i, k, ctx.ar, ctx.ac) * MAT_STRIDED(B, k, j, ctx.br, ctx.bc);
+                        }
+                        MAT_AT(C, i, j) += sum;
+                    }
+                }
+            }
+        }
+    }
+
+    if (pre_trans) {
+        mat_destroy(At);
+        mat_destroy(Bt);
+    }
+}
+
+void blocked_unroll(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt, bool pre_trans)
+{
+    matrix_t *At, *Bt;
+
+    if (pre_trans) {
+        At = mat_create(A->width, A->height);
+        Bt = mat_create(B->width, B->height);
+
+        transpose(A, At);
+        transpose(B, Bt);
+
+        A = At;
+        B = Bt;
+    }
+
+    PrologueCtx ctx = {0};
+    prologue(A, B, C, at, bt, &ctx);
+
+    size_t ib = 64;
+    size_t jb = 64;
+    size_t kb = 64;
+
+#pragma omp parallel for collapse(2)
+    for (size_t ii = 0; ii < ctx.M; ii += ib) {
+        for (size_t jj = 0; jj < ctx.P; jj += jb) {
+            for (size_t kk = 0; kk < ctx.N; kk += kb) {
+                size_t i_end = (ii + ib < ctx.M) ? ii + ib : ctx.M;
+                size_t j_end = (jj + jb < ctx.P) ? jj + jb : ctx.P;
+                size_t k_end = (kk + kb < ctx.N) ? kk + kb : ctx.N;
+
+                size_t j;
+                for (j = jj; j + 1 < j_end; j += 2) {
+                    size_t i;
+                    for (i = ii; i + 1 < i_end; i += 2) {
+                        double sum00 = 0.0;
+                        double sum01 = 0.0;
+                        double sum10 = 0.0;
+                        double sum11 = 0.0;
+
+#pragma omp SIMD
+                        for (size_t k = kk; k < k_end; k++) {
+                            double a_i0k = MAT_STRIDED(A, i+0, k, ctx.ar, ctx.ac);
+                            double a_i1k = MAT_STRIDED(A, i+1, k, ctx.ar, ctx.ac);
+                            double b_kj0 = MAT_STRIDED(B, k, j+0, ctx.br, ctx.bc);
+                            double b_kj1 = MAT_STRIDED(B, k, j+1, ctx.br, ctx.bc);
+
+                            sum00 += a_i0k * b_kj0;
+                            sum01 += a_i0k * b_kj1;
+                            sum10 += a_i1k * b_kj0;
+                            sum11 += a_i1k * b_kj1;
+                        }
+
+                        MAT_AT(C, i+0, j+0) += sum00;
+                        MAT_AT(C, i+0, j+1) += sum01;
+                        MAT_AT(C, i+1, j+0) += sum10;
+                        MAT_AT(C, i+1, j+1) += sum11;
+                    }
+
+                    for (; i < i_end; i++) {
+                        double sum0 = 0.0;
+                        double sum1 = 0.0;
+
+#pragma omp SIMD
+                        for (size_t k = kk; k < k_end; k++) {
+                            double a_ik = MAT_STRIDED(A, i, k, ctx.ar, ctx.ac);
+                            sum0 += a_ik * MAT_STRIDED(B, k, j+0, ctx.br, ctx.bc);
+                            sum1 += a_ik * MAT_STRIDED(B, k, j+1, ctx.br, ctx.bc);
+                        }
+
+                        MAT_AT(C, i, j+0) += sum0;
+                        MAT_AT(C, i, j+1) += sum1;
+                    }
+                }
+
+                for (; j < j_end; j++) {
+                    size_t i;
+
+                    for (i = ii; i + 1 < i_end; i += 2) {
+                        double sum0 = 0.0;
+                        double sum1 = 0.0;
+
+#pragma omp SIMD
+                        for (size_t k = kk; k < k_end; k++) {
+                            double b_kj = MAT_STRIDED(B, k, j, ctx.br, ctx.bc);
+                            sum0 += MAT_STRIDED(A, i+0, k, ctx.ar, ctx.ac) * b_kj;
+                            sum1 += MAT_STRIDED(A, i+1, k, ctx.ar, ctx.ac) * b_kj;
+                        }
+                        MAT_AT(C, i+0, j) += sum0;
+                        MAT_AT(C, i+1, j) += sum1;
+                    }
+
+                    for (; i < i_end; i++) {
+                        double sum = 0.0;
+#pragma omp SIMD
+                        for (size_t k = kk; k < k_end; k++) {
+                            sum += MAT_STRIDED(A, i, k, ctx.ar, ctx.ac) * MAT_STRIDED(B, k, j, ctx.br, ctx.bc);
+                        }
+                        MAT_AT(C, i, j) += sum;
+                    }
+                }
+            }
+        }
+    }
+
+    if (pre_trans) {
+        mat_destroy(At);
+        mat_destroy(Bt);
+    }
+}
+
 
 bool is_valid(matrix_t* src, matrix_t* ref, bool srcT, bool refT)
 {
@@ -416,28 +496,86 @@ bool is_valid(matrix_t* src, matrix_t* ref, bool srcT, bool refT)
     return true;
 }
 
-void run_benchmark(matrix_t* A, matrix_t* B, matrix_t* C, matrix_t* ref, const BenchConfig* config)
+void run_benchmark(matrix_t* A, matrix_t* B, matrix_t* C, matrix_t* ref, const BenchConfig* conf)
 {
     // Validate once
-    bench_dot_ex(A, B, C, config->at, config->bt, config->pre_trans, config->strategy);
-
-    if (!is_valid(C, ref, config->ct, false)) {
-        ERROR("Result for '%s' doesn't match reference", config->name);
+    switch (conf->strategy) {
+    case BASELINE:
+        baseline(A, B, C, conf->at, conf->bt, conf->pre_trans);
+        break;
+    case COLLAPSE:
+        collapse(A, B, C, conf->at, conf->bt, conf->pre_trans);
+        break;
+    case UNROLL:
+        unroll(A, B, C, conf->at, conf->bt, conf->pre_trans);
+        break;
+    case BLOCKED:
+        blocked(A, B, C, conf->at, conf->bt, conf->pre_trans);
+        break;
+    case BLOCKED_UNROLL:
+        blocked_unroll(A, B, C, conf->at, conf->bt, conf->pre_trans);
+        break;
+    default:
+        ERROR("Got a unknown strategy type, exiting...");
     }
+
+    if (!is_valid(C, ref, conf->ct, false)) {
+        ERROR("Result for '%s' doesn't match reference", conf->name);
+    }
+
+    mat_zero(C);
 
     // Warm up
     for (size_t i = 0; i < NTIMES; i++) {
-        bench_dot_ex(A, B, C, config->at, config->bt, config->pre_trans, config->strategy);
+        switch (conf->strategy) {
+        case BASELINE:
+            baseline(A, B, C, conf->at, conf->bt, conf->pre_trans);
+            break;
+        case COLLAPSE:
+            collapse(A, B, C, conf->at, conf->bt, conf->pre_trans);
+            break;
+        case UNROLL:
+            unroll(A, B, C, conf->at, conf->bt, conf->pre_trans);
+            break;
+        case BLOCKED:
+            blocked(A, B, C, conf->at, conf->bt, conf->pre_trans);
+            break;
+        case BLOCKED_UNROLL:
+            blocked_unroll(A, B, C, conf->at, conf->bt, conf->pre_trans);
+            break;
+        default:
+            ERROR("Got a unknown strategy type, exiting...");
+        }
+
+        mat_zero(C);
     }
 
     // Timed runs
     for (size_t i = 0; i < NTIMES; i++) {
-        PERF_CALL(config->name,
-                  bench_dot_ex(A, B, C, config->at, config->bt, config->pre_trans, config->strategy));
+        switch (conf->strategy) {
+        case BASELINE:
+            baseline(A, B, C, conf->at, conf->bt, conf->pre_trans);
+            break;
+        case COLLAPSE:
+            collapse(A, B, C, conf->at, conf->bt, conf->pre_trans);
+            break;
+        case UNROLL:
+            unroll(A, B, C, conf->at, conf->bt, conf->pre_trans);
+            break;
+        case BLOCKED:
+            blocked(A, B, C, conf->at, conf->bt, conf->pre_trans);
+            break;
+        case BLOCKED_UNROLL:
+            blocked_unroll(A, B, C, conf->at, conf->bt, conf->pre_trans);
+            break;
+        default:
+            ERROR("Got a unknown strategy type, exiting...");
+        }
+
+        mat_zero(C);
     }
 
-    mat_zero(C);
-    printf("%s finished\n", config->name);
+    printf("%s finished\n", conf->name);
 }
 
 int main(void)
@@ -479,32 +617,12 @@ int main(void)
         run_benchmark(A, B, C, ref, &baseline_configs[i]);
     }
 
-    // Affine variants
-    matrix_t* At = mat_create(sz.N, sz.M);
-    matrix_t* Bt = mat_create(sz.P, sz.M);
-    matrix_t* Ct = mat_create(sz.P, sz.N);
-
-    mat_transpose_to(A, At);
-    mat_transpose_to(B, Bt);
-
-    BenchConfig affine_configs[] = {
-        {"affine-baseline"SIMD_SFX,       .at = false, .bt=true, .ct=true, .pre_trans = false, .strategy=BASELINE},
-        {"affine-collapse"SIMD_SFX,       .at = false, .bt=true, .ct=true, .pre_trans = false, .strategy=COLLAPSE},
-        {"affine-unroll"SIMD_SFX,         .at = false, .bt=true, .ct=true, .pre_trans = false, .strategy=UNROLL},
-        {"affine-blocked"SIMD_SFX,        .at = false, .bt=true, .ct=true, .pre_trans = false, .strategy=BLOCKED},
-        {"affine-blocked-unroll"SIMD_SFX, .at = false, .bt=true, .ct=true, .pre_trans = false, .strategy=BLOCKED_UNROLL},
-    };
-
-    for (size_t i = 0; i < sizeof(affine_configs)/sizeof(affine_configs[0]); i++) {
-        run_benchmark(Bt, At, Ct, ref, &affine_configs[i]);
-    }
-
     BenchConfig pre_trans_configs[] = {
-        {"pre-transpose"SIMD_SFX,                .at = false, .bt=true, .ct=false, .pre_trans = true, .strategy=BASELINE},
-        {"pre-transpose-collapse"SIMD_SFX,       .at = false, .bt=true, .ct=false, .pre_trans = true, .strategy=COLLAPSE},
-        {"pre-transpose-unroll"SIMD_SFX,         .at = false, .bt=true, .ct=false, .pre_trans = true, .strategy=UNROLL},
-        {"pre-transpose-blocked"SIMD_SFX,        .at = false, .bt=true, .ct=false, .pre_trans = true, .strategy=BLOCKED},
-        {"pre-transpose-blocked-unroll"SIMD_SFX, .at = false, .bt=true, .ct=false, .pre_trans = true, .strategy=BLOCKED_UNROLL},
+        {"affine"SIMD_SFX,                .at = false, .bt=true, .ct=false, .pre_trans = true, .strategy=BASELINE},
+        {"affine-collapse"SIMD_SFX,       .at = false, .bt=true, .ct=false, .pre_trans = true, .strategy=COLLAPSE},
+        {"affine-unroll"SIMD_SFX,         .at = false, .bt=true, .ct=false, .pre_trans = true, .strategy=UNROLL},
+        {"affine-blocked"SIMD_SFX,        .at = false, .bt=true, .ct=false, .pre_trans = true, .strategy=BLOCKED},
+        {"affine-blocked-unroll"SIMD_SFX, .at = false, .bt=true, .ct=false, .pre_trans = true, .strategy=BLOCKED_UNROLL},
     };
 
     for (size_t i = 0; i < sizeof(pre_trans_configs)/sizeof(pre_trans_configs[0]); i++) {
@@ -516,9 +634,6 @@ int main(void)
     mat_destroy(A);
     mat_destroy(B);
     mat_destroy(C);
-    mat_destroy(At);
-    mat_destroy(Bt);
-    mat_destroy(Ct);
 
     return 0;
 }
