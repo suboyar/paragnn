@@ -46,6 +46,8 @@ typedef struct {
     char*  submit;
     char* out_dir;
     char* kernel;
+    bool fastmath;
+    Flag_List_Mut macros;
     int rest_argc;
     char** rest_argv;
 } Flags;
@@ -139,7 +141,6 @@ bool partition_is_valid(const char* partition)
     return false;
 }
 
-
 char* to_define_flag(const char* str)
 {
     Nob_String_Builder sb = {0};
@@ -165,9 +166,16 @@ int compile_src_files(BuildTarget* targets, size_t len)
 
             if (flags.release) {
                 nob_cmd_append(&cmd, "-O3", "-march=native", "-DNDEBUG");
-                nob_cmd_append(&cmd, "-DUSE_OGB_ARXIV");
+                if (flags.kernel == NULL) {
+                    nob_cmd_append(&cmd, "-DUSE_OGB_ARXIV");
+                    nob_cmd_append(&cmd, "-DEPOCH=10");
+                }
             } else {
                 nob_cmd_append(&cmd, "-O0", "-ggdb", "-g3", "-gdwarf-2");
+            }
+
+            for (size_t i = 0; i < flags.macros.count; ++i) {
+                nob_cmd_append(&cmd, nob_temp_sprintf("-D%s", flags.macros.items[i]));
             }
 
             nob_cmd_append(&cmd, "-fopenmp");
@@ -284,8 +292,6 @@ int build_paragnn()
                 nob_cmd_append(&cmd, "-O3", "-march=native", "-DNDEBUG");
                 nob_cmd_append(&cmd, "-DUSE_OGB_ARXIV");
             } else {
-                // nob_cmd_append(&cmd, "-DUSE_OGB_ARXIV");
-                            // nob_cmd_append(&cmd, "-DEPOCH=3");
                 nob_cmd_append(&cmd, "-O0", "-ggdb", "-g3", "-gdwarf-2");
             }
 
@@ -426,15 +432,18 @@ int main(int argc, char** argv)
 {
     NOB_GO_REBUILD_URSELF(argc, argv);
 
-    flag_bool_var(&flags.build,         "build",   false, "Build the project");
-    flag_bool_var(&flags.run,           "run",     false, "Run the project");
-    flag_bool_var(&flags.rebuild,       "rebuild", false, "Force a complete rebuild");
-    flag_str_var(&flags.out_dir,        "outdir",  NULL,  "Where to build to");
-    flag_bool_var(&flags.release,       "release", false, "Build in release mode");
-    flag_str_var(&flags.submit,         "submit",  NULL,  SUBMIT_DESC);
-    flag_bool_var(&flags.ogb,           "ogb",     false, "Build OGB decoder");
-    flag_str_var(&flags.kernel,         "kernel",  NULL,  "Build kernel benchmarks (aggregate, normalize_bwd, dot_ex)");
-    flag_bool_var(&flags.help,          "help",    false, "Print this help message");
+    flag_bool_var(&flags.build,     "build",    false, "Build the project");
+    flag_bool_var(&flags.run,       "run",      false, "Run the project");
+    flag_bool_var(&flags.rebuild,   "rebuild",  false, "Force a complete rebuild");
+    flag_str_var(&flags.out_dir,    "outdir",   NULL,  "Where to build to");
+    flag_bool_var(&flags.release,   "release",  false, "Build in release mode");
+    flag_str_var(&flags.submit,     "submit",   NULL,  SUBMIT_DESC);
+    flag_bool_var(&flags.ogb,       "ogb",      false, "Build OGB decoder");
+    flag_str_var(&flags.kernel,     "kernel",   NULL,  "Build kernel benchmarks (dot_ex)");
+    flag_bool_var(&flags.simd,      "simd",     false, "Enable simd");
+    flag_bool_var(&flags.fastmath,  "fastmath", false, "Enable fastmath");
+    flag_list_mut_var(&flags.macros, "D",               "Enable macro to be passed down (SIMD_ENABLED, USE_OGB_ARXIV, EPOCH)");
+    flag_bool_var(&flags.help,      "help",     false, "Print this help message");
 
     if (!flag_parse(argc, argv)) {
         usage(stderr);
