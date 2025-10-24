@@ -12,6 +12,7 @@
 #define BUILD_FOLDER "build/"
 #define TOOLS_FOLDER "tools/"
 #define SRC_FOLDER "src/"
+#define KERNEL_FOLDER  "kernels/"
 
 #define NOB_NEEDS_REBUILD(output_path, input_paths, input_paths_count) \
     (flags.rebuild ? 1 : nob_needs_rebuild((output_path), (input_paths), (input_paths_count)))
@@ -192,7 +193,6 @@ int compile_src_files(BuildTarget* targets, size_t len)
 int build_kernel_bench()
 {
     char *out_dir = BUILD_FOLDER;
-    char *kernel_dir = "kernels/";
 
     nob_mkdir_if_not_exists_recursvily(out_dir);
 
@@ -202,17 +202,18 @@ int build_kernel_bench()
 
     if (strcmp(flags.kernel, "dot-ex") == 0) {
         exec_path = nob_temp_sprintf("%s%s", out_dir, "dot-ex");
-        kernel_src = nob_temp_sprintf("%s%s", kernel_dir, "dot_ex.c");
-        kernel_obj = nob_temp_sprintf("%s%s", out_dir, "dot_ex.o");
+        kernel_src = KERNEL_FOLDER"dot_ex.c";
+        kernel_obj = BUILD_FOLDER"dot_ex.o";
     } else {
         nob_log(NOB_ERROR, "Wrong value passed to '-kernel': %s", flags.kernel);
         return 1;
     }
 
     BuildTarget targets[] = {
-        {.obj_path = (nob_temp_sprintf("%s%s", out_dir, "matrix.o")), .src_path = SRC_FOLDER"matrix.c"},
-        {.obj_path = (nob_temp_sprintf("%s%s", out_dir, "perf.o")),   .src_path = SRC_FOLDER"perf.c"},
-        {.obj_path = kernel_obj,                                      .src_path = kernel_src}
+        {.obj_path = BUILD_FOLDER"matrix.o",      .src_path = SRC_FOLDER"matrix.c"},
+        {.obj_path = BUILD_FOLDER"perf.o",        .src_path = SRC_FOLDER"perf.c"},
+        {.obj_path = BUILD_FOLDER"cache_counter.o", .src_path = KERNEL_FOLDER"cache_counter.c"},
+        {.obj_path = kernel_obj,                  .src_path = kernel_src}
     };
 
     // Compile src files
@@ -230,13 +231,16 @@ int build_kernel_bench()
         nob_cc_error_flags(&cmd);
         nob_cmd_append(&cmd, "-I.");
         nob_cmd_append(&cmd, "-I"SRC_FOLDER);
+        nob_cmd_append(&cmd, "-I"KERNEL_FOLDER);
         if (flags.release) {
             nob_cmd_append(&cmd, "-O3", "-march=native", "-DNDEBUG");
         } else {
             nob_cmd_append(&cmd, "-O0", "-ggdb", "-g3", "-gdwarf-2");
         }
         nob_cmd_append(&cmd, "-fopenmp");
-        nob_cmd_append(&cmd, "-ffast-math");
+        if (flags.fastmath) {
+            nob_cmd_append(&cmd, "-ffast-math");
+        }
         nob_cc_output(&cmd, exec_path);
         // nob_cc_inputs(&cmd, kernel_path);
         for (size_t i = 0; i < NOB_ARRAY_LEN(targets); ++i) {
@@ -440,7 +444,6 @@ int main(int argc, char** argv)
     flag_str_var(&flags.submit,     "submit",   NULL,  SUBMIT_DESC);
     flag_bool_var(&flags.ogb,       "ogb",      false, "Build OGB decoder");
     flag_str_var(&flags.kernel,     "kernel",   NULL,  "Build kernel benchmarks (dot_ex)");
-    flag_bool_var(&flags.simd,      "simd",     false, "Enable simd");
     flag_bool_var(&flags.fastmath,  "fastmath", false, "Enable fastmath");
     flag_list_mut_var(&flags.macros, "D",               "Enable macro to be passed down (SIMD_ENABLED, USE_OGB_ARXIV, EPOCH)");
     flag_bool_var(&flags.help,      "help",     false, "Print this help message");
