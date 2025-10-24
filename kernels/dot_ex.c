@@ -6,14 +6,17 @@
 
 #include "matrix.h"
 #include "perf.h"
+#include "cache_counter.h"
 
 #define NOB_IMPLEMENTATION
 #include "nob.h"
+
 
 // #define ARRAY_SIZE 524288000 // genoaxq
 // #define ARRAY_SIZE 33554432 // rome16q
 // #define ARRAY_SIZE 117964800 // xeonmaxq
 
+// #define ARRAY_SIZE 100000
 #ifndef ARRAY_SIZE
 #    define ARRAY_SIZE 10000000
 #endif // ARRAY_SIZE
@@ -22,8 +25,6 @@
 #    define NTIMES 10
 #endif // NTIMES
 
-#define SIMD_ENABLED
-
 #ifdef SIMD_ENABLED
 #    define SIMD simd
 #    define SIMD_SFX "_simd"
@@ -31,6 +32,8 @@
 #    define SIMD
 #    define SIMD_SFX ""
 #endif
+
+cache_counter_t* thread_counters = NULL;
 
 typedef struct {
     size_t M, N, P;  // A is (M x N), B is (N x P), C is (M x P)
@@ -546,9 +549,16 @@ void run_benchmark(matrix_t* A, matrix_t* B, matrix_t* C, matrix_t* ref, const B
         mat_zero(C);
     }
 
+    uint64_t bytes = 0;
     // Timed runs
+    printf("%s", conf->name);
     double total_time = 0.0;
     for (size_t i = 0; i < NTIMES; i++) {
+#pragma omp parallel
+        {
+            int tid = omp_get_thread_num();
+            cache_counter_start(&thread_counters[tid]);
+        }
         double start = omp_get_wtime();
         switch (conf->strategy) {
         case BASELINE:
@@ -570,10 +580,18 @@ void run_benchmark(matrix_t* A, matrix_t* B, matrix_t* C, matrix_t* ref, const B
             ERROR("Got a unknown strategy type, exiting...");
         }
         total_time += omp_get_wtime() - start;
+
+#pragma omp parallel reduction(+:bytes)
+        {
+            int tid = omp_get_thread_num();
+            cache_counter_stop(&thread_counters[tid]);
+            bytes += cache_get_bytes_loaded(&thread_counters[tid]);
+        }
+
+        putchar('.');
+        fflush(stdout);
         mat_zero(C);
     }
-
-    double avg_time = total_time / NTIMES;
 
     // Compute FLOPs
     if (conf->pre_trans) {
@@ -589,9 +607,16 @@ void run_benchmark(matrix_t* A, matrix_t* B, matrix_t* C, matrix_t* ref, const B
 
     PrologueCtx ctx = {0};
     prologue(A, B, C, conf->at, conf->bt, &ctx);
-    uint64_t flops = 2ULL * ctx.M * ctx.N * ctx.P;
 
-    printf("%s finished: %fs, %.2fGFLOP/s\n", conf->name, avg_time, (double) flops / avg_time / 1e9);
+    double avg_time = total_time / NTIMES;
+    double avg_bytes = (double) bytes / NTIMES;
+    double gb_per_s = avg_bytes / avg_time / 1e9;
+    uint64_t flops = 2ULL * ctx.M * ctx.N * ctx.P;
+    double gflops_per_s = (double) flops / avg_time / 1e9;
+    double intensity = gflops_per_s / gb_per_s;
+
+    printf("\r%s finished: %fs, %g bytes, %f GB/s, %.2f GFLOP/s, %.2f flop/byte\n",
+           conf->name, avg_time, avg_bytes, gb_per_s, gflops_per_s, intensity);
 
     if (conf->pre_trans) {
         mat_destroy(A);
@@ -601,14 +626,27 @@ void run_benchmark(matrix_t* A, matrix_t* B, matrix_t* C, matrix_t* ref, const B
 
 int main(void)
 {
+    printf("omp_get_num_threads() = %d\n", omp_get_num_threads());
+    #pragma omp parallel
+    {
+        #pragma omp single
+        {
+            int num_threads = omp_get_num_threads();
+            thread_counters = malloc(num_threads * sizeof(cache_counter_t));
+        }
+
+        int tid = omp_get_thread_num();
+        thread_counters[tid] = cache_counter_init();
+    }
+
     // sage_bwd_grad_Wroot: A=(90941x256), B=(90941x40), C=(256x40)
-    MatrixSizes sz = get_sizes_for_target_memory(90941, 256, 40);
+    // MatrixSizes sz = get_sizes_for_target_memory(90941, 256, 40);
 
-    matrix_t *A = mat_create(sz.M, sz.N);
-    matrix_t *B = mat_create(sz.M, sz.P);
-    matrix_t *C = mat_create(sz.N, sz.P);
+    matrix_t *A = mat_create(90941, 256);
+    matrix_t *B = mat_create(90941, 256);
+    matrix_t *C = mat_create(256, 256);
 
-    matrix_t *ref = mat_create(sz.N, sz.P);
+    matrix_t *ref = mat_create(256, 256);
 
     for (size_t i = 0; i < A->height; ++i) {
         for (size_t j = 0; j < A->width; ++j) {
@@ -624,6 +662,7 @@ int main(void)
 
     // Precompute the reference
     dot_ex(A, B, ref, true, false);
+    printf("Finished computing reference\n");
 
     // Normal variants
     BenchConfig baseline_configs[] = {
