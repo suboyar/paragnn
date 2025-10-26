@@ -23,7 +23,7 @@ matrix_t* mat_create(size_t height, size_t width)
         ERROR("Could not allocate data for the matrix");
     }
 
-#pragma parallel for
+#pragma omp parallel for
     for (size_t i = 0; i < height; i++) {
         for (size_t j = 0; j < width; j++) {
             MAT_AT(mat, i, j) = 0;
