@@ -519,7 +519,7 @@ void run_benchmark(matrix_t* A, matrix_t* B, matrix_t* C, matrix_t* ref, const B
     }
 
     if (!is_valid(C, ref, conf->ct, false)) {
-        ERROR("Result for '%s' doesn't match reference", conf->name);
+        ERROR("Result from '%s' implementation doesn't match reference", conf->name);
     }
 
     mat_zero(C);
@@ -550,6 +550,9 @@ void run_benchmark(matrix_t* A, matrix_t* B, matrix_t* C, matrix_t* ref, const B
     }
 
     uint64_t bytes = 0;
+    uint64_t cache_misses_local = 0;
+    uint64_t cache_misses_remote = 0;
+
     // Timed runs
     printf("%s", conf->name);
     double total_time = 0.0;
@@ -581,11 +584,17 @@ void run_benchmark(matrix_t* A, matrix_t* B, matrix_t* C, matrix_t* ref, const B
         }
         total_time += omp_get_wtime() - start;
 
-#pragma omp parallel reduction(+:bytes)
+#pragma omp parallel reduction(+:bytes,cache_misses_local,cache_misses_remote)
         {
             int tid = omp_get_thread_num();
             cache_counter_stop(&thread_counters[tid]);
-            bytes += cache_get_bytes_loaded(&thread_counters[tid]);
+
+            bytes += cache_counter_get_bytes_loaded(&thread_counters[tid]);
+            long long local = 0;
+            long long remote = 0;
+            cache_counter_get_cache_misses(&thread_counters[tid], &local, &remote);
+            cache_misses_local += (uint64_t)local;
+            cache_misses_remote += (uint64_t)remote;
         }
 
         putchar('.');
@@ -610,13 +619,18 @@ void run_benchmark(matrix_t* A, matrix_t* B, matrix_t* C, matrix_t* ref, const B
 
     double avg_time = total_time / NTIMES;
     double avg_bytes = (double) bytes / NTIMES;
+    double avg_cache_miss_local = (double)cache_misses_local / NTIMES;
+    double avg_cache_miss_remote = (double)cache_misses_remote / NTIMES;
+
     double gb_per_s = avg_bytes / avg_time / 1e9;
     uint64_t flops = 2ULL * ctx.M * ctx.N * ctx.P;
     double gflops_per_s = (double) flops / avg_time / 1e9;
     double intensity = gflops_per_s / gb_per_s;
 
-    printf("\r%s finished: %fs, %g bytes, %f GB/s, %.2f GFLOP/s, %.2f flop/byte\n",
-           conf->name, avg_time, avg_bytes, gb_per_s, gflops_per_s, intensity);
+    printf("\r%s: %.3fs, %.2f GB/s, %.2f GFLOP/s, %.2f flop/byte, "
+           "L3-miss-local: %.0f, L3-miss-remote: %.0f\n",
+           conf->name, avg_time, gb_per_s, gflops_per_s, intensity,
+           avg_cache_miss_local, avg_cache_miss_remote);
 
     if (conf->pre_trans) {
         mat_destroy(A);
@@ -626,7 +640,6 @@ void run_benchmark(matrix_t* A, matrix_t* B, matrix_t* C, matrix_t* ref, const B
 
 int main(void)
 {
-    printf("omp_get_num_threads() = %d\n", omp_get_num_threads());
     #pragma omp parallel
     {
         #pragma omp single
