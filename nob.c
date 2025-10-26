@@ -188,6 +188,7 @@ int compile_src_files(BuildTarget* targets, size_t len)
     }
 
     if (!nob_procs_flush(&procs)) return 1;
+    return 0;
 }
 
 int build_kernel_bench()
