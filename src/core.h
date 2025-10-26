@@ -3,10 +3,11 @@
 
 #include <stdio.h>
 
-#define ERROR(fmt, ...) do { \
-    fprintf(stderr, "%s:%d: error: %s: " fmt "\n", __FILE__, __LINE__, __func__, ##__VA_ARGS__); \
-    abort(); \
-} while(0)
+#define ERROR(fmt, ...) do {                                            \
+        _Pragma("omp single")                                           \
+            fprintf(stderr, "%s:%d: error: %s: " fmt "\n", __FILE__, __LINE__, __func__, ##__VA_ARGS__); \
+        abort();                                                        \
+    } while(0)
 
 #ifndef NDEBUG
     #if defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || defined(_M_X64)

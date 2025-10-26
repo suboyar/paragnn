@@ -14,13 +14,20 @@
 matrix_t* mat_create(size_t height, size_t width)
 {
     matrix_t *mat = malloc(sizeof(matrix_t));
-    if (!mat) return NULL;
+    if (!mat){
+        ERROR("Could not allocate the matrix struct on heap");
+    }
 
-    mat->data = calloc(height * width, sizeof(*mat->data));
+    mat->data = malloc(height * width * sizeof(*mat->data));
     if (!mat->data) {
-        assert(false && "Could not create matrix");
-        free(mat);
-        return NULL;
+        ERROR("Could not allocate data for the matrix");
+    }
+
+#pragma parallel for
+    for (size_t i = 0; i < height; i++) {
+        for (size_t j = 0; j < width; j++) {
+            MAT_AT(mat, i, j) = 0;
+        }
     }
 
     mat->height = height;
