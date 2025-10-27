@@ -33,6 +33,16 @@
 #    define SIMD_SFX ""
 #endif
 
+#define BENCH_NAME(name, height, width) nob_temp_sprintf("(%zux%zu)%s", (height), (width), (name))
+
+#define BASELINE_CONFIG(name, strat) \
+    {BENCH_NAME((name), height, width), .at = true, .bt = false, .ct = false, .pre_trans = false, .strategy = (strat)}
+
+#define AFFINE_CONFIG(name, strat) \
+    {BENCH_NAME((name), height, width), .at = false, .bt = true, .ct = false, .pre_trans = true, .strategy = (strat)}
+
+
+FileHandler csv_out = {0};
 cache_counter_t* thread_counters = NULL;
 
 typedef struct {
@@ -653,60 +663,65 @@ int main(void)
     }
 
     // sage_bwd_grad_Wroot: A=(90941x256), B=(90941x40), C=(256x40)
-    // MatrixSizes sz = get_sizes_for_target_memory(90941, 256, 40);
 
-    matrix_t *A = mat_create(90941, 256);
-    matrix_t *B = mat_create(90941, 256);
-    matrix_t *C = mat_create(256, 256);
+// #define NUM_TRAIN_NODES 90941
+// #define NUM_VALID_NODES 29799
+// #define NUM_TEST_NODES 48603
 
-    matrix_t *ref = mat_create(256, 256);
+    // 32, 64, 128, 256, 512, 1K, 2K, 4K, 8K, 16K, VALID_SIZE, 32K, TEST_SIZE, 64K, TRAIN_SIZE, 128K, 256K, 512K
 
-    for (size_t i = 0; i < A->height; ++i) {
-        for (size_t j = 0; j < A->width; ++j) {
-            MAT_AT(A, i, j) = i * A->width + j;
+    size_t batch_sizes[15];
+    batch_sizes[0] = 32;
+    for (size_t b = 1; b < sizeof(batch_sizes)/sizeof(batch_sizes[0]); b++) {
+        batch_sizes[b] = batch_sizes[b-1] * 2;
+    }
+
+    for (size_t b = 0; b < sizeof(batch_sizes)/sizeof(batch_sizes[0]); b++) {
+        size_t height = batch_sizes[b];
+        size_t width = 256;
+
+        matrix_t* A = mat_create(height, width);
+        matrix_t* B = mat_create(height, width);
+        matrix_t* C = mat_create(width, width);
+
+        matrix_t *ref = mat_create(256, 256);
+
+        for (size_t i = 0; i < A->height; ++i) {
+            for (size_t j = 0; j < A->width; ++j) {
+                MAT_AT(A, i, j) = i * A->width + j;
+            }
         }
-    }
 
-    for (size_t i = 0; i < B->height; ++i) {
-        for (size_t j = 0; j < B->width; ++j) {
-            MAT_AT(B, i, j) = (i * B->width + j) + 1000000;
+        for (size_t i = 0; i < B->height; ++i) {
+            for (size_t j = 0; j < B->width; ++j) {
+                MAT_AT(B, i, j) = (i * B->width + j) + 1000000;
+            }
         }
-    }
 
-    // Precompute the reference
-    dot_ex(A, B, ref, true, false);
-    printf("Finished computing reference\n");
+        // Precompute the reference
+        dot_ex(A, B, ref, true, false);
+        printf("Finished computing reference\n");
 
-    // Normal variants
-    BenchConfig baseline_configs[] = {
-        {"baseline"SIMD_SFX,                .at = true, .bt=false, .ct=false, .pre_trans = false, .strategy=BASELINE},
-        {"baseline-collapse"SIMD_SFX,       .at = true, .bt=false, .ct=false, .pre_trans = false, .strategy=COLLAPSE},
-        {"baseline-unroll"SIMD_SFX,         .at = true, .bt=false, .ct=false, .pre_trans = false, .strategy=UNROLL},
-        {"baseline-blocked"SIMD_SFX,        .at = true, .bt=false, .ct=false, .pre_trans = false, .strategy=BLOCKED},
-        {"baseline-blocked-unroll"SIMD_SFX, .at = true, .bt=false, .ct=false, .pre_trans = false, .strategy=BLOCKED_UNROLL},
-    };
+        BenchConfig configs[] = {
+            BASELINE_CONFIG("baseline", BASELINE),
+            BASELINE_CONFIG("blocked", BLOCKED),
+            AFFINE_CONFIG("affine", BASELINE),
+            AFFINE_CONFIG("affine-blocked", BLOCKED),
+            AFFINE_CONFIG("affine-blocked-unroll", BLOCKED_UNROLL),
+        };
 
-    for (size_t i = 0; i < sizeof(baseline_configs)/sizeof(baseline_configs[0]); i++) {
-        run_benchmark(A, B, C, ref, &baseline_configs[i]);
-    }
+        for (size_t i = 0; i < sizeof(configs)/sizeof(configs[0]); i++) {
+            run_benchmark(A, B, C, ref, &configs[i]);
+        }
 
-    BenchConfig pre_trans_configs[] = {
-        {"affine"SIMD_SFX,                .at = false, .bt=true, .ct=false, .pre_trans = true, .strategy=BASELINE},
-        {"affine-collapse"SIMD_SFX,       .at = false, .bt=true, .ct=false, .pre_trans = true, .strategy=COLLAPSE},
-        {"affine-unroll"SIMD_SFX,         .at = false, .bt=true, .ct=false, .pre_trans = true, .strategy=UNROLL},
-        {"affine-blocked"SIMD_SFX,        .at = false, .bt=true, .ct=false, .pre_trans = true, .strategy=BLOCKED},
-        {"affine-blocked-unroll"SIMD_SFX, .at = false, .bt=true, .ct=false, .pre_trans = true, .strategy=BLOCKED_UNROLL},
-    };
-
-    for (size_t i = 0; i < sizeof(pre_trans_configs)/sizeof(pre_trans_configs[0]); i++) {
-        run_benchmark(A, B, C, ref, &pre_trans_configs[i]);
+        mat_destroy(A);
+        mat_destroy(B);
+        mat_destroy(C);
+        mat_destroy(ref);
     }
 
     PERF_PRINT();
 
-    mat_destroy(A);
-    mat_destroy(B);
-    mat_destroy(C);
 
     return 0;
 }
