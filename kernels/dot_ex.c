@@ -1,6 +1,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdbool.h>
+#include <sys/param.h>
 
 #include <omp.h>
 
@@ -294,43 +295,39 @@ void blocked(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt, bool pre_t
     PrologueCtx ctx = {0};
     prologue(A, B, C, at, bt, &ctx);
 
+    size_t M = ctx.M;
+    size_t N = ctx.N;
+    size_t P = ctx.P;
+
+    size_t ar = ctx.ar;
+    size_t ac = ctx.ac;
+    size_t br = ctx.br;
+    size_t bc = ctx.bc;
+
+
     size_t ib = 64;
     size_t jb = 64;
     size_t kb = 64;
 
-#pragma omp parallel for collapse(2)
-    for (size_t ii = 0; ii < ctx.M; ii += ib) {
-        for (size_t jj = 0; jj < ctx.P; jj += jb) {
-            for (size_t kk = 0; kk < ctx.N; kk += kb) {
-                size_t i_end = (ii + ib < ctx.M) ? ii + ib : ctx.M;
-                size_t j_end = (jj + jb < ctx.P) ? jj + jb : ctx.P;
-                size_t k_end = (kk + kb < ctx.N) ? kk + kb : ctx.N;
+#pragma omp parallel for
+    for (size_t ii = 0; ii < M; ii += ib) {
+        size_t istart = ii, istop = MIN(ii+ib, M);
+        for (size_t jj = 0; jj < P; jj += jb) {
+            size_t jstart = jj, jstop = MIN(jj+jb, P);
+            for (size_t kk = 0; kk < N; kk += kb) {
+                size_t kstart = kk, kstop = MIN(kk+kb, N);
 
-                for (size_t j = jj; j < j_end; j++) {
-                    size_t i;
-                    for (i = ii; i + 1 < i_end; i += 2) {
-                        double sum0 = 0.0;
-                        double sum1 = 0.0;
-
-#pragma omp SIMD
-                        for (size_t k = kk; k < k_end; k++) {
-                            double b_kj = MAT_STRIDED(B, k, j, ctx.br, ctx.bc);
-                            sum0 += MAT_STRIDED(A, i+0, k, ctx.ar, ctx.ac) * b_kj;
-                            sum1 += MAT_STRIDED(A, i+1, k, ctx.ar, ctx.ac) * b_kj;
-                        }
-
-                        MAT_AT(C, i+0, j) += sum0;
-                        MAT_AT(C, i+1, j) += sum1;
-                    }
-
-                    for (; i < i_end; i++) {
+                for (size_t i = istart; i < istop; i++) {
+                    for (size_t j = jstart; j < jstop; j++) {
                         double sum = 0.0;
 #pragma omp SIMD
-                        for (size_t k = kk; k < k_end; k++) {
-                            sum += MAT_STRIDED(A, i, k, ctx.ar, ctx.ac) * MAT_STRIDED(B, k, j, ctx.br, ctx.bc);
+                        for (size_t k = kstart; k < kstop; k++) {
+                            sum += MAT_STRIDED(A, i, k, ar, ac) * MAT_STRIDED(B, k, j, br, bc);
                         }
+
                         MAT_AT(C, i, j) += sum;
                     }
+
                 }
             }
         }
