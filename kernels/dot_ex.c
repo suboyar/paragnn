@@ -34,6 +34,20 @@
 #    define SIMD_SFX ""
 #endif
 
+#define MATMUL_DIMS(A, B, C, at, bt) \
+    size_t M = (at) ? (A)->width : (A)->height; \
+    size_t N = (at) ? (A)->height : (A)->width; \
+    size_t P = (bt) ? (B)->height : (B)->width;
+
+#define SETUP_MATMUL(A, B, C, at, bt)                                   \
+    MATMUL_DIMS(A, B, C, at, bt);                                       \
+    size_t ar = (at) ? 1 : (A)->width;                                  \
+    size_t ac = (at) ? (A)->width : 1;                                  \
+    size_t br = (bt) ? 1 : (B)->width;                                  \
+    size_t bc = (bt) ? (B)->width : 1;                                  \
+    assert(N == ((bt) ? (B)->width : (B)->height) && "Inner dimensions must match"); \
+    assert((C)->height == M && (C)->width == P && "Output dimensions must match");
+
 #define BENCH_NAME(name, height, width) nob_temp_sprintf("(%zux%zu)%s", (height), (width), (name))
 
 #define BASELINE_CONFIG(name, strat) \
@@ -66,55 +80,6 @@ typedef struct {
     bool pre_trans;   // Pre transposing
     Strategy strategy;
 } BenchConfig;
-
-MatrixSizes get_sizes_for_target_memory(size_t base_M, size_t base_N, size_t base_P)
-{
-    // Calculate memory for base shape
-    size_t base_elements = base_M * base_N + base_N * base_P + base_M * base_P;
-    size_t base_bytes = base_elements;
-
-    // Scale uniformly to hit target
-    double scale_factor = sqrt((double)ARRAY_SIZE / base_bytes);
-
-    size_t M = (size_t)(base_M * scale_factor);
-    size_t N = (size_t)(base_N * scale_factor);
-    size_t P = (size_t)(base_P * scale_factor);
-
-    size_t actual_bytes = (M*N + N*P + M*P) * sizeof(double);
-    printf("Scaled (%zu,%zu,%zu) -> (%zu,%zu,%zu) = %.1f MB\n",
-           base_M, base_N, base_P, M, N, P, actual_bytes / 1024.0 / 1024.0);
-
-    return (MatrixSizes){.M = M, .N = N, .P = P};
-}
-
-typedef struct {
-    size_t M, N, P;
-    size_t ar, ac;
-    size_t br, bc;
-} PrologueCtx;
-
-void prologue(matrix_t* A, matrix_t* B, matrix_t* C, bool at, bool bt, PrologueCtx* ctx)
-{
-    // Calculate effective dimensions after potential transposition
-    size_t eff_A_rows = at ? A->width : A->height;
-    size_t eff_A_cols = at ? A->height : A->width;
-    size_t eff_B_rows = bt ? B->width : B->height;
-    size_t eff_B_cols = bt ? B->height : B->width;
-
-    assert(eff_A_cols == eff_B_rows && "Inner dimensions must match");
-    assert(C->height == eff_A_rows && "Output height must match");
-    assert(C->width == eff_B_cols && "Output width must match");
-
-    ctx->M = eff_A_rows;
-    ctx->N = eff_A_cols;
-    ctx->P = eff_B_cols;
-
-    // Precompute strides for each matrix
-    ctx->ar = at ? 1 : A->width;
-    ctx->ac = at ? A->width : 1;
-    ctx->br = bt ? 1 : B->width;
-    ctx->bc = bt ? B->width : 1;
-}
 
 void transpose(matrix_t* src, matrix_t* dst)
 {
@@ -169,15 +134,14 @@ void baseline(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt, bool pre_
         B = Bt;
     }
 
-    PrologueCtx ctx = {0};
-    prologue(A, B, C, at, bt, &ctx);
+    SETUP_MATMUL(A, B, C, at, bt);
 
 #pragma omp parallel for SIMD
-    for (size_t i = 0; i < ctx.M; i++) {
-        for (size_t j = 0; j < ctx.P; j++) {
+    for (size_t i = 0; i < M; i++) {
+        for (size_t j = 0; j < P; j++) {
             double sum = 0.0;
-            for (size_t k = 0; k < ctx.N; k++) {
-                sum += MAT_STRIDED(A, i, k, ctx.ar, ctx.ac) * MAT_STRIDED(B, k, j, ctx.br, ctx.bc);
+            for (size_t k = 0; k < N; k++) {
+                sum += MAT_STRIDED(A, i, k, ar, ac) * MAT_STRIDED(B, k, j, br, bc);
             }
             MAT_AT(C, i, j) = sum;
         }
@@ -204,15 +168,14 @@ void collapse(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt, bool pre_
         B = Bt;
     }
 
-    PrologueCtx ctx = {0};
-    prologue(A, B, C, at, bt, &ctx);
+    SETUP_MATMUL(A, B, C, at, bt);
 
 #pragma omp parallel for SIMD collapse(2)
-    for (size_t i = 0; i < ctx.M; i++) {
-        for (size_t j = 0; j < ctx.P; j++) {
+    for (size_t i = 0; i < M; i++) {
+        for (size_t j = 0; j < P; j++) {
             double sum = 0.0;
-            for (size_t k = 0; k < ctx.N; k++) {
-                sum += MAT_STRIDED(A, i, k, ctx.ar, ctx.ac) * MAT_STRIDED(B, k, j, ctx.br, ctx.bc);
+            for (size_t k = 0; k < N; k++) {
+                sum += MAT_STRIDED(A, i, k, ar, ac) * MAT_STRIDED(B, k, j, br, bc);
             }
             MAT_AT(C, i, j) = sum;
         }
@@ -239,21 +202,19 @@ void unroll(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt, bool pre_tr
         B = Bt;
     }
 
-    PrologueCtx ctx = {0};
-    prologue(A, B, C, at, bt, &ctx);
-
+    SETUP_MATMUL(A, B, C, at, bt);
 
 #pragma omp parallel for SIMD
-    for (size_t i = 0; i < ctx.M; i++) {
+    for (size_t i = 0; i < M; i++) {
         size_t j;
-        for (j = 0; j + 3 < ctx.P; j+=4) {
+        for (j = 0; j + 3 < P; j+=4) {
             double sum0 = 0.0, sum1 = 0.0, sum2 = 0.0, sum3 = 0.0;
-            for (size_t k = 0; k < ctx.N; k++) {
-                double a_ik = MAT_STRIDED(A, i, k, ctx.ar, ctx.ac);
-                sum0 += a_ik * MAT_STRIDED(B, k, (j+0), ctx.br, ctx.bc);
-                sum1 += a_ik * MAT_STRIDED(B, k, (j+1), ctx.br, ctx.bc);
-                sum2 += a_ik * MAT_STRIDED(B, k, (j+2), ctx.br, ctx.bc);
-                sum3 += a_ik * MAT_STRIDED(B, k, (j+3), ctx.br, ctx.bc);
+            for (size_t k = 0; k < N; k++) {
+                double a_ik = MAT_STRIDED(A, i, k, ar, ac);
+                sum0 += a_ik * MAT_STRIDED(B, k, (j+0), br, bc);
+                sum1 += a_ik * MAT_STRIDED(B, k, (j+1), br, bc);
+                sum2 += a_ik * MAT_STRIDED(B, k, (j+2), br, bc);
+                sum3 += a_ik * MAT_STRIDED(B, k, (j+3), br, bc);
             }
 
             MAT_AT(C, i, j+0) = sum0;
@@ -262,10 +223,10 @@ void unroll(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt, bool pre_tr
             MAT_AT(C, i, j+3) = sum3;
         }
 
-        for (; j < ctx.P; j++) {
+        for (; j < P; j++) {
             double sum = 0.0;
-            for (size_t k = 0; k < ctx.N; k++) {
-                sum += MAT_STRIDED(A, i, k, ctx.ar, ctx.ac) * MAT_STRIDED(B, k, j, ctx.br, ctx.bc);
+            for (size_t k = 0; k < N; k++) {
+                sum += MAT_STRIDED(A, i, k, ar, ac) * MAT_STRIDED(B, k, j, br, bc);
             }
             MAT_AT(C, i, j) = sum;
         }
@@ -292,18 +253,7 @@ void blocked(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt, bool pre_t
         B = Bt;
     }
 
-    PrologueCtx ctx = {0};
-    prologue(A, B, C, at, bt, &ctx);
-
-    size_t M = ctx.M;
-    size_t N = ctx.N;
-    size_t P = ctx.P;
-
-    size_t ar = ctx.ar;
-    size_t ac = ctx.ac;
-    size_t br = ctx.br;
-    size_t bc = ctx.bc;
-
+    SETUP_MATMUL(A, B, C, at, bt);
 
     size_t ib = 64;
     size_t jb = 64;
@@ -354,20 +304,19 @@ void blocked_unroll(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt, boo
         B = Bt;
     }
 
-    PrologueCtx ctx = {0};
-    prologue(A, B, C, at, bt, &ctx);
+    SETUP_MATMUL(A, B, C, at, bt);
 
     size_t ib = 64;
     size_t jb = 64;
     size_t kb = 64;
 
 #pragma omp parallel for collapse(2)
-    for (size_t ii = 0; ii < ctx.M; ii += ib) {
-        for (size_t jj = 0; jj < ctx.P; jj += jb) {
-            for (size_t kk = 0; kk < ctx.N; kk += kb) {
-                size_t i_end = (ii + ib < ctx.M) ? ii + ib : ctx.M;
-                size_t j_end = (jj + jb < ctx.P) ? jj + jb : ctx.P;
-                size_t k_end = (kk + kb < ctx.N) ? kk + kb : ctx.N;
+    for (size_t ii = 0; ii < M; ii += ib) {
+        for (size_t jj = 0; jj < P; jj += jb) {
+            for (size_t kk = 0; kk < N; kk += kb) {
+                size_t i_end = (ii + ib < M) ? ii + ib : M;
+                size_t j_end = (jj + jb < P) ? jj + jb : P;
+                size_t k_end = (kk + kb < N) ? kk + kb : N;
 
                 size_t j;
                 for (j = jj; j + 1 < j_end; j += 2) {
@@ -380,10 +329,10 @@ void blocked_unroll(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt, boo
 
 #pragma omp SIMD
                         for (size_t k = kk; k < k_end; k++) {
-                            double a_i0k = MAT_STRIDED(A, i+0, k, ctx.ar, ctx.ac);
-                            double a_i1k = MAT_STRIDED(A, i+1, k, ctx.ar, ctx.ac);
-                            double b_kj0 = MAT_STRIDED(B, k, j+0, ctx.br, ctx.bc);
-                            double b_kj1 = MAT_STRIDED(B, k, j+1, ctx.br, ctx.bc);
+                            double a_i0k = MAT_STRIDED(A, i+0, k, ar, ac);
+                            double a_i1k = MAT_STRIDED(A, i+1, k, ar, ac);
+                            double b_kj0 = MAT_STRIDED(B, k, j+0, br, bc);
+                            double b_kj1 = MAT_STRIDED(B, k, j+1, br, bc);
 
                             sum00 += a_i0k * b_kj0;
                             sum01 += a_i0k * b_kj1;
@@ -403,9 +352,9 @@ void blocked_unroll(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt, boo
 
 #pragma omp SIMD
                         for (size_t k = kk; k < k_end; k++) {
-                            double a_ik = MAT_STRIDED(A, i, k, ctx.ar, ctx.ac);
-                            sum0 += a_ik * MAT_STRIDED(B, k, j+0, ctx.br, ctx.bc);
-                            sum1 += a_ik * MAT_STRIDED(B, k, j+1, ctx.br, ctx.bc);
+                            double a_ik = MAT_STRIDED(A, i, k, ar, ac);
+                            sum0 += a_ik * MAT_STRIDED(B, k, j+0, br, bc);
+                            sum1 += a_ik * MAT_STRIDED(B, k, j+1, br, bc);
                         }
 
                         MAT_AT(C, i, j+0) += sum0;
@@ -422,9 +371,9 @@ void blocked_unroll(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt, boo
 
 #pragma omp SIMD
                         for (size_t k = kk; k < k_end; k++) {
-                            double b_kj = MAT_STRIDED(B, k, j, ctx.br, ctx.bc);
-                            sum0 += MAT_STRIDED(A, i+0, k, ctx.ar, ctx.ac) * b_kj;
-                            sum1 += MAT_STRIDED(A, i+1, k, ctx.ar, ctx.ac) * b_kj;
+                            double b_kj = MAT_STRIDED(B, k, j, br, bc);
+                            sum0 += MAT_STRIDED(A, i+0, k, ar, ac) * b_kj;
+                            sum1 += MAT_STRIDED(A, i+1, k, ar, ac) * b_kj;
                         }
                         MAT_AT(C, i+0, j) += sum0;
                         MAT_AT(C, i+1, j) += sum1;
@@ -434,7 +383,7 @@ void blocked_unroll(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt, boo
                         double sum = 0.0;
 #pragma omp SIMD
                         for (size_t k = kk; k < k_end; k++) {
-                            sum += MAT_STRIDED(A, i, k, ctx.ar, ctx.ac) * MAT_STRIDED(B, k, j, ctx.br, ctx.bc);
+                            sum += MAT_STRIDED(A, i, k, ar, ac) * MAT_STRIDED(B, k, j, br, bc);
                         }
                         MAT_AT(C, i, j) += sum;
                     }
@@ -621,8 +570,7 @@ void run_benchmark(matrix_t* A, matrix_t* B, matrix_t* C, matrix_t* ref, const B
         B = Bt;
     }
 
-    PrologueCtx ctx = {0};
-    prologue(A, B, C, conf->at, conf->bt, &ctx);
+    MATMUL_DIMS(A, B, C, conf->at, conf->bt);
 
     double avg_time = total_time / NTIMES;
     double avg_bytes = (double) bytes / NTIMES;
@@ -630,7 +578,7 @@ void run_benchmark(matrix_t* A, matrix_t* B, matrix_t* C, matrix_t* ref, const B
     double avg_cache_miss_remote = (double)cache_misses_remote / NTIMES;
 
     double gb_per_s = avg_bytes / avg_time / 1e9;
-    uint64_t flops = 2ULL * ctx.M * ctx.N * ctx.P;
+    uint64_t flops = 2ULL * M * N * P;
     double gflops_per_s = (double) flops / avg_time / 1e9;
     double intensity = gflops_per_s / gb_per_s;
 
