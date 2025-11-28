@@ -15,7 +15,7 @@
 #define NODE_DIM(m)  ((m)->width)   // features = width
 #define MAT_CREATE(batch, features) mat_create(batch, features)
 #define MAT_AT(m, i, j) (m)->data[(i)*(m)->width + (j)]
-#define MAT_STRIDED(m, i, j, rs, cs) (m)->data[(i)*(rs) + (j)*(cs)]
+#define MAT_AT_STRIDE(m, i, j) (m)->data[(i) + (j)*(m)->width]
 
 #define MAT_ROW(m, row) NOB_TODO("MAT_ROW is depricated")
 #define MAT_COL(m, col) NOB_TODO("MAT_COL is depricated")

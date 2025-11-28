@@ -533,25 +533,19 @@ void sageconv_backward(SageLayer* const l, graph_t* const g)
     size_t B = BATCH_DIM(l->Wagg);
     size_t N = NODE_DIM(l->grad_output);
 
-    uint64_t neighbor_flops = (2ULL * E * B * N) + (2ULL * E * B);
-    uint64_t neighbor_bytes = ((2ULL * E) + (2ULL * E * B * N) + (3ULL * E * B)) * sizeof(double);
-
     PERF_FUNC_START();
     PERF_ADD_METRICS(neighbor_flops, neighbor_bytes);
 
     PERF_CALL("sage_bwd_grad_Wroot",
               dot_ex(l->input, l->grad_output, l->grad_Wroot, true, false));
 
-    // printf("sage_bwd_grad_Wagg: ");
     PERF_CALL("sage_bwd_grad_Wagg",
                dot_ex(l->agg, l->grad_output, l->grad_Wagg, true, false));
 
-    // printf("sage_bwd_grad_input: ");
     PERF_CALL("sage_bwd_grad_input_self",
              dot_ex(l->grad_output, l->Wroot, l->grad_input, false, true));
 
     PERF_START("sageconv_bwd_grad_neighbor");
-    PERF_ADD_METRICS(neighbor_flops, neighbor_bytes);
 
 #pragma omp parallel for
     for (size_t edge = 0; edge < E; edge++) {
