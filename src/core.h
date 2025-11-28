@@ -4,6 +4,7 @@
 #include <stdio.h>
 
 #define ERROR(fmt, ...) do {                                            \
+        fflush(stdout);                                                 \
         _Pragma("omp single")                                           \
             fprintf(stderr, "%s:%d: error: %s: " fmt "\n", __FILE__, __LINE__, __func__, ##__VA_ARGS__); \
         abort();                                                        \

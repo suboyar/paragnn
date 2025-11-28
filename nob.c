@@ -27,7 +27,8 @@
                    "-Wextra",                                           \
                    "-Wfloat-conversion",                                \
                    "-Werror=implicit-function-declaration",             \
-                   "-Werror=incompatible-pointer-types")
+                   "-Werror=incompatible-pointer-types",                \
+                   "-Wno-unknown-pragmas")
 
 #define SUBMIT_DESC "Job submission partition\n        Valid: defq, fpgaq, genoaxq, gh200q, milanq, xeonmaxq, rome16q, bench, dev, list"
 
@@ -248,6 +249,7 @@ int build_kernel_bench()
             nob_cc_inputs(&cmd, targets[i].obj_path);
         }
         nob_cmd_append(&cmd, "-lm");
+        nob_cmd_append(&cmd, "-lopenblas");
         if (!nob_cmd_run(&cmd)) return 1;
     }
 
