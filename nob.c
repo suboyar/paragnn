@@ -43,6 +43,7 @@ typedef struct {
     bool  run;
     bool  rebuild;
     bool  release;
+    bool  gen_asm;
     bool  ogb;
     bool  help;
     char*  submit;
@@ -183,7 +184,13 @@ int compile_src_files(BuildTarget* targets, size_t len)
             nob_cmd_append(&cmd, "-fopenmp");
 
             nob_cc_output(&cmd, targets[i].obj_path);
-            nob_cmd_append(&cmd, "-c", targets[i].src_path);
+
+            if (flags.gen_asm) {
+                nob_cmd_append(&cmd, "-S", targets[i].src_path);
+            } else {
+                nob_cmd_append(&cmd, "-c", targets[i].src_path);
+            }
+
             if (!nob_cmd_run(&cmd, .async = &procs)) return 1;
         }
     }
@@ -227,7 +234,7 @@ int build_kernel_bench()
     }
 
     // Link object files
-    if (NOB_NEEDS_REBUILD(exec_path, deps, NOB_ARRAY_LEN(deps)) > 0) {
+    if (!flags.gen_asm && NOB_NEEDS_REBUILD(exec_path, deps, NOB_ARRAY_LEN(deps)) > 0) {
         nob_cc(&cmd);
         nob_cc_flags(&cmd);
         nob_cc_error_flags(&cmd);
@@ -318,7 +325,7 @@ int build_paragnn()
         obj_paths[i] = targets[i].obj_path;
     }
 
-    if (NOB_NEEDS_REBUILD(exec_path, obj_paths, NOB_ARRAY_LEN(targets)) > 0) {
+    if (!flags.gen_asm && NOB_NEEDS_REBUILD(exec_path, obj_paths, NOB_ARRAY_LEN(targets)) > 0) {
         nob_cc(&cmd);
         nob_cc_flags(&cmd);
         nob_cc_error_flags(&cmd);
@@ -442,6 +449,7 @@ int main(int argc, char** argv)
     flag_bool_var(&flags.build,     "build",    false, "Build the project");
     flag_bool_var(&flags.run,       "run",      false, "Run the project");
     flag_bool_var(&flags.rebuild,   "rebuild",  false, "Force a complete rebuild");
+    flag_bool_var(&flags.gen_asm,   "asm",      false, "Generate assembly output");
     flag_str_var(&flags.out_dir,    "outdir",   NULL,  "Where to build to");
     flag_bool_var(&flags.release,   "release",  false, "Build in release mode");
     flag_str_var(&flags.submit,     "submit",   NULL,  SUBMIT_DESC);
