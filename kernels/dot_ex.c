@@ -520,9 +520,11 @@ bool is_valid(matrix_t* src, matrix_t* ref)
 
 void run_benchmark(matrix_t* A, matrix_t* B, matrix_t* C, matrix_t* ref, MatmulKernel kernel)
 {
-    printf("Running %s\n", kernel.name);
+    printf("%s\n", kernel.name);
 
     // Validate once
+    printf("Validating");
+    fflush(stdout);
     kernel.fn(A, B, C);
     if (!is_valid(C, ref)) {
         ERROR("Result from '%s' implementation doesn't match reference", kernel.name);
@@ -534,6 +536,8 @@ void run_benchmark(matrix_t* A, matrix_t* B, matrix_t* C, matrix_t* ref, MatmulK
     }
 
     // Warm up
+    printf("\rWarming up");
+    fflush(stdout);
     for (size_t i = 0; i < NTIMES; i++) {
         kernel.fn(A, B, C);
         mat_zero(C);
@@ -541,6 +545,8 @@ void run_benchmark(matrix_t* A, matrix_t* B, matrix_t* C, matrix_t* ref, MatmulK
             transpose_inplace(A);
             transpose_inplace(B);
         }
+        printf(".");
+        fflush(stdout);
     }
 
     uint64_t bytes = 0;
@@ -548,6 +554,9 @@ void run_benchmark(matrix_t* A, matrix_t* B, matrix_t* C, matrix_t* ref, MatmulK
     uint64_t cache_misses_remote = 0;
 
     // Timed runs
+    printf("\r%-40s\r", "");
+    printf("\rRunning");
+    fflush(stdout);
     double total_time = 0.0;
     for (size_t i = 0; i < NTIMES; i++) {
 #pragma omp parallel
@@ -611,7 +620,7 @@ int main(void)
         int tid = omp_get_thread_num();
         thread_counters[tid] = cache_counter_init();
     }
-    printf("finished setting up thread_counters\n");
+
     // sage_bwd_grad_Wroot: A=(90941x256), B=(90941x265), C=(256x265)
 
 // #define NUM_TRAIN_NODES 90941
