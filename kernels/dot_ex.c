@@ -434,7 +434,7 @@ void matmul_tiled_2x2_transposed(matrix_t*  A, matrix_t* B, matrix_t* C)
                 for (; j < jstop; j++) {
                     size_t i;
 
-                    for (i = istop; i + 1 < istop; i += 2) {
+                    for (i = istart; i + 1 < istop; i += 2) {
                         double sum0 = 0.0;
                         double sum1 = 0.0;
 
