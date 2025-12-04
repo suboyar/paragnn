@@ -11,6 +11,28 @@
 
 #include "nob.h"
 
+static long get_cache_line_size()
+{
+    long size;
+
+    size = sysconf(_SC_LEVEL4_CACHE_LINESIZE);
+    if (size > 0) return size;
+
+    size = sysconf(_SC_LEVEL3_CACHE_LINESIZE);
+    if (size > 0) return size;
+
+    size = sysconf(_SC_LEVEL2_CACHE_LINESIZE);
+    if (size > 0) return size;
+
+    size = sysconf(_SC_LEVEL1_DCACHE_LINESIZE);
+    if (size > 0) return size;
+
+#pragma omp single
+    fprintf(stderr, "warning: Cache line size unavailable via sysconf(), using default of 64 bytes\n");
+
+    return 64;
+}
+
 matrix_t* mat_create(size_t height, size_t width)
 {
     matrix_t *mat = malloc(sizeof(matrix_t));
@@ -18,7 +40,11 @@ matrix_t* mat_create(size_t height, size_t width)
         ERROR("Could not allocate the matrix struct on heap");
     }
 
-    mat->data = malloc(height * width * sizeof(*mat->data));
+    size_t alignment = get_cache_line_size();
+    size_t size = height * width * sizeof(*mat->data);
+    size_t padded_size = (size + alignment - 1) & ~(alignment - 1);
+
+    mat->data = aligned_alloc(alignment, padded_size);
     if (!mat->data) {
         ERROR("Could not allocate data for the matrix");
     }
