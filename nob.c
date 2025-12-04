@@ -242,7 +242,7 @@ int build_kernel_bench()
         nob_cmd_append(&cmd, "-I"SRC_FOLDER);
         nob_cmd_append(&cmd, "-I"KERNEL_FOLDER);
         if (flags.release) {
-            nob_cmd_append(&cmd, "-O3", "-march=native", "-DNDEBUG");
+            nob_cmd_append(&cmd, "-O3", "-march=znver2", "-DNDEBUG", "-ffast-math");
         } else {
             nob_cmd_append(&cmd, "-O0", "-ggdb", "-g3", "-gdwarf-2");
         }
