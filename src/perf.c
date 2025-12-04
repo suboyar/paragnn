@@ -121,10 +121,10 @@ void perf_stop(HashTable* ht, const char* name, double stop_time)
 void perf_add_metric(HashTable* ht, const char* name, OpMetrics metrics)
 {
     PerfEntry* entry;
-    if (__current_perf_entry == NULL) entry = find_or_create_entry(ht, name);
+    if (__current_perf_entry == NULL) entry = find_entry(ht, name);
     else entry = __current_perf_entry;
 
-    if (!entry->is_active) {
+    if (entry == NULL) {
         fprintf(stderr, "ERROR: Benchmark '%s' was never started!\n", name);
         return;
     }
