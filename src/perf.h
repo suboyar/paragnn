@@ -77,6 +77,9 @@ extern _Thread_local PerfEntry* __current_perf_entry;
         }                                           \
     } while(0)
 
+#define PERF_GET_ENTRY(name) find_entry(&__perf_ht, (name))
+
+
 // Add metrics during function
 #define PERF_ADD_METRICS(flops_val, bytes_val) do {                    \
     if (__current_perf_entry) {                                       \
@@ -106,6 +109,7 @@ extern _Thread_local PerfEntry* __current_perf_entry;
 
 void perf_start(HashTable* ht, const char* name, double start_time);
 void perf_stop(HashTable* ht, const char* name, double stop_time);
+PerfEntry* find_entry(HashTable* ht, const char* name);
 void perf_add_metric(HashTable* ht, const char* name, OpMetrics metrics);
 void perf_clear(HashTable* ht);
 void perf_print(HashTable* ht);
