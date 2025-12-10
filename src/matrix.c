@@ -49,6 +49,10 @@ matrix_t* mat_create(size_t height, size_t width)
         ERROR("Could not allocate data for the matrix");
     }
 
+    mat->height = height;
+    mat->width = width;
+    mat->capacity = height * width;
+
 #pragma omp parallel for
     for (size_t i = 0; i < height; i++) {
         for (size_t j = 0; j < width; j++) {
@@ -56,9 +60,6 @@ matrix_t* mat_create(size_t height, size_t width)
         }
     }
 
-    mat->height = height;
-    mat->width = width;
-    mat->capacity = height * width;
     return mat;
 }
 
