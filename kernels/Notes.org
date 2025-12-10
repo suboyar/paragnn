@@ -1,0 +1,104 @@
+#+title: My findings
+
+* dot_ex
+
+** OUTER_SIMD
+Compiler options: =-O3 -march=znver2 -DNDEBUG -ffast-math=
+
+| function                    | time(s) | GB/s | GFLOP/s | flop/byte | L3-misses |
+|-----------------------------+---------+------+---------+-----------+-----------|
+| matmul_tiled_transposed     |   1.016 | 0.13 |   11.74 |     89.28 |   2086205 |
+| matmul_tiled_2x2_transposed |   0.514 | 0.16 |   23.18 |    142.98 |   1302566 |
+| matmul_tiled_1x4_transposed |   0.495 | 0.17 |   24.06 |    140.27 |   1327797 |
+| blas                        |   0.078 | 0.22 |  152.92 |    683.38 |    272540 |
+
+** INNER_SIMD
+Compiler options: =-O3 -march=znver2 -DNDEBUG -ffast-math=
+
+| function                        | time(s) | GB/s | GFLOP/s | flop/byte | L3-misses |
+|---------------------------------+---------+------+---------+-----------+-----------|
+| matmul_tiled_transposed         |   1.020 | 0.12 |   11.69 |     99.79 |   1866375 |
+| matmul_tiled_2x2_transposed     |   0.511 | 0.17 |   23.34 |    139.38 |   1336296 |
+| matmul_tiled_1x4_transposed     |   0.485 | 0.18 |   24.55 |    139.16 |   1338367 |
+| matmul_tiled_1x4_transposed_ikj |   0.479 | 0.17 |   24.89 |    147.62 |   1261704 |
+| blas                            |   0.074 | 0.23 |  160.64 |    692.72 |    268864 |
+
+** ~restrict~ vs. no-~restrict~
+This test was run 100 times
+
+| function                             | time(s) |  GB/s | GFLOP/s | flop/byte |  L3-misses |
+|--------------------------------------+---------+-------+---------+-----------+------------|
+| matmul_naive                         |   6.494 | 88.86 |    1.84 |      0.02 | 9015830174 |
+| matmul_naive_restrict                |   6.233 | 88.79 |    1.91 |      0.02 | 8647626506 |
+| matmul_tiled_1x4                     |   0.722 |  1.52 |   16.50 |     10.89 |   17105939 |
+| matmul_tiled_1x4_restrict            |   0.681 |  1.62 |   17.51 |     10.78 |   17278814 |
+| matmul_tiled_1x4_transposed          |   0.389 |  0.41 |   30.68 |     73.95 |    2518623 |
+| matmul_tiled_1x4_transposed_restrict |   0.368 |  0.60 |   32.36 |     54.16 |    3438645 |
+
+~matmul_naive~ = (1.91 - 1.84)/1.84 = 0.04
+~matmul_tiled_1x4~ = (17.51 - 16.50)/16.50 = 0.06
+~matmul_tiled_1x4~ = (32.36 - 30.68)/30.68 = 0.05
+
+We see a 4-6% performance gain when adding ~restrict~.
+
+** Horizontal epilogue
+When I vectorized the k-loop (the reduction dimension) while having 4
+unrolled j-accumulators, each accumulator became a vector of partial
+sums. After all k-iterations, these partial sums had to be
+horizontally reduced to scalars before storing to the C matrix. Which
+uses the below instructions to accomplish
+
+#+begin_src asm
+        add     rax, 32
+        cmp     rax, QWORD PTR [rsp+248]
+        jne     .L94
+        vextractf128    xmm7, ymm2, 0x1
+        mov     rax, QWORD PTR [rsp+160]
+        vaddpd  xmm7, xmm7, xmm2
+        vunpckhpd       xmm2, xmm7, xmm7
+        vaddpd  xmm2, xmm2, xmm7
+        vaddsd  xmm3, xmm3, xmm2
+        vextractf128    xmm2, ymm1, 0x1
+        vaddpd  xmm2, xmm2, xmm1
+        vunpckhpd       xmm1, xmm2, xmm2
+        vaddpd  xmm1, xmm1, xmm2
+        vextractf128    xmm2, ymm6, 0x1
+        vaddpd  xmm2, xmm2, xmm6
+        vaddsd  xmm4, xmm4, xmm1
+        vextractf128    xmm1, ymm0, 0x1
+        vaddpd  xmm1, xmm1, xmm0
+        vunpckhpd       xmm0, xmm1, xmm1
+        vaddpd  xmm0, xmm0, xmm1
+        vmovsd  xmm1, xmm0, xmm0
+        vunpckhpd       xmm0, xmm2, xmm2
+        vaddpd  xmm0, xmm0, xmm2
+        vunpcklpd       xmm0, xmm0, xmm1
+        vaddpd  xmm5, xmm5, xmm0
+        cmp     QWORD PTR [rsp+232], rax
+        je      .L96
+#+end_src
+
+*** What I tried
+1. *Change the loop order from =i->j->k= to =i->k->j= _*
+
+   But this worsen the performance, as the compiler stopped using
+   ~vfmadd213pd~, and instead used ~vmulpd~ and ~vaddpd~ separately.
+   
+2. *Not transposing B*
+
+   This caused to performance to improve, as now did not have to do
+   the horizontal epilogue, while it used ~vfmadd213pd~.
+
+   I tried to not transpose B in the
+   ~matmul_tiled_1x4_transposed_restrict~, but this yielded the worse
+   performance than just changing the loop order
+
+
+| function                                   | time(s) | GB/s | GFLOP/s | flop/byte | L3-misses |
+|--------------------------------------------+---------+------+---------+-----------+-----------|
+| matmul_tiled_1x4_transposed_A_restrict     |   1.000 | 0.08 |   11.92 |    147.07 |   1266354 |
+| matmul_tiled_1x4_transposed_restrict_ikj   |   0.752 | 0.12 |   15.85 |    130.08 |   1431785 |
+| matmul_tiled_1x4_transposed_restrict       |   0.312 | 0.75 |   38.22 |     50.95 |   3655184 |
+| matmul_tiled_1x4_transposed_A_restrict_ikj |   0.282 | 0.70 |   42.34 |     60.17 |   3095424 |
+| blas                                       |   0.075 | 0.21 |  159.32 |    766.32 |    243041 |
+
