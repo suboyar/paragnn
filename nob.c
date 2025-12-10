@@ -168,7 +168,7 @@ int compile_src_files(BuildTarget* targets, size_t len)
             nob_cmd_append(&cmd, "-I"SRC_FOLDER);
 
             if (flags.release) {
-                nob_cmd_append(&cmd, "-O3", "-march=native", "-DNDEBUG");
+                nob_cmd_append(&cmd, "-O3", "-march=native", "-DNDEBUG", "-ffast-math");
                 if (flags.kernel == NULL) {
                     nob_cmd_append(&cmd, "-DUSE_OGB_ARXIV");
                     nob_cmd_append(&cmd, "-DEPOCH=10");
@@ -186,16 +186,20 @@ int compile_src_files(BuildTarget* targets, size_t len)
             nob_cc_output(&cmd, targets[i].obj_path);
 
             if (flags.gen_asm) {
-                nob_cmd_append(&cmd, "-S", targets[i].src_path);
+                nob_cmd_append(&cmd, "-S", "-masm=intel", "-fverbose-asm", targets[i].src_path);
             } else {
                 nob_cmd_append(&cmd, "-c", targets[i].src_path);
             }
 
-            if (!nob_cmd_run(&cmd, .async = &procs)) return 1;
+            if (!nob_cmd_run(&cmd, .async = &procs)) {
+                nob_log(NOB_ERROR, "Could not compile source files");
+                return 1;
+            }
         }
     }
 
     if (!nob_procs_flush(&procs)) return 1;
+
     return 0;
 }
 
@@ -226,7 +230,10 @@ int build_kernel_bench()
     };
 
     // Compile src files
-    if (compile_src_files(targets, NOB_ARRAY_LEN(targets)) != 0) return 1;
+    if (compile_src_files(targets, NOB_ARRAY_LEN(targets)) != 0) {
+        nob_log(NOB_ERROR, "Error while compiling kernel: %s", flags.kernel);
+        return 1;
+    }
 
     const char* deps[NOB_ARRAY_LEN(targets)];
     for (size_t i = 0; i < NOB_ARRAY_LEN(targets); ++i) {
@@ -242,14 +249,11 @@ int build_kernel_bench()
         nob_cmd_append(&cmd, "-I"SRC_FOLDER);
         nob_cmd_append(&cmd, "-I"KERNEL_FOLDER);
         if (flags.release) {
-            nob_cmd_append(&cmd, "-O3", "-march=znver2", "-DNDEBUG", "-ffast-math");
+            nob_cmd_append(&cmd, "-O3", "-march=native", "-DNDEBUG", "-ffast-math");
         } else {
             nob_cmd_append(&cmd, "-O0", "-ggdb", "-g3", "-gdwarf-2");
         }
         nob_cmd_append(&cmd, "-fopenmp");
-        if (flags.fastmath) {
-            nob_cmd_append(&cmd, "-ffast-math");
-        }
         nob_cc_output(&cmd, exec_path);
         // nob_cc_inputs(&cmd, kernel_path);
         for (size_t i = 0; i < NOB_ARRAY_LEN(targets); ++i) {
