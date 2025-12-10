@@ -38,7 +38,7 @@ static inline size_t get_idx(HashTable* ht, const char* key) {
     return (size_t)(hash & (ht->capacity-1));
 }
 
-static PerfEntry* find_entry(HashTable* ht, const char* name) {
+PerfEntry* find_entry(HashTable* ht, const char* name) {
     size_t idx = get_idx(ht, name);
     PerfEntry* p = ht->entries + idx;
     PerfEntry* end = ht->entries + ht->capacity;
@@ -253,9 +253,9 @@ void perf_csv(HashTable* ht, FILE *file)
                 e->name, e->total_time, avg, e->min_time, e->max_time);
 
         if (e->has_metrics) {
-            double gflops = e->flop / e->total_time / 1e9;
-            double bandwidth = e->bytes / e->total_time / 1e9;
-            double intensity = (double)e->flop / e->bytes;
+            double gflops = (double) e->flop / avg / 1e9;
+            double bandwidth = (double) e->bytes / avg / 1e9;
+            double intensity = (double) e->flop / e->bytes;
             fprintf(file, "%.2f,%.2f,%.3f,", gflops, bandwidth, intensity);
         } else {
             fprintf(file, ",,,");  // Empty fields for missing metrics
