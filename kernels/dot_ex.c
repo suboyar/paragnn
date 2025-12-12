@@ -4,19 +4,12 @@
 #include <sys/param.h>
 
 #include <omp.h>
-#include <cblas.h>
+#include <openblas/cblas.h>     // NOTE: This might not work on eX3, but is needed for OpenSUSE
 
+#define NOB_IMPLEMENTATION      // Needed for matrix.h etc...
 #include "matrix.h"
 #include "perf.h"
 #include "cache_counter.h"
-
-#define NOB_IMPLEMENTATION
-#include "nob.h"
-
-
-// #define ARRAY_SIZE 524288000 // genoaxq
-// #define ARRAY_SIZE 33554432 // rome16q
-// #define ARRAY_SIZE 117964800 // xeonmaxq
 
 #ifndef NTIMES
 #    define NTIMES 10
@@ -452,22 +445,17 @@ void transpose_inplace(matrix_t *src)
     PERF_FUNC_END();
 }
 
-void transpose(matrix_t *src)
+double* transpose(const double *restrict s, size_t height, size_t width)
 {
-    PERF_FUNC_START();
+    size_t alignment = 64;      // hardcoded cacheline size
+    size_t size = height * width * sizeof(double);
+    size_t padded_size = (size + alignment - 1) & ~(alignment - 1);
+    double *restrict d = aligned_alloc(alignment, padded_size);
 
-    size_t height = src->height;
-    size_t width = src->width;
+    size_t s_width = width;
+    size_t d_width = height;
+
     size_t b = 64;
-
-    matrix_t *dst = mat_create(width, height);
-
-    size_t s_width = src->width;
-    size_t d_width = dst->width;
-
-    double* restrict s = src->data;
-    double* restrict d = dst->data;
-
 #pragma omp parallel for OUTER_SIMD
     for (size_t jj = 0; jj < width; jj += b) {
         size_t jstop = (jj + b < width) ? jj + b : width;
@@ -477,10 +465,10 @@ void transpose(matrix_t *src)
 
             size_t i;
             for (i = ii; i + 3 < istop; i+=4) {
-                double* restrict s_row0 = &s[(i+0) * s_width];
-                double* restrict s_row1 = &s[(i+1) * s_width];
-                double* restrict s_row2 = &s[(i+2) * s_width];
-                double* restrict s_row3 = &s[(i+3) * s_width];
+                const double* restrict s_row0 = &s[(i+0) * s_width];
+                const double* restrict s_row1 = &s[(i+1) * s_width];
+                const double* restrict s_row2 = &s[(i+2) * s_width];
+                const double* restrict s_row3 = &s[(i+3) * s_width];
 
 #pragma omp INNER_SIMD
                 for (size_t j = jj; j < jstop; j++) {
@@ -492,7 +480,7 @@ void transpose(matrix_t *src)
             }
 
             for (; i < istop; i++) {
-                double* restrict s_row = &s[i * s_width];
+                const double* restrict s_row = &s[i * s_width];
 
 #pragma omp INNER_SIMD
                 for (size_t j = jj; j < jstop; j++) {
@@ -502,14 +490,8 @@ void transpose(matrix_t *src)
         }
     }
 
-    double *temp = src->data;
-    src->data = dst->data;
-    src->height = width;
-    src->width = height;
-    free(temp);
-    free(dst);
-
     PERF_FUNC_END();
+    return d;
 }
 
 
@@ -523,12 +505,21 @@ void transpose(matrix_t *src)
 
 void matmul_tiled_transposed(matrix_t *A, matrix_t *B, matrix_t *C)
 {
-    transpose_inplace(A);
-    transpose_inplace(B);
+    matrix_t At = {
+        .height = A->width,
+        .width = A->height,
+        .data = transpose(A->data, A->height, A->width)
+    };
 
-    size_t M = A->height;
-    size_t K = A->width;       // <=> B->width
-    size_t N = B->height;
+    matrix_t Bt = {
+        .height = B->width,
+        .width = B->height,
+        .data = transpose(B->data, B->height, B->width)
+    };
+
+    size_t M = At.height;
+    size_t K = At.width;       // <=> Bt->width
+    size_t N = Bt.height;
 
     size_t b = 64;
 
@@ -542,11 +533,11 @@ void matmul_tiled_transposed(matrix_t *A, matrix_t *B, matrix_t *C)
 
                 for (size_t i = istart; i < istop; i++) {
                     for (size_t j = jstart; j < jstop; j++) {
-                        double sum = 0.0;
+                        double sum = MAT_AT(C, i, j);
 
 #pragma omp INNER_SIMD
                         for (size_t k = kstart; k < kstop; k++) {
-                            sum += MAT_AT(A, i, k) * MAT_AT(B, j, k);
+                            sum += MAT_AT(&At, i, k) * MAT_AT(&Bt, j, k);
                         }
 
                         MAT_AT(C, i, j) += sum;
@@ -555,6 +546,9 @@ void matmul_tiled_transposed(matrix_t *A, matrix_t *B, matrix_t *C)
             }
         }
     }
+
+    free(At.data);
+    free(Bt.data);
 }
 
 void matmul_tiled_2x2_transposed(matrix_t* A, matrix_t* B, matrix_t* C)
@@ -566,13 +560,23 @@ void matmul_tiled_2x2_transposed(matrix_t* A, matrix_t* B, matrix_t* C)
     // importance.
     //
 
-    transpose_inplace(A);
-    transpose_inplace(B);
+    matrix_t At = {
+        .height = A->width,
+        .width = A->height,
+        .data = transpose(A->data, A->height, A->width)
+    };
+
+    matrix_t Bt = {
+        .height = B->width,
+        .width = B->height,
+        .data = transpose(B->data, B->height, B->width)
+    };
+
+    size_t M = At.height;
+    size_t K = At.width;       // <=> Bt->width
+    size_t N = Bt.height;
 
     size_t b = 64;
-    size_t M = A->height;
-    size_t K = A->width;       // <=> B->width
-    size_t N = B->height;
 
 #pragma omp parallel for OUTER_SIMD
     for (size_t ii = 0; ii < M; ii += b) {
@@ -593,10 +597,10 @@ void matmul_tiled_2x2_transposed(matrix_t* A, matrix_t* B, matrix_t* C)
 
 #pragma omp INNER_SIMD
                         for (size_t k = kstart; k < kstop; k++) {
-                            double a_i0k = MAT_AT(A, i+0, k);
-                            double a_i1k = MAT_AT(A, i+1, k);
-                            double b_kj0 = MAT_AT(B, j+0, k);
-                            double b_kj1 = MAT_AT(B, j+1, k);
+                            double a_i0k = MAT_AT(&At, i+0, k);
+                            double a_i1k = MAT_AT(&At, i+1, k);
+                            double b_kj0 = MAT_AT(&Bt, j+0, k);
+                            double b_kj1 = MAT_AT(&Bt, j+1, k);
 
                             sum00 += a_i0k * b_kj0;
                             sum01 += a_i0k * b_kj1;
@@ -616,9 +620,9 @@ void matmul_tiled_2x2_transposed(matrix_t* A, matrix_t* B, matrix_t* C)
 
 #pragma omp INNER_SIMD
                         for (size_t k = kstart; k < kstop; k++) {
-                            double a_ik = MAT_AT(A, k, i);
-                            sum0 += a_ik * MAT_AT(B, j+0, k);
-                            sum1 += a_ik * MAT_AT(B, j+1, k);
+                            double a_ik = MAT_AT(&At, k, i);
+                            sum0 += a_ik * MAT_AT(&Bt, j+0, k);
+                            sum1 += a_ik * MAT_AT(&Bt, j+1, k);
                         }
 
                         MAT_AT(C, i, j+0) += sum0;
@@ -635,9 +639,9 @@ void matmul_tiled_2x2_transposed(matrix_t* A, matrix_t* B, matrix_t* C)
 
 #pragma omp INNER_SIMD
                         for (size_t k = kstart; k < kstop; k++) {
-                            double b_kj = MAT_AT(B, j, k);
-                            sum0 += MAT_AT(A, i+0, k) * b_kj;
-                            sum1 += MAT_AT(A, i+1, k) * b_kj;
+                            double b_kj = MAT_AT(&Bt, j, k);
+                            sum0 += MAT_AT(&At, i+0, k) * b_kj;
+                            sum1 += MAT_AT(&At, i+1, k) * b_kj;
                         }
                         MAT_AT(C, i+0, j) += sum0;
                         MAT_AT(C, i+1, j) += sum1;
@@ -648,7 +652,7 @@ void matmul_tiled_2x2_transposed(matrix_t* A, matrix_t* B, matrix_t* C)
 
 #pragma omp INNER_SIMD
                         for (size_t k = kstart; k < kstop; k++) {
-                            sum += MAT_AT(A, i, k) * MAT_AT(B, j, k);
+                            sum += MAT_AT(&At, i, k) * MAT_AT(&Bt, j, k);
                         }
                         MAT_AT(C, i, j) += sum;
                     }
@@ -656,16 +660,28 @@ void matmul_tiled_2x2_transposed(matrix_t* A, matrix_t* B, matrix_t* C)
             }
         }
     }
+
+    free(At.data);
+    free(Bt.data);
 }
 
 void matmul_tiled_1x4_transposed(matrix_t* A, matrix_t* B, matrix_t* C)
 {
-    transpose_inplace(A);
-    transpose_inplace(B);
+    matrix_t At = {
+        .height = A->width,
+        .width = A->height,
+        .data = transpose(A->data, A->height, A->width)
+    };
 
-    size_t M = A->height;
-    size_t K = A->width;       // <=> B->width
-    size_t N = B->height;
+    matrix_t Bt = {
+        .height = B->width,
+        .width = B->height,
+        .data = transpose(B->data, B->height, B->width)
+    };
+
+    size_t M = At.height;
+    size_t K = At.width;       // <=> Bt->width
+    size_t N = Bt.height;
 
     size_t b = 64;
 
@@ -690,11 +706,11 @@ void matmul_tiled_1x4_transposed(matrix_t* A, matrix_t* B, matrix_t* C)
 
 #pragma omp simd
                         for (size_t k = kstart; k < kstop; k++) {
-                            double a_ik = MAT_AT(A, i, k);
-                            sum0 += a_ik * MAT_AT(B, j+0, k);
-                            sum1 += a_ik * MAT_AT(B, j+1, k);
-                            sum2 += a_ik * MAT_AT(B, j+2, k);
-                            sum3 += a_ik * MAT_AT(B, j+3, k);
+                            double a_ik = MAT_AT(&At, i, k);
+                            sum0 += a_ik * MAT_AT(&Bt, j+0, k);
+                            sum1 += a_ik * MAT_AT(&Bt, j+1, k);
+                            sum2 += a_ik * MAT_AT(&Bt, j+2, k);
+                            sum3 += a_ik * MAT_AT(&Bt, j+3, k);
                         }
 
                         MAT_AT(C, i, j+0) = sum0;
@@ -708,7 +724,7 @@ void matmul_tiled_1x4_transposed(matrix_t* A, matrix_t* B, matrix_t* C)
 
 #pragma omp simd
                         for (size_t k = kstart; k < kstop; k++) {
-                            sum += MAT_AT(A, i, k) * MAT_AT(B, j, k);
+                            sum += MAT_AT(&At, i, k) * MAT_AT(&Bt, j, k);
                         }
 
                         MAT_AT(C, i, j) = sum;
@@ -718,24 +734,26 @@ void matmul_tiled_1x4_transposed(matrix_t* A, matrix_t* B, matrix_t* C)
             }
         }
     }
+
+    free(At.data);
+    free(Bt.data);
 }
 
 void matmul_tiled_1x4_transposed_restrict(matrix_t* A, matrix_t* B, matrix_t* C)
 {
-    transpose_inplace(A);
-    transpose_inplace(B);
-
-    size_t M = A->height;
-    size_t K = A->width;       // <=> B->width
-    size_t N = B->height;
-
-    double* restrict a_data = A->data;
-    double* restrict b_data = B->data;
+    double* restrict a_data = transpose(A->data, A->height, A->width);
+    double* restrict b_data = transpose(B->data, B->height, B->width);
     double* restrict c_data = C->data;
 
-    size_t a_width = A->width;
-    size_t b_width = B->width;
+    // A and B is transposed
+    size_t a_width = A->height;
+    size_t b_width = B->height;
     size_t c_width = C->width;
+
+    // Use the old shape pre-transpose
+    size_t M = A->width;
+    size_t K = A->height;       // <=> B->height
+    size_t N = B->width;
 
     size_t b = 64;
 
@@ -788,23 +806,26 @@ void matmul_tiled_1x4_transposed_restrict(matrix_t* A, matrix_t* B, matrix_t* C)
             }
         }
     }
+
+    free(a_data);
+    free(b_data);
 }
 
 void matmul_tiled_1x4_transposed_A_restrict(matrix_t* A, matrix_t* B, matrix_t* C)
 {
-    transpose_inplace(A);
-
-    size_t M = A->height;
-    size_t K = A->width;       // <=> B->height
-    size_t N = B->width;
-
-    double* restrict a_data = A->data;
+    double* restrict a_data = transpose(A->data, A->height, A->width);
     double* restrict b_data = B->data;
     double* restrict c_data = C->data;
 
-    size_t a_width = A->width;
+    // A is transposed
+    size_t a_width = A->height;
     size_t b_width = B->width;
     size_t c_width = C->width;
+
+    // Use the old shape pre-transpose
+    size_t M = A->width;
+    size_t K = A->height;       // <=> B->height
+    size_t N = B->width;
 
     size_t b = 64;
 
@@ -857,24 +878,25 @@ void matmul_tiled_1x4_transposed_A_restrict(matrix_t* A, matrix_t* B, matrix_t* 
             }
         }
     }
+
+    free(a_data);
 }
 
 void matmul_tiled_1x4_transposed_restrict_ikj(matrix_t* A, matrix_t* B, matrix_t* C)
 {
-    transpose_inplace(A);
-    transpose_inplace(B);
-
-    size_t M = A->height;
-    size_t K = A->width;       // <=> B->width
-    size_t N = B->height;
-
-    double* restrict a_data = A->data;
-    double* restrict b_data = B->data;
+    double* restrict a_data = transpose(A->data, A->height, A->width);
+    double* restrict b_data = transpose(B->data, B->height, B->width);
     double* restrict c_data = C->data;
 
-    size_t a_width = A->width;
-    size_t b_width = B->width;
+    // A is transposed
+    size_t a_width = A->height;
+    size_t b_width = B->height;
     size_t c_width = C->width;
+
+    // Use the old shape pre-transpose
+    size_t M = A->width;
+    size_t K = A->height;       // <=> B->height
+    size_t N = B->width;
 
     size_t b = 64;
 
@@ -910,23 +932,26 @@ void matmul_tiled_1x4_transposed_restrict_ikj(matrix_t* A, matrix_t* B, matrix_t
             }
         }
     }
+
+    free(a_data);
+    free(b_data);
 }
 
 void matmul_tiled_1x4_transposed_A_restrict_ikj(matrix_t* A, matrix_t* B, matrix_t* C)
 {
-    transpose_inplace(A);
-
-    size_t M = A->height;
-    size_t K = A->width;       // <=> B->height
-    size_t N = B->width;
-
-    double* restrict a_data = A->data;
+    double* restrict a_data = transpose(A->data, A->height, A->width);
     double* restrict b_data = B->data;
     double* restrict c_data = C->data;
 
-    size_t a_width = A->width;
+    // A and B is transposed
+    size_t a_width = A->height;
     size_t b_width = B->width;
     size_t c_width = C->width;
+
+    // Use the old shape pre-transpose
+    size_t M = A->width;
+    size_t K = A->height;       // <=> B->height
+    size_t N = B->width;
 
     size_t b = 64;
 
@@ -964,23 +989,24 @@ void matmul_tiled_1x4_transposed_A_restrict_ikj(matrix_t* A, matrix_t* B, matrix
         }
     }
 
+    free(a_data);
 }
 
 void matmul_tiled_transposed_A_restrict_ikj(matrix_t* A, matrix_t* B, matrix_t* C)
 {
-    transpose_inplace(A);
-
-    size_t M = A->height;
-    size_t K = A->width;       // <=> B->height
-    size_t N = B->width;
-
-    double* restrict a_data = A->data;
+    double* restrict a_data = transpose(A->data, A->height, A->width);
     double* restrict b_data = B->data;
     double* restrict c_data = C->data;
 
-    size_t a_width = A->width;
+    // A is transposed
+    size_t a_width = A->height;
     size_t b_width = B->width;
     size_t c_width = C->width;
+
+    // Use the old shape pre-transpose for A
+    size_t M = A->width;
+    size_t K = A->height;       // <=> B->height
+    size_t N = B->width;
 
     size_t b = 64;
 
@@ -1009,6 +1035,8 @@ void matmul_tiled_transposed_A_restrict_ikj(matrix_t* A, matrix_t* B, matrix_t* 
             }
         }
     }
+
+    free(a_data);
 }
 
 void matmul_packed(matrix_t* A, matrix_t* B, matrix_t* C)
@@ -1234,8 +1262,12 @@ void run_benchmark(matrix_t* A, matrix_t* B, matrix_t* C, matrix_t* ref, MatmulK
 int main(void)
 {
     int num_threads = omp_get_max_threads();
-    openblas_set_num_threads(num_threads);
+    printf("Using %d threads\n", num_threads);
+    // openblas_set_num_threads(num_threads);
     thread_counters = malloc(num_threads * sizeof(cache_counter_t));
+    if (!thread_counters) {
+        fprintf(stderr, "ERROR: Could not allocate thread_counters\n");
+    }
     #pragma omp parallel
     {
         int tid = omp_get_thread_num();
@@ -1286,24 +1318,29 @@ int main(void)
 
         // Precompute the reference
         printf("Computing reference\n");
-        matmul_naive(A, B, ref);
+        matmul_naive_restrict(A, B, ref);
 
         MatmulKernel kernels[] = {
             NEW_KERNEL(matmul_naive, RESTORE_NONE),
             NEW_KERNEL(matmul_naive_restrict, RESTORE_NONE),
-            // NEW_KERNEL(matmul_unroll, RESTORE_NONE),
-            // NEW_KERNEL(matmul_tiled, RESTORE_NONE),
+
+            NEW_KERNEL(matmul_unroll, RESTORE_NONE),
+            NEW_KERNEL(matmul_tiled, RESTORE_NONE),
+
             NEW_KERNEL(matmul_tiled_1x4, RESTORE_NONE),
             NEW_KERNEL(matmul_tiled_1x4_restrict, RESTORE_NONE),
-            // NEW_KERNEL(matmul_tiled_2x2, RESTORE_NONE),
-            // NEW_KERNEL(matmul_tiled_transposed, RESTORE_A | RESTORE_B),
-            // NEW_KERNEL(matmul_tiled_2x2_transposed, RESTORE_A | RESTORE_B),
-            NEW_KERNEL(matmul_tiled_1x4_transposed, RESTORE_A | RESTORE_B),
-            NEW_KERNEL(matmul_tiled_1x4_transposed_restrict, RESTORE_A | RESTORE_B),
-            // NEW_KERNEL(matmul_tiled_1x4_transposed_A_restrict,  RESTORE_A),
-            // NEW_KERNEL(matmul_tiled_1x4_transposed_restrict_ikj, RESTORE_A | RESTORE_B),
-            // NEW_KERNEL(matmul_tiled_1x4_transposed_A_restrict_ikj, RESTORE_A),
-            // NEW_KERNEL(matmul_tiled_transposed_A_restrict_ikj, RESTORE_A),
+
+            NEW_KERNEL(matmul_tiled_2x2, RESTORE_NONE),
+            NEW_KERNEL(matmul_tiled_transposed, RESTORE_NONE),
+            NEW_KERNEL(matmul_tiled_2x2_transposed, RESTORE_NONE),
+
+            NEW_KERNEL(matmul_tiled_1x4_transposed, RESTORE_NONE),
+            NEW_KERNEL(matmul_tiled_1x4_transposed_restrict, RESTORE_NONE),
+
+            NEW_KERNEL(matmul_tiled_1x4_transposed_A_restrict,  RESTORE_NONE),
+            NEW_KERNEL(matmul_tiled_1x4_transposed_restrict_ikj, RESTORE_NONE),
+            NEW_KERNEL(matmul_tiled_1x4_transposed_A_restrict_ikj, RESTORE_NONE),
+            NEW_KERNEL(matmul_tiled_transposed_A_restrict_ikj, RESTORE_NONE),
             NEW_KERNEL(blas, RESTORE_NONE),
         };
 
@@ -1316,9 +1353,6 @@ int main(void)
         mat_destroy(C);
         mat_destroy(ref);
     }
-
-    PERF_PRINT();
-
 
     return 0;
 }
