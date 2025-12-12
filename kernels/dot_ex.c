@@ -1,4 +1,5 @@
 #include <math.h>
+#include <float.h>
 #include <stdio.h>
 #include <stdbool.h>
 #include <sys/param.h>
@@ -387,8 +388,6 @@ void matmul_tiled_2x2(matrix_t*  A, matrix_t* B, matrix_t* C)
 
 void transpose_inplace(matrix_t *src)
 {
-    PERF_FUNC_START();
-
     size_t height = src->height;
     size_t width = src->width;
     size_t b = 64;
@@ -441,8 +440,6 @@ void transpose_inplace(matrix_t *src)
     src->width = height;
     free(temp);
     free(dst);
-
-    PERF_FUNC_END();
 }
 
 double* transpose(const double *restrict s, size_t height, size_t width)
@@ -490,7 +487,6 @@ double* transpose(const double *restrict s, size_t height, size_t width)
         }
     }
 
-    PERF_FUNC_END();
     return d;
 }
 
@@ -1193,70 +1189,61 @@ void run_benchmark(matrix_t* A, matrix_t* B, matrix_t* C, matrix_t* ref, MatmulK
         fflush(stdout);
     }
 
+    size_t M = A->width;
+    size_t K = A->height;       // <=> B->height
+    size_t N = B->width;
+    uint64_t flops = 2ULL * M * N * K;
+
+    double min_time = DBL_MAX;
     uint64_t bytes = 0;
-    uint64_t cache_misses_local = 0;
-    uint64_t cache_misses_remote = 0;
+    uint64_t l3_local = 0;
+    uint64_t l3_remote = 0;
 
     // Timed runs
     printf("\r\033[K%s: run", kernel.name);
     fflush(stdout);
-    // double total_time = 0.0;
     for (size_t i = 0; i < NTIMES; i++) {
 #pragma omp parallel
         {
             int tid = omp_get_thread_num();
             cache_counter_start(&thread_counters[tid]);
         }
-        // double start = omp_get_wtime();
-        PERF_START(kernel.name);
+
+        double start = omp_get_wtime();
         kernel.fn(A, B, C);
-        PERF_END(kernel.name);
-        // total_time += omp_get_wtime() - start;
+        double elapsed = omp_get_wtime() - start;
 
-#pragma omp parallel reduction(+:bytes,cache_misses_local,cache_misses_remote)
-        {
-            int tid = omp_get_thread_num();
-            cache_counter_stop(&thread_counters[tid]);
+        if (elapsed < min_time) {
+            min_time = elapsed;
+            bytes = 0;
+            l3_local = 0;
+            l3_remote = 0;
+#pragma omp parallel reduction(+:bytes,l3_local,l3_remote)
+            {
+                int tid = omp_get_thread_num();
+                cache_counter_stop(&thread_counters[tid]);
 
-            bytes += cache_counter_get_bytes_loaded(&thread_counters[tid]);
-            long long local = 0;
-            long long remote = 0;
-            cache_counter_get_cache_misses(&thread_counters[tid], &local, &remote);
-            cache_misses_local += (uint64_t)local;
-            cache_misses_remote += (uint64_t)remote;
+                bytes += cache_counter_get_bytes_loaded(&thread_counters[tid]);
+                long long local = 0;
+                long long remote = 0;
+                cache_counter_get_cache_misses(&thread_counters[tid], &local, &remote);
+                l3_local += (uint64_t)local;
+                l3_remote += (uint64_t)remote;
+            }
         }
-
         mat_zero(C);
         restore_if_needed(A, B, kernel.restore);
         putchar('.');
         fflush(stdout);
     }
 
-    size_t M = A->width;
-    size_t K = A->height;       // <=> B->height
-    size_t N = B->width;
-
-    PerfEntry* perf_entry = PERF_GET_ENTRY(kernel.name);
-    if (perf_entry) {
-        double avg_time = perf_entry->total_time / NTIMES;
-        double avg_bytes = (double) bytes / NTIMES;
-        double avg_cache_miss_local = (double)cache_misses_local / NTIMES;
-        double avg_cache_miss_remote = (double)cache_misses_remote / NTIMES;
-
-        double gb_per_s = avg_bytes / avg_time / 1e9;
-        uint64_t flops = 2ULL * M * N * K;
-        double gflops_per_s = (double) flops / avg_time / 1e9;
-        double intensity = gflops_per_s / gb_per_s;
-
-        PERF_OP_METRICS(kernel.name, ((OpMetrics){.flops=flops, .bytes=bytes}));
-
-        printf("\r\033[K%s: %.3fs, %.2f GB/s, %.2f GFLOP/s, %.2f flop/byte, "
-               "L3-local: %.0f, L3-remote: %.0f\n",
-               kernel.name, avg_time, gb_per_s, gflops_per_s, intensity,
-               avg_cache_miss_local, avg_cache_miss_remote);
-    } else {
-        printf("\r\033[K%s: Could not get PerfEntry\n", kernel.name);
-    }
+    double bandwidth = bytes / min_time;
+    double flops_per_s = (double) flops / min_time;
+    double intensity = flops_per_s / bandwidth;
+    printf("\r\033[K%s: %.3fs, %.2f MBytes/s, %.2f MFlops/s, %.2f flop/byte, "
+           "L3-local(MB): %.2f, L3-remote(MB): %.2f\n",
+           kernel.name, min_time, bandwidth/1e6, flops_per_s/1e6, intensity,
+           (double)l3_local/1e6, (double)l3_remote/1e6);
 }
 
 int main(void)
