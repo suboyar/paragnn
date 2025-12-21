@@ -1024,9 +1024,9 @@ void matmul_tiled_transposed_A_restrict_ikj(matrix_t* A, matrix_t* B, matrix_t* 
                     double* restrict c_row = &c_data[i * c_width];
                     double* restrict a_row = &a_data[i * a_width];
 
-#pragma omp simd
                     for (size_t k = kstart; k < kstop; k++) {
                         double a_ik = a_row[k];
+#pragma omp simd
                         for (size_t j = jstart; j < jstop; j++) {
                             c_row[j] += a_ik * b_data[b_width * k + j];
                         }
