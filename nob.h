@@ -1374,7 +1374,8 @@ NOBDEF bool nob_proc_wait(Nob_Proc proc)
         }
 
         if (WIFSIGNALED(wstatus)) {
-            nob_log(NOB_ERROR, "command process was terminated by signal %d", WTERMSIG(wstatus));
+            nob_log(NOB_ERROR, "command process was terminated by signal %d (%s)",
+                    WTERMSIG(wstatus), strsignal(WTERMSIG(wstatus)));
             return false;
         }
     }
@@ -1446,7 +1447,8 @@ static int nob__proc_wait_async(Nob_Proc proc, int ms)
     }
 
     if (WIFSIGNALED(wstatus)) {
-        nob_log(NOB_ERROR, "command process was terminated by signal %d", WTERMSIG(wstatus));
+        nob_log(NOB_ERROR, "command process was terminated by signal %d (%s)",
+                WTERMSIG(wstatus), strsignal(WTERMSIG(wstatus)));
         return -1;
     }
 
