@@ -10,83 +10,91 @@
 #include "flag.h"
 
 #define BUILD_FOLDER "build/"
-#define TOOLS_FOLDER "tools/"
-#define SRC_FOLDER "src/"
-#define KERNEL_FOLDER  "kernels/"
+#define SRC_FOLDER   "src/"
+#define KERNEL_FOLDER "kernels/"
 
-#define NOB_NEEDS_REBUILD(output_path, input_paths, input_paths_count) \
-    (flags.rebuild ? 1 : nob_needs_rebuild((output_path), (input_paths), (input_paths_count)))
+#define OGB_ARXIV_PATH "./arxiv/"
+#define OGB_ARXIV_URL "http://snap.stanford.edu/ogb/data/nodeproppred/arxiv.zip"
+#define OGB_ARXIV_RAW OGB_ARXIV_PATH"raw/"
+#define OGB_ARXIV_PROCESSED OGB_ARXIV_PATH"processed/"
+#define OGB_ARXIV_FILES_COUNT 6
 
-#define NOB_NEEDS_REBUILD1(output_path, input_path) \
-    (flags.rebuild ? 1 : nob_needs_rebuild1((output_path), (input_path)))
 
 #define nob_cc_flags(cmd) nob_cmd_append(cmd, "-std=c17", "-D_POSIX_C_SOURCE=200809L")
 #define nob_cc_error_flags(cmd) \
-    nob_cmd_append(cmd,                                                 \
-                   "-Wall",                                             \
-                   "-Wextra",                                           \
-                   "-Wfloat-conversion",                                \
-                   "-Werror=implicit-function-declaration",             \
-                   "-Werror=incompatible-pointer-types",                \
-                   "-Wno-unknown-pragmas")
+    nob_cmd_append(cmd,         \
+        "-Wall",                \
+        "-Wextra",              \
+        "-Wfloat-conversion",   \
+        "-Werror=implicit-function-declaration", \
+        "-Werror=incompatible-pointer-types") // Maybe re-add -Wno-unknown-pragmas?
 
-#define SUBMIT_DESC "Job submission partition\n        Valid: defq, fpgaq, genoaxq, gh200q, milanq, xeonmaxq, rome16q, bench, dev, list"
+// XXX: char** members are NULL-terminated
+typedef struct {
+    const char* name;
+    const char** srcs;
+    const char** libs;
+    const char*  out_dir;       // NULL means BUILD_FOLDER
+    const char** release_macros;
+} Target;
+
+// Target registry
+Target targets[] = {
+    {
+        .name = "paragnn",
+        .srcs = (const char*[]){
+            SRC_FOLDER"gnn.c",
+            SRC_FOLDER"graph.c",
+            SRC_FOLDER"layers.c",
+            SRC_FOLDER"main.c",
+            SRC_FOLDER"matrix.c",
+            SRC_FOLDER"gemm.c",
+            SRC_FOLDER"perf.c",
+            NULL
+        },
+        .libs = (const char*[]){"-lm", "-lopenblas", NULL},
+        .release_macros = (const char*[]){"-DUSE_OGB_ARXIV", "-DEPOCH=10", NULL},
+    },
+    {
+        .name = "dot-ex",       // TODO: rename this to tsgemm (tall-skinny gemm)
+        .srcs = (const char*[]){
+            SRC_FOLDER"matrix.c",
+            SRC_FOLDER"perf.c",
+            KERNEL_FOLDER"cache_counter.c",
+            KERNEL_FOLDER"dot_ex.c",
+            NULL
+        },
+        .libs = (const char*[]){"-lm", "-lopenblas", NULL},
+    },
+};
 
 typedef struct {
-    const char* obj_path;
-    const char* src_path;
-    const char* exec_path;
-} BuildTarget;
-
-typedef struct {
-    bool  build;
-    bool  run;
-    bool  rebuild;
-    bool  release;
-    bool  gen_asm;
-    bool  ogb;
-    bool  help;
+    bool   run;
+    bool   debug;
+    bool   release;
+    bool   clean;
+    bool   extract_ogb;
+    bool   download_ogb;
+    bool   help;
+    char*  target;
     char*  submit;
-    char* out_dir;
-    char* kernel;
-    bool fastmath;
+    char*  out_dir;
     Flag_List_Mut macros;
-    int rest_argc;
+    int    rest_argc;
     char** rest_argv;
 } Flags;
 
 Flags flags = {0};
-
-typedef enum {
-    CMD_NONE,
-    CMD_CLEAN,
-    CMD_OGB,
-    CMD_COMPILE_LOCAL,
-    CMD_COMPILE_SLURM,
-    CMD_RUN_LOCAL,
-    CMD_RUN_SLURM,
-} Command;
-
 Nob_Cmd cmd = {0};
 Nob_Procs procs = {0};
 
-struct {
-    const char* name;
-    const char* arch;
-    bool dev;
-} partitions[] = {
-    // For benchmarking
-    {.name = "defq",     .arch = "arm",   .dev = false},
-    {.name = "fpgaq",    .arch = "amd",   .dev = false},
-    {.name = "genoaxq",  .arch = "amd",   .dev = false},
-    {.name = "gh200q",   .arch = "arm",   .dev = false},
-    {.name = "milanq",   .arch = "amd",   .dev = false},
-    {.name = "xeonmaxq", .arch = "intel", .dev = false},
-    // For devlopment
-    {.name = "rome16q",  .arch = "amd",   .dev = true},
-};
+size_t ptrlen(void **arr) {
+    size_t n = 0;
+    while (arr[n]) n++;
+    return n;
+}
 
-bool nob_mkdir_if_not_exists_recursvily(const char *path)
+bool mkdir_recursive(const char *path)
 {
     if (path == NULL || path[0] == '\0') {
         nob_log(NOB_ERROR, "cannot create directory from empty path");
@@ -98,255 +106,206 @@ bool nob_mkdir_if_not_exists_recursvily(const char *path)
 
     while (sv.count > 0) {
         Nob_String_View dir = nob_sv_chop_by_delim(&sv, '/');
-
         if (dir.count == 0) continue;
 
         nob_sb_appendf(&sb, "%s/", nob_temp_sv_to_cstr(dir));
-        const char* dir_path = sb.items;
-
-        if (!nob_mkdir_if_not_exists(dir_path)) return false;
+        if (!nob_mkdir_if_not_exists(sb.items)) return false;
     }
+    return true;
 }
 
-void list_all_partitions()
+Target* find_target(const char* name)
 {
-    // Find longest name
-    int max_len = 0;
-    for (size_t i = 0; i < NOB_ARRAY_LEN(partitions); i++) {
-        int len = (int)strlen(partitions[i].name);
-        if (len > max_len) max_len = len;
-    }
-    max_len += 2;    // Some more padding
-
-    printf("Partitions for benchmarking:\n");
-    for (size_t i = 0; i < NOB_ARRAY_LEN(partitions); i++) {
-        if (!partitions[i].dev) {
-            printf("\t%-*s (%s)\n", max_len, partitions[i].name, partitions[i].arch);
+    for (size_t i = 0; i < NOB_ARRAY_LEN(targets); i++) {
+        if (strcmp(targets[i].name, name) == 0) {
+            return &targets[i];
         }
     }
-
-    printf("Partitions for testing:\n");
-    for (size_t i = 0; i < NOB_ARRAY_LEN(partitions); i++) {
-        if (partitions[i].dev) {
-            printf("\t%-*s (%s)\n", max_len, partitions[i].name, partitions[i].arch);
-        }
-    }
-
-    printf("\nExample usage: ./nob --sbatch rome16q\n");
+    return NULL;
 }
 
-bool partition_is_valid(const char* partition)
+void list_targets(void)
 {
-    for (size_t i = 0; i < NOB_ARRAY_LEN(partitions); i++) {
-        if (strcmp(partitions[i].name, partition) == 0) return true;
+    printf("Available targets:\n");
+    for (size_t i = 0; i < NOB_ARRAY_LEN(targets); i++) {
+        printf("  %s%s\n", targets[i].name,
+               i == 0 ? " (default)" : "");
     }
-
-    return false;
 }
 
-char* to_define_flag(const char* str)
+const char* get_obj_path(const char* out_dir, const char* src_path)
 {
-    Nob_String_Builder sb = {0};
-    const char* p = str;
+    const char* base = nob_path_name(src_path);
+    Nob_String_View sv = nob_sv_from_cstr(base);
 
-    while (*p) {
-        nob_da_append(&sb, (char)toupper((unsigned char) *p++));
-    }
-    nob_sb_append_null(&sb);
-
-    return nob_temp_sprintf("-D%s", sb.items);
-}
-
-int compile_src_files(BuildTarget* targets, size_t len)
-{
-    for (size_t i = 0; i < len; ++i) {
-        if (NOB_NEEDS_REBUILD1(targets[i].obj_path, targets[i].src_path) > 0) {
-            nob_cc(&cmd);
-            nob_cc_flags(&cmd);
-            nob_cc_error_flags(&cmd);
-            nob_cmd_append(&cmd, "-I.");
-            nob_cmd_append(&cmd, "-I"SRC_FOLDER);
-
-            if (flags.release) {
-                nob_cmd_append(&cmd, "-O3", "-march=native", "-DNDEBUG", "-ffast-math");
-                if (flags.kernel == NULL) {
-                    nob_cmd_append(&cmd, "-DUSE_OGB_ARXIV");
-                    nob_cmd_append(&cmd, "-DEPOCH=10");
-                }
-            } else {
-                nob_cmd_append(&cmd, "-O0", "-ggdb", "-g3", "-gdwarf-2");
-            }
-
-            for (size_t i = 0; i < flags.macros.count; ++i) {
-                nob_cmd_append(&cmd, nob_temp_sprintf("-D%s", flags.macros.items[i]));
-            }
-
-            nob_cmd_append(&cmd, "-fopenmp");
-
-            nob_cc_output(&cmd, targets[i].obj_path);
-
-            if (flags.gen_asm) {
-                nob_cmd_append(&cmd, "-S", "-masm=intel", "-fverbose-asm", targets[i].src_path);
-            } else {
-                nob_cmd_append(&cmd, "-c", targets[i].src_path);
-            }
-
-            if (!nob_cmd_run(&cmd, .async = &procs)) {
-                nob_log(NOB_ERROR, "Could not compile source files");
-                return 1;
-            }
-        }
+    // Strip .c extension
+    size_t len = sv.count;
+    if (len > 2 && sv.data[len-2] == '.' && sv.data[len-1] == 'c') {
+        len -= 2;
     }
 
-    if (!nob_procs_flush(&procs)) return 1;
-
-    return 0;
+    return nob_temp_sprintf("%s%.*s.o", out_dir, (int)len, sv.data);
 }
 
-int build_kernel_bench()
+void append_common_flags(bool release)
 {
-    char *out_dir = BUILD_FOLDER;
+    nob_cc_flags(&cmd);
+    nob_cc_error_flags(&cmd);
+    nob_cmd_append(&cmd, "-I.", "-I"SRC_FOLDER);
 
-    nob_mkdir_if_not_exists_recursvily(out_dir);
-
-    const char* exec_path = NULL;
-    const char* kernel_src = NULL;
-    const char* kernel_obj = NULL;
-
-    if (strcmp(flags.kernel, "dot-ex") == 0) {
-        exec_path = nob_temp_sprintf("%s%s", out_dir, "dot-ex");
-        kernel_src = KERNEL_FOLDER"dot_ex.c";
-        kernel_obj = BUILD_FOLDER"dot_ex.o";
+    if (release) {
+        nob_cmd_append(&cmd, "-O3", "-march=native", "-DNDEBUG", "-ffast-math");
     } else {
-        nob_log(NOB_ERROR, "Wrong value passed to '-kernel': %s", flags.kernel);
-        return 1;
+        nob_cmd_append(&cmd, "-O0", "-ggdb", "-g3", "-gdwarf-2");
     }
 
-    BuildTarget targets[] = {
-        {.obj_path = BUILD_FOLDER"matrix.o",      .src_path = SRC_FOLDER"matrix.c"},
-        {.obj_path = BUILD_FOLDER"perf.o",        .src_path = SRC_FOLDER"perf.c"},
-        {.obj_path = BUILD_FOLDER"cache_counter.o", .src_path = KERNEL_FOLDER"cache_counter.c"},
-        {.obj_path = kernel_obj,                  .src_path = kernel_src}
-    };
-
-    // Compile src files
-    if (compile_src_files(targets, NOB_ARRAY_LEN(targets)) != 0) {
-        nob_log(NOB_ERROR, "Error while compiling kernel: %s", flags.kernel);
-        return 1;
-    }
-
-    const char* deps[NOB_ARRAY_LEN(targets)];
-    for (size_t i = 0; i < NOB_ARRAY_LEN(targets); ++i) {
-        deps[i] = targets[i].obj_path;
-    }
-
-    // Link object files
-    if (!flags.gen_asm && NOB_NEEDS_REBUILD(exec_path, deps, NOB_ARRAY_LEN(deps)) > 0) {
-        nob_cc(&cmd);
-        nob_cc_flags(&cmd);
-        nob_cc_error_flags(&cmd);
-        nob_cmd_append(&cmd, "-I.");
-        nob_cmd_append(&cmd, "-I"SRC_FOLDER);
-        nob_cmd_append(&cmd, "-I"KERNEL_FOLDER);
-        if (flags.release) {
-            nob_cmd_append(&cmd, "-O3", "-march=native", "-DNDEBUG", "-ffast-math");
-        } else {
-            nob_cmd_append(&cmd, "-O0", "-ggdb", "-g3", "-gdwarf-2");
-        }
-        nob_cmd_append(&cmd, "-fopenmp");
-        nob_cc_output(&cmd, exec_path);
-        // nob_cc_inputs(&cmd, kernel_path);
-        for (size_t i = 0; i < NOB_ARRAY_LEN(targets); ++i) {
-            nob_cc_inputs(&cmd, targets[i].obj_path);
-        }
-        nob_cmd_append(&cmd, "-lm");
-        nob_cmd_append(&cmd, "-lopenblas");
-        if (!nob_cmd_run(&cmd)) return 1;
-    }
-
-    if (flags.run) {
-        nob_cmd_append(&cmd, exec_path);
-        if (!nob_cmd_run(&cmd)) return 1;
-    }
-
-    return 0;
+    nob_cmd_append(&cmd, "-fopenmp");
 }
 
-int build_paragnn()
+bool prepare_ogb_dataset()
 {
-    const char *exec = "paragnn";
-    char *out_dir = BUILD_FOLDER;
-    if (flags.out_dir != NULL) {
-        out_dir = flags.out_dir;
+    bool result = true;
+    Nob_File_Paths file_paths = {0};
+
+    if (!flags.extract_ogb && (nob_read_entire_dir(OGB_ARXIV_PROCESSED, &file_paths) && file_paths.count > 2)) {
+        nob_log(NOB_INFO, "OGB dataset already processed");
+        nob_return_defer(true);
     }
 
-    if ((out_dir[strlen(out_dir)-1]) != '/') {
+    if(!nob_read_entire_dir(OGB_ARXIV_PATH"raw", &file_paths)) {
+        if (!flags.download_ogb) {
+            // Maybe support downloading other datasets from OGB, than only supporting ogb-arxiv
+            nob_log(NOB_ERROR, "OGB dataset not found. Run with -download-ogb to fetch it");
+            nob_return_defer(false);
+        }
+
+        // TODO: try this later when I'm not on metered connection
+        nob_log(NOB_INFO, "Downloading OGB arxiv dataset...");
+        nob_cmd_append(&cmd, "wget", "-q", "--show-progress", OGB_ARXIV_URL);
+        if (!nob_cmd_run(&cmd)) {
+            nob_log(NOB_ERROR, "Failed to download ogb-arxiv dataset");
+            nob_return_defer(false);
+        }
+
+        nob_cmd_append(&cmd, "unzip", "-q", "arxiv.zip", "-d", OGB_ARXIV_PATH);
+        if (!nob_cmd_run(&cmd)) {
+            nob_log(NOB_ERROR, "Failed to unzip arxiv.zip");
+            nob_return_defer(false);
+        }
+
+        // Try reading the files one more time
+        if(!nob_read_entire_dir(OGB_ARXIV_PATH"raw", &file_paths)) {
+            nob_log(NOB_ERROR, "Failed to read raw files after extraction");
+        }
+    }
+
+    for (size_t i = 0; i < file_paths.count; i++) {
+        const char *rawfile = file_paths.items[i];
+        if (*rawfile == '.') continue;
+        nob_log(NOB_INFO, "Extracting %s to %s", rawfile, OGB_ARXIV_PROCESSED);
+
+        char *in = nob_temp_sprintf(OGB_ARXIV_PATH"raw/%s", rawfile);
+
+        size_t base_len = strlen(rawfile) - 3; // strip .gz
+        const char *out = nob_temp_sprintf("%s%.*s", OGB_ARXIV_PROCESSED, (int)base_len, rawfile);
+
+        nob_cmd_append(&cmd, "gzip", "-d", "-c", in);
+        if (!nob_cmd_run(&cmd, .stdout_path = out)) {
+            nob_log(NOB_ERROR, "Failed to extract %s", rawfile);
+            nob_return_defer(false);
+        }
+    }
+
+    nob_log(NOB_INFO, "OGB dataset ready");
+
+defer:
+    nob_da_free(file_paths);
+    return result;
+}
+
+int build_target(Target* t)
+{
+    // Download-extract-decompress dataset if needed
+    if (strcmp(t->name, "paragnn") == 0) {
+        if (!prepare_ogb_dataset()) return 1;
+    }
+
+    bool release = flags.release;
+
+    // Determine output directory
+    const char* out_dir = flags.out_dir ? flags.out_dir :
+                          t->out_dir    ? t->out_dir : BUILD_FOLDER;
+
+    // Ensure trailing slash
+    size_t len = strlen(out_dir);
+    if (len > 0 && out_dir[len-1] != '/') {
         out_dir = nob_temp_sprintf("%s/", out_dir);
     }
 
-    nob_mkdir_if_not_exists_recursvily(out_dir);
+    if (!mkdir_recursive(out_dir)) return 1;
 
-    const char* exec_path = nob_temp_sprintf("%s%s", out_dir, exec);
+    const char* exec_path = nob_temp_sprintf("%s%s", out_dir, t->name);
+    size_t src_count = ptrlen((void**)t->srcs);
+    size_t lib_count = ptrlen((void**)t->libs);
 
-    BuildTarget targets[] = {
-        {.obj_path = (nob_temp_sprintf("%s%s", out_dir, "gnn.o")),    .src_path = SRC_FOLDER"gnn.c"},
-        {.obj_path = (nob_temp_sprintf("%s%s", out_dir, "graph.o")),  .src_path = SRC_FOLDER"graph.c"},
-        {.obj_path = (nob_temp_sprintf("%s%s", out_dir, "layers.o")), .src_path = SRC_FOLDER"layers.c"},
-        {.obj_path = (nob_temp_sprintf("%s%s", out_dir, "main.o")),   .src_path = SRC_FOLDER"main.c"},
-        {.obj_path = (nob_temp_sprintf("%s%s", out_dir, "matrix.o")), .src_path = SRC_FOLDER"matrix.c"},
-        {.obj_path = (nob_temp_sprintf("%s%s", out_dir, "perf.o")),   .src_path = SRC_FOLDER"perf.c"},
-    };
+    // Compile all source files
+    const char** obj_paths = nob_temp_alloc(src_count * sizeof(char*));
 
-    // Compile src files
-    for (size_t i = 0; i < NOB_ARRAY_LEN(targets); ++i) {
-        if (NOB_NEEDS_REBUILD1(targets[i].obj_path, targets[i].src_path) > 0) {
-            nob_cc(&cmd);
-            nob_cc_flags(&cmd);
-            nob_cc_error_flags(&cmd);
-            nob_cmd_append(&cmd, "-I.");
-            nob_cmd_append(&cmd, "-I"SRC_FOLDER);
+    for (size_t i = 0; i < src_count; i++) {
+        const char* src = t->srcs[i];
+        const char* obj = get_obj_path(out_dir, src);
+        obj_paths[i] = obj;
 
-            if (flags.release) {
-                nob_cmd_append(&cmd, "-O3", "-march=native", "-DNDEBUG");
-                nob_cmd_append(&cmd, "-DUSE_OGB_ARXIV");
-            } else {
-                nob_cmd_append(&cmd, "-O0", "-ggdb", "-g3", "-gdwarf-2");
+        nob_cc(&cmd);
+        append_common_flags(release);
+
+        if (release && t->release_macros) {
+            size_t release_macros_count = ptrlen((void**)t->release_macros);
+            for (size_t i = 0; i < release_macros_count; i++) {
+                bool overwrite = false;
+                for (size_t j = 0; j < flags.macros.count; j++) {
+                    char *user_macro = nob_temp_sprintf("-D%s", flags.macros.items[j]);
+                        if (strcmp(user_macro, t->release_macros[i]) == 0) {
+                            overwrite = true;
+                            break;
+                        }
+                }
+                if (!overwrite) nob_cmd_append(&cmd, t->release_macros[i]);
             }
+        }
 
-            nob_cmd_append(&cmd, "-fopenmp");
+        for (size_t j = 0; j < flags.macros.count; j++) {
+            nob_cmd_append(&cmd, nob_temp_sprintf("-D%s", flags.macros.items[j]));
+        }
 
-            nob_cc_output(&cmd, targets[i].obj_path);
-            nob_cmd_append(&cmd, "-c", targets[i].src_path);
-            if (!nob_cmd_run(&cmd, .async = &procs)) return 1;
+        nob_cc_output(&cmd, obj);
+        nob_cmd_append(&cmd, "-c", src);
+
+        if (!nob_cmd_run(&cmd, .async = &procs)) {
+            nob_log(NOB_ERROR, "Failed to compile %s", src);
+            return 1;
         }
     }
 
     if (!nob_procs_flush(&procs)) return 1;
 
-    // Link object files
-    const char* obj_paths[NOB_ARRAY_LEN(targets)];
-    for (size_t i = 0; i < NOB_ARRAY_LEN(targets); ++i) {
-        obj_paths[i] = targets[i].obj_path;
+    // Link
+    nob_cc(&cmd);
+    append_common_flags(release);
+
+    nob_cc_output(&cmd, exec_path);
+
+    for (size_t i = 0; i < src_count; i++) {
+        nob_cc_inputs(&cmd, obj_paths[i]);
     }
 
-    if (!flags.gen_asm && NOB_NEEDS_REBUILD(exec_path, obj_paths, NOB_ARRAY_LEN(targets)) > 0) {
-        nob_cc(&cmd);
-        nob_cc_flags(&cmd);
-        nob_cc_error_flags(&cmd);
-        if (flags.release) {
-            nob_cmd_append(&cmd, "-O3", "-march=native");
-        } else {
-            nob_cmd_append(&cmd, "-O0", "-ggdb", "-g3", "-gdwarf-2");
-        }
-        nob_cmd_append(&cmd, "-fopenmp");
-        nob_cc_output(&cmd, exec_path);
-        for (size_t i = 0; i < NOB_ARRAY_LEN(targets); ++i) {
-            nob_cc_inputs(&cmd, targets[i].obj_path);
-        }
-        nob_cmd_append(&cmd, "-lm");
-        if (!nob_cmd_run(&cmd)) return 1;
+    for (size_t i = 0; i < lib_count; i++) {
+        nob_cmd_append(&cmd, t->libs[i]);
     }
 
+    if (!nob_cmd_run(&cmd)) return 1;
+
+    // Run if requested
     if (flags.run) {
         nob_cmd_append(&cmd, exec_path);
         for (int i = 0; i < flags.rest_argc; i++) {
@@ -358,63 +317,70 @@ int build_paragnn()
     return 0;
 }
 
+struct {
+    const char* name;
+    const char* arch;
+    bool dev;
+} partitions[] = {
+    {.name = "defq",     .arch = "arm",   .dev = false},
+    {.name = "fpgaq",    .arch = "amd",   .dev = false},
+    {.name = "genoaxq",  .arch = "amd",   .dev = false},
+    {.name = "gh200q",   .arch = "arm",   .dev = false},
+    {.name = "milanq",   .arch = "amd",   .dev = false},
+    {.name = "xeonmaxq", .arch = "intel", .dev = false},
+    {.name = "rome16q",  .arch = "amd",   .dev = true},
+};
 
-int build_ogb(){
-    const char* exec = TOOLS_FOLDER"ogb";
-    const char* obj_path = TOOLS_FOLDER"ogb.o";
-    const char* src_path = TOOLS_FOLDER"ogb.c";
+void list_partitions(void)
+{
+    int max_len = 0;
+    for (size_t i = 0; i < NOB_ARRAY_LEN(partitions); i++) {
+        int len = (int)strlen(partitions[i].name);
+        if (len > max_len) max_len = len;
+    }
+    max_len += 2;
 
-    // Compile src files
-    if (NOB_NEEDS_REBUILD1(obj_path, src_path) > 0) {
-        nob_cc(&cmd);
-        nob_cc_flags(&cmd);
-        nob_cc_error_flags(&cmd);
-        nob_cmd_append(&cmd, "-I.");
-        nob_cmd_append(&cmd, "-I"SRC_FOLDER);
-        nob_cc_output(&cmd, obj_path);
-        nob_cmd_append(&cmd, "-c", src_path);
-        if (!nob_cmd_run(&cmd)) return 1;
+    printf("Partitions for benchmarking:\n");
+    for (size_t i = 0; i < NOB_ARRAY_LEN(partitions); i++) {
+        if (!partitions[i].dev) {
+            printf("  %-*s (%s)\n", max_len, partitions[i].name, partitions[i].arch);
+        }
     }
 
-    // Link object files
-    if (NOB_NEEDS_REBUILD1(exec, obj_path) > 0) {
-        nob_cc(&cmd);
-        nob_cc_flags(&cmd);
-        nob_cc_error_flags(&cmd);
-        nob_cmd_append(&cmd, "-O3");
-        nob_cc_output(&cmd, exec);
-        nob_cc_inputs(&cmd, obj_path);
-        nob_cmd_append(&cmd, "-lz");
-        if (!nob_cmd_run(&cmd)) return 1;
+    printf("Partitions for development:\n");
+    for (size_t i = 0; i < NOB_ARRAY_LEN(partitions); i++) {
+        if (partitions[i].dev) {
+            printf("  %-*s (%s)\n", max_len, partitions[i].name, partitions[i].arch);
+        }
     }
-
-    return 0;
 }
 
-int clean()
+bool partition_is_valid(const char* name)
 {
-    nob_delete_file(BUILD_FOLDER);
-    nob_delete_file(TOOLS_FOLDER"ogb");
-    nob_delete_file(TOOLS_FOLDER"ogb.o");
-    return 0;
+    for (size_t i = 0; i < NOB_ARRAY_LEN(partitions); i++) {
+        if (strcmp(partitions[i].name, name) == 0) return true;
+    }
+    return false;
 }
 
 int run_benchmark(const char* partition)
 {
-    nob_cmd_append(&cmd, "sbatch");
-    nob_cmd_append(&cmd, "-p", partition);
-    if (flags.kernel != NULL) {
-        nob_cmd_append(&cmd, nob_temp_sprintf("--export=BENCHMARK_TARGET=%s", flags.kernel));
-        nob_cmd_append(&cmd, "-J", flags.kernel);
+    nob_cmd_append(&cmd, "sbatch", "-p", partition);
+
+    if (flags.target && strcmp(flags.target, "paragnn") != 0) {
+        nob_cmd_append(&cmd, nob_temp_sprintf("--export=BENCHMARK_TARGET=%s", flags.target));
+        nob_cmd_append(&cmd, "-J", flags.target);
     }
+
     nob_cmd_append(&cmd, "-o", nob_temp_sprintf("logs/%s-%%x-%%j.out", partition));
     nob_cmd_append(&cmd, "run_benchmark.sbatch");
-    if (!nob_cmd_run(&cmd)) return 1;
-    return 0;
+
+    return nob_cmd_run(&cmd) ? 0 : 1;
 }
 
-int submit_job()
+int submit_job(void)
 {
+#if 0
     if (!nob_mkdir_if_not_exists("logs/")) return 1;
 
     bool is_bench = strcmp(flags.submit, "bench") == 0;
@@ -423,45 +389,55 @@ int submit_job()
     if (is_bench || is_dev) {
         for (size_t i = 0; i < NOB_ARRAY_LEN(partitions); i++) {
             if (partitions[i].dev != is_dev) continue;
-
             if (run_benchmark(partitions[i].name)) return 1;
         }
-
         return 0;
     }
 
     if (partition_is_valid(flags.submit)) {
         return run_benchmark(flags.submit);
-    } else {
-        list_all_partitions();
     }
 
+    nob_log(NOB_ERROR, "Unknown partition: %s", flags.submit);
+    list_partitions();
     return 1;
+#else
+    NOB_TODO("submitting needs to be redone");
+    return 1;
+#endif
 }
 
-void usage(FILE *stream)
+int clean(void)
 {
-    fprintf(stream, "Usage: ./example [OPTIONS] [--] [ARGS]\n");
+    nob_log(NOB_INFO, "Cleaning build artifacts...");
+    nob_delete_file(BUILD_FOLDER);
+    return 0;
+}
+
+void usage(FILE* stream)
+{
+    fprintf(stream, "Usage: ./nob [OPTIONS] [--] [ARGS]\n\n");
     fprintf(stream, "OPTIONS:\n");
     flag_print_options(stream);
+    fprintf(stream, "\nTARGETS:\n");
+    list_targets();
 }
 
 int main(int argc, char** argv)
 {
     NOB_GO_REBUILD_URSELF(argc, argv);
 
-    flag_bool_var(&flags.build,     "build",    false, "Build the project");
-    flag_bool_var(&flags.run,       "run",      false, "Run the project");
-    flag_bool_var(&flags.rebuild,   "rebuild",  false, "Force a complete rebuild");
-    flag_bool_var(&flags.gen_asm,   "asm",      false, "Generate assembly output");
-    flag_str_var(&flags.out_dir,    "outdir",   NULL,  "Where to build to");
-    flag_bool_var(&flags.release,   "release",  false, "Build in release mode");
-    flag_str_var(&flags.submit,     "submit",   NULL,  SUBMIT_DESC);
-    flag_bool_var(&flags.ogb,       "ogb",      false, "Build OGB decoder");
-    flag_str_var(&flags.kernel,     "kernel",   NULL,  "Build kernel benchmarks (dot_ex)");
-    flag_bool_var(&flags.fastmath,  "fastmath", false, "Enable fastmath");
-    flag_list_mut_var(&flags.macros, "D",               "Enable macro to be passed down (SIMD_ENABLED, USE_OGB_ARXIV, EPOCH)");
-    flag_bool_var(&flags.help,      "help",     false, "Print this help message");
+    flag_str_var(&flags.target,        "target",       "paragnn", "Build target (see list below)");
+    flag_bool_var(&flags.download_ogb, "download-ogb", false,     "Download OGB arxiv dataset");
+    flag_bool_var(&flags.extract_ogb,  "extract-ogb",  false,     "Re-extract OGB raw files");
+    flag_bool_var(&flags.run,          "run",          false,     "Run after building");
+    flag_bool_var(&flags.debug,        "debug",        false,     "Build in debug mode (default)");
+    flag_bool_var(&flags.release,      "release",      false,     "Build in release mode");
+    flag_str_var(&flags.out_dir,       "outdir",       NULL,      "Output directory");
+    flag_str_var(&flags.submit,        "submit",       NULL,      "Submit to Slurm (partition or 'bench'/'dev'/'list')");
+    flag_bool_var(&flags.clean,        "clean",        false,     "Clean build artifacts");
+    flag_list_mut_var(&flags.macros,   "D",                       "Define macro (e.g., -D SIMD_ENABLED)");
+    flag_bool_var(&flags.help,         "help",         false,     "Print this help message");
 
     if (!flag_parse(argc, argv)) {
         usage(stderr);
@@ -474,37 +450,47 @@ int main(int argc, char** argv)
         return 0;
     }
 
+    // Handle rest args
     argc = flag_rest_argc();
     argv = flag_rest_argv();
-
     if (argc > 0 && strcmp(argv[0], "--") == 0) {
-        argv += 1;
-        argc -= 1;
+        argv++;
+        argc--;
     }
-
     flags.rest_argc = argc;
     flags.rest_argv = argv;
 
-    if (flags.ogb) {
-        return build_ogb();
+    // Default to debug if neither specified
+    if (!flags.release && !flags.debug) {
+        flags.debug = true;
+    }
+
+    // Handle conflicting flags
+    if (flags.release && flags.debug) {
+        nob_log(NOB_ERROR, "Cannot specify both -debug and -release");
+        return 1;
+    }
+
+    // Commands
+    if (flags.clean) {
+        return clean();
     }
 
     if (flags.submit != NULL) {
         if (strcmp(flags.submit, "list") == 0) {
-            list_all_partitions();
+            list_partitions();
             return 0;
         }
-
         return submit_job();
     }
 
-    if (flags.kernel != NULL) {
-        return build_kernel_bench();
+    // Build target
+    Target* t = find_target(flags.target);
+    if (t == NULL) {
+        nob_log(NOB_ERROR, "Unknown target: %s", flags.target);
+        list_targets();
+        return 1;
     }
 
-    if (flags.build || flags.rebuild) {
-        return build_paragnn();
-    }
-
-    return 0;
+    return build_target(t);
 }
