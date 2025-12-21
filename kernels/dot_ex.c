@@ -1229,7 +1229,7 @@ int main(void)
 
         // Precompute the reference
         printf("Computing reference\n");
-        matmul_naive_restrict(A, B, ref);
+        blas(A, B, ref);
 
         MatmulKernel kernels[] = {
             NEW_KERNEL(matmul_naive, RESTORE_NONE),
