@@ -5,9 +5,11 @@
 
 #define ERROR(fmt, ...) do {                                            \
         fflush(stdout);                                                 \
-        _Pragma("omp single")                                           \
+        _Pragma("omp critical")                                         \
+        {                                                               \
             fprintf(stderr, "%s:%d: error: %s: " fmt "\n", __FILE__, __LINE__, __func__, ##__VA_ARGS__); \
-        abort();                                                        \
+            abort();                                                    \
+        }                                                               \
     } while(0)
 
 #ifndef NDEBUG
