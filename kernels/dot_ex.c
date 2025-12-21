@@ -12,6 +12,10 @@
 #include "perf.h"
 #include "cache_counter.h"
 
+#define NUM_TRAIN_NODES 90941
+#define NUM_VALID_NODES 29799
+#define NUM_TEST_NODES 48603
+
 #ifndef NTIMES
 #    define NTIMES 10
 #endif // NTIMES
@@ -1035,75 +1039,6 @@ void matmul_tiled_transposed_A_restrict_ikj(matrix_t* A, matrix_t* B, matrix_t* 
     free(a_data);
 }
 
-void matmul_packed(matrix_t* A, matrix_t* B, matrix_t* C)
-{
-    transpose_inplace(A);
-    transpose_inplace(B);
-
-    size_t M = A->height;
-    size_t K = A->width;       // <=> B->width
-    size_t N = B->height;
-
-    size_t b = 64;
-
-    size_t P = 512;
-    size_t Q = 256;
-    size_t l2size = P * Q;      // This gives us 16*16=256KB space for A matrix, which is the typical size of L2 cache.
-
-#pragma omp parallel for
-
-
-    for (size_t ii = 0; ii < M; ii += b) {
-        size_t istart = ii, istop = MIN(ii+b, M);
-
-        for (size_t jj = 0; jj < N; jj += b) {
-            size_t jstart = jj, jstop = MIN(jj+b, N);
-
-            for (size_t kk = 0; kk < K; kk += b) {
-                size_t kstart = kk, kstop = MIN(kk+b, K);
-
-                for (size_t i = istart; i < istop; i++) {
-
-                    size_t j;
-                    for (j = jstart; j + 3 < jstop; j += 4) {
-                        double sum0 = MAT_AT(C, i, j+0);
-                        double sum1 = MAT_AT(C, i, j+1);
-                        double sum2 = MAT_AT(C, i, j+2);
-                        double sum3 = MAT_AT(C, i, j+3);
-
-
-                        for (size_t k = kstart; k < kstop; k++) {
-                            double a_ik = MAT_AT(A, i, k);
-                            sum0 += a_ik * MAT_AT(B, j+0, k);
-                            sum1 += a_ik * MAT_AT(B, j+1, k);
-                            sum2 += a_ik * MAT_AT(B, j+2, k);
-                            sum3 += a_ik * MAT_AT(B, j+3, k);
-                        }
-
-                        MAT_AT(C, i, j+0) = sum0;
-                        MAT_AT(C, i, j+1) = sum1;
-                        MAT_AT(C, i, j+2) = sum2;
-                        MAT_AT(C, i, j+3) = sum3;
-                    }
-
-                    for (; j < jstop; j++) {
-                        double sum = MAT_AT(C, i, j);
-
-
-                        for (size_t k = kstart; k < kstop; k++) {
-                            sum += MAT_AT(A, i, k) * MAT_AT(B, j, k);
-                        }
-
-                        MAT_AT(C, i, j) = sum;
-                    }
-                }
-
-            }
-        }
-    }
-}
-
-
 void blas(matrix_t* A, matrix_t* B, matrix_t* C)
 {
     size_t M = A->width;
@@ -1261,35 +1196,24 @@ int main(void)
         thread_counters[tid] = cache_counter_init();
     }
 
-    // sage_bwd_grad_Wroot: A=(90941x256), B=(90941x265), C=(256x265)
-
-// #define NUM_TRAIN_NODES 90941
-// #define NUM_VALID_NODES 29799
-// #define NUM_TEST_NODES 48603
-
-    // 32, 64, 128, 256, 512, 1K, 2K, 4K, 8K, 16K, VALID_SIZE, 32K, TEST_SIZE, 64K, TRAIN_SIZE, 128K, 256K, 512K
-
 #ifdef NDEBUG
-    // size_t batch_sizes[15];
-    // batch_sizes[0] = 32;
-    // for (size_t b = 1; b < ARRAY_LEN(batch_sizes); b++) {
-    //     batch_sizes[b] = batch_sizes[b-1] * 2;
-    // }
-    size_t batch_sizes[] = {90941};
-    size_t width = 256;
+    size_t K_values[] = {90941};
+    size_t MN = 256;
 #else
-    size_t batch_sizes[] = {32};
-    size_t width = 16;
+    size_t K_values[] = {64};
+    size_t MN = 32;
 #endif // NDEBUG
 
-    for (size_t b = 0; b < ARRAY_LEN(batch_sizes); b++) {
-        size_t height = batch_sizes[b];
+    for (size_t b = 0; b < ARRAY_LEN(K_values); b++) {
+        size_t M = MN;
+        size_t K = K_values[b];
+        size_t N = MN;
 
-        matrix_t* A = mat_create(height, width);
-        matrix_t* B = mat_create(height, width);
-        matrix_t* C = mat_create(width, width);
+        matrix_t* A = mat_create(K, M);
+        matrix_t* B = mat_create(K, N);
+        matrix_t* C = mat_create(M, N);
 
-        matrix_t *ref = mat_create(width, width);
+        matrix_t *ref = mat_create(M, N);
 
         for (size_t i = 0; i < A->height; ++i) {
             for (size_t j = 0; j < A->width; ++j) {
