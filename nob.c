@@ -1,6 +1,7 @@
 #define NOB_EXPERIMENTAL_DELETE_OLD
 #define NOB_IMPLEMENTATION
 #define NOB_WARN_DEPRECATED
+#define NOB_REBUILD_URSELF(binary_path, source_path) "cc", "-ggdb", "-o", binary_path, source_path
 #define nob_cc(cmd) nob_cmd_append(cmd, "gcc")
 #include "nob.h"
 #undef nob_cc_flags
