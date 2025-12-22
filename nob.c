@@ -30,20 +30,33 @@
         "-Werror=implicit-function-declaration", \
         "-Werror=incompatible-pointer-types") // Maybe re-add -Wno-unknown-pragmas?
 
-// XXX: char** members are NULL-terminated
+#define STRINGS(...) { \
+    .items = (const char*[]){__VA_ARGS__}, \
+    .count = sizeof((const char*[]){__VA_ARGS__}) / sizeof(const char*), \
+    .capacity = 0 \
+}
+
+// Strings are meant to be stored on stack, and are not
+// supposed to be a /Dynamic Array/
+typedef struct {
+    const char **items;
+    size_t count;
+    size_t capacity;
+} Strings;
+
 typedef struct {
     const char* name;
-    const char** srcs;
-    const char** libs;
+    Strings srcs;
+    Strings libs;
     const char*  out_dir;       // NULL means BUILD_FOLDER
-    const char** release_macros;
+    Strings release_macros;
 } Target;
 
 // Target registry
 Target targets[] = {
     {
         .name = "paragnn",
-        .srcs = (const char*[]){
+        .srcs = STRINGS(
             SRC_FOLDER"gnn.c",
             SRC_FOLDER"graph.c",
             SRC_FOLDER"layers.c",
@@ -51,21 +64,19 @@ Target targets[] = {
             SRC_FOLDER"matrix.c",
             SRC_FOLDER"gemm.c",
             SRC_FOLDER"perf.c",
-            NULL
-        },
-        .libs = (const char*[]){"-lm", "-lopenblas", NULL},
-        .release_macros = (const char*[]){"-DUSE_OGB_ARXIV", "-DEPOCH=10", NULL},
+            ),
+        .libs = STRINGS("-lm", "-lopenblas"),
+        .release_macros = STRINGS("-DUSE_OGB_ARXIV", "-DEPOCH=10"),
     },
     {
         .name = "dot-ex",       // TODO: rename this to tsgemm (tall-skinny gemm)
-        .srcs = (const char*[]){
+        .srcs = STRINGS(
             SRC_FOLDER"matrix.c",
             SRC_FOLDER"perf.c",
             KERNEL_FOLDER"cache_counter.c",
             KERNEL_FOLDER"dot_ex.c",
-            NULL
-        },
-        .libs = (const char*[]){"-lm", "-lopenblas", NULL},
+            ),
+        .libs = STRINGS("-lm", "-lopenblas"),
     },
 };
 
@@ -246,32 +257,29 @@ int build_target(Target* t)
     if (!mkdir_recursive(out_dir)) return 1;
 
     const char* exec_path = nob_temp_sprintf("%s%s", out_dir, t->name);
-    size_t src_count = ptrlen((void**)t->srcs);
-    size_t lib_count = ptrlen((void**)t->libs);
 
     // Compile all source files
-    const char** obj_paths = nob_temp_alloc(src_count * sizeof(char*));
+    const char** obj_paths = nob_temp_alloc(t->srcs.count * sizeof(char*));
 
-    for (size_t i = 0; i < src_count; i++) {
-        const char* src = t->srcs[i];
+    for (size_t i = 0; i < t->srcs.count; i++) {
+        const char* src = t->srcs.items[i];
         const char* obj = get_obj_path(out_dir, src);
         obj_paths[i] = obj;
 
         nob_cc(&cmd);
         append_common_flags(release);
 
-        if (release && t->release_macros) {
-            size_t release_macros_count = ptrlen((void**)t->release_macros);
-            for (size_t i = 0; i < release_macros_count; i++) {
+        if (release && t->release_macros.items) {
+            for (size_t i = 0; i < t->release_macros.count; i++) {
                 bool overwrite = false;
                 for (size_t j = 0; j < flags.macros.count; j++) {
                     char *user_macro = nob_temp_sprintf("-D%s", flags.macros.items[j]);
-                        if (strcmp(user_macro, t->release_macros[i]) == 0) {
+                        if (strcmp(user_macro, t->release_macros.items[i]) == 0) {
                             overwrite = true;
                             break;
                         }
                 }
-                if (!overwrite) nob_cmd_append(&cmd, t->release_macros[i]);
+                if (!overwrite) nob_cmd_append(&cmd, t->release_macros.items[i]);
             }
         }
 
@@ -296,12 +304,12 @@ int build_target(Target* t)
 
     nob_cc_output(&cmd, exec_path);
 
-    for (size_t i = 0; i < src_count; i++) {
+    for (size_t i = 0; i < t->srcs.count; i++) {
         nob_cc_inputs(&cmd, obj_paths[i]);
     }
 
-    for (size_t i = 0; i < lib_count; i++) {
-        nob_cmd_append(&cmd, t->libs[i]);
+    for (size_t i = 0; i < t->libs.count; i++) {
+        nob_cmd_append(&cmd, t->libs.items[i]);
     }
 
     if (!nob_cmd_run(&cmd)) return 1;
