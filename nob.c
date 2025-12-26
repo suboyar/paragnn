@@ -199,7 +199,7 @@ bool prepare_ogb_dataset()
             nob_return_defer(false);
         }
 
-        nob_cmd_append(&cmd, "unzip", "-q", "arxiv.zip", "-d", OGB_ARXIV_PATH);
+        nob_cmd_append(&cmd, "unzip", "-q", "arxiv.zip"); // No need for -d OGB_ARXIV_PATH as the zip already has files under arxiv/
         if (!nob_cmd_run(&cmd)) {
             nob_log(NOB_ERROR, "Failed to unzip arxiv.zip");
             nob_return_defer(false);
@@ -208,6 +208,7 @@ bool prepare_ogb_dataset()
         // Try reading the files one more time
         if(!nob_read_entire_dir(OGB_ARXIV_PATH"raw", &file_paths)) {
             nob_log(NOB_ERROR, "Failed to read raw files after extraction");
+            nob_return_defer(false);
         }
     }
 
