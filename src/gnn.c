@@ -19,57 +19,46 @@
 // Forward propagation
 void aggregate(SageLayer *const l, graph_t *const g)
 {
-    size_t B = l->input->batch;
+    size_t B = l->agg->batch;
     size_t E = g->num_edges;
-    size_t N = l->agg->features;
+    size_t F = l->agg->features;
+
+    double *X = l->input->data;
+    size_t ldX = l->input->stride;
+
+    memset(l->agg->data, 0, B*F*sizeof(*l->agg->data));
 
 #pragma omp parallel
     {
         size_t* adj = malloc(E * sizeof(size_t));
 
 #pragma omp for
-        for (size_t v = 0; v < B; v++) {
+        for (size_t i = 0; i < B; i++) {
             size_t neigh_count = 0;
+            double *Y = l->agg->data + i * l->agg->stride;
 
             // NOTE: Collects neighbors from only incoming direction.
 
             // Find neighbors of count sample size
             for (size_t edge = 0; edge < E; edge++) {
-                size_t u0 = EDGE_AT(g, edge, 0);
                 size_t u1 = EDGE_AT(g, edge, 1);
-
-                if (v == u1) {  // Paper v cites u1
-                    adj[neigh_count++] = u0;
+                if (i == u1) {  // Paper i cites u1
+                    adj[neigh_count++] = EDGE_AT(g, edge, 0);
                 }
             }
 
-            if (neigh_count == 0) {
-                for (size_t f = 0; f < N; f++) {
-                    MIDX(l->agg, v, f) = 0;
+            if (neigh_count == 0) continue;
+
+            double scale = 1.0 / neigh_count;
+            for (size_t j = 0; j < F; j++) {
+                double sum = 0.0;
+                for (size_t k = 0; k < neigh_count; k++) {
+                    sum += X[adj[k] * ldX + j];
                 }
-                continue;
-            }
-            // Skiped as this isn't worst-case
-
-            // Copy the first neighbor features to memory space for aggregation
-            size_t u = adj[0];
-            for (size_t f = 0; f < N; f++) {
-                MIDX(l->agg, v, f) = MIDX(l->input, u, f);
+                Y[j] = sum * scale;
             }
 
-            // Add remaining neighbors
-            for (size_t i = 1; i < neigh_count; i++) {
-                u = adj[i];
-                for (size_t f = 0; f < N; f++) {
-                    MIDX(l->agg, v, f) += MIDX(l->input, u, f);
-                }
-            }
-
-            // Aggregation with mean
-            l->mean_scale[v] = (double)1/neigh_count;
-            for (size_t f = 0; f < N; f++) {
-                MIDX(l->agg, v, f) *= l->mean_scale[v];
-            }
+            l->mean_scale[i] = scale;
         }
 
         free(adj);
@@ -187,12 +176,10 @@ void linear(LinearLayer *const l)
 */
 void logsoft(LogSoftLayer *const l)
 {
+    PERF_FUNC_START();
     size_t B = l->input->batch;
     size_t F = l->input->features;
 
-    // uint64_t flops = B * (1ULL + 5ULL * N);
-
-    PERF_FUNC_START();
 
 #pragma omp parallel for
     for (size_t i = 0; i < B; i++) {

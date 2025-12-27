@@ -25,7 +25,7 @@
 
 #ifndef EPOCH
 #    ifdef USE_OGB_ARXIV
-#        define EPOCH 500               // Goal is to have 500 epochs
+#        define EPOCH 100               // Goal is to have 500 epochs
 #    else
 #        define EPOCH 10
 #    endif // USE_OGB_ARXIV
@@ -266,4 +266,4 @@ int main(int argc, char** argv)
 // TODO: Use CRS format for edges
 // TODO: Xavier Initialization for weight matrices
 // TODO: Fast exp: https://jrfonseca.blogspot.com/2008/09/fast-sse2-pow-tables-or-polynomials.html
-// TODO: Print
+// TODO: Reset all matrices after train(), and remove memset(agg, 0, ...) in aggregate()
