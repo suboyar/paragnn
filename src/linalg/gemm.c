@@ -2,7 +2,7 @@
 
 #include "linalg.h"
 
-#ifndef USE_CBLAS
+#if !defined(USE_CBLAS) && !defined(USE_CBLAS_DGEMM)
 typedef void (*gemmfunc)(size_t M, size_t N, size_t K,
                          double alpha,
                          double *restrict A, size_t lda,
@@ -119,18 +119,18 @@ static void dgemm_tt(size_t M, size_t N, size_t K,
     }
 }
 
-#endif // USE_CBLAS
+#endif // !defined(USE_CBLAS) && !defined(USE_CBLAS_DGEMM)
 
 void dgemm(size_t M, size_t N, size_t K,
-           enum LINALG_TRANSPOSE TransA,
-           enum LINALG_TRANSPOSE TransB,
-           double alpha,
-           double *restrict A, size_t lda,
-           double *restrict B, size_t ldb,
-           double beta,
-           double *restrict C, size_t ldc)
+                  enum LINALG_TRANSPOSE TransA,
+                  enum LINALG_TRANSPOSE TransB,
+                  double alpha,
+                  double *restrict A, size_t lda,
+                  double *restrict B, size_t ldb,
+                  double beta,
+                  double *restrict C, size_t ldc)
 {
-#ifdef USE_CBLAS
+#if defined(USE_CBLAS) || defined(USE_CBLAS_DGEMM)
     cblas_dgemm(CblasRowMajor,
                 (TransA ? CblasTrans : CblasNoTrans),
                 (TransB ? CblasTrans : CblasNoTrans),
@@ -144,5 +144,5 @@ void dgemm(size_t M, size_t N, size_t K,
     gemmfunc funcs[] = {dgemm_nn, dgemm_nt, dgemm_tn, dgemm_tt};
     int idx = TransA << 1 | TransB;
     funcs[idx](M, N, K, alpha, A, lda, B, ldb, beta, C, ldc);
-#endif // USECBLAS
+#endif // #if defined(USE_CBLAS) || defined(USE_CBLAS_DGEMM)
 }

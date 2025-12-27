@@ -93,13 +93,13 @@ void matrix_fill_random(Matrix *m, double low, double high)
     }
 }
 
-void matrix_dgemm(enum LINALG_TRANSPOSE TransA,
-                  enum LINALG_TRANSPOSE TransB,
-                  double alpha,
-                  const Matrix *A,
-                  const Matrix *B,
-                  double beta,
-                  Matrix *C) {
+inline void matrix_dgemm(enum LINALG_TRANSPOSE TransA,
+                         enum LINALG_TRANSPOSE TransB,
+                         double alpha,
+                         const Matrix *A,
+                         const Matrix *B,
+                         double beta,
+                         Matrix *C) {
 
     size_t M = (TransA==LinalgNoTrans) ? A->M : A->N;
     size_t K = (TransA==LinalgNoTrans) ? A->N : A->M;

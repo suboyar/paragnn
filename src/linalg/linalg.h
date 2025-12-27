@@ -6,7 +6,12 @@ typedef enum LINALG_TRANSPOSE {
     LinalgTrans = 1,
 } LINALG_TRANSPOSE;
 
-#include "gemm.h"
+// Level 1
 #include "axpy.h"
+#include "copy.h"
+#include "scal.h"
+
+// Level 3
+#include "gemm.h"
 
 #endif // LINALG_H
