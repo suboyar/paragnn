@@ -15,139 +15,14 @@ static graph_t* init_graph(size_t num_nodes, size_t num_edges, size_t num_featur
     g->edge_index = malloc(2*num_edges * sizeof(*g->edge_index)); // Graph connectivity in COO format with shape [2, num_edges]
     g->node_year  = malloc(num_nodes * sizeof(*g->edge_index));
 
-    g->x = mat_create(num_nodes, num_features);
-    g->y = mat_create(num_nodes, num_labels);
+    g->x = matrix_create(num_nodes, num_features);
+    g->y = matrix_create(num_nodes, num_labels);
 
     return g;
 }
 
 
-#ifndef USE_OGB_ARXIV
-
-#define NUM_NODES 6
-#define NUM_EDGES 6
-#define NUM_LABELS 2
-#define NUM_FEATURES 3
-
-// Split sizes for test graph
-#define NUM_TRAIN_NODES 2
-#define NUM_VALID_NODES 2
-#define NUM_TEST_NODES 2
-
-#define NUM_TRAIN_EDGES 2
-#define NUM_VALID_EDGES 2
-#define NUM_TEST_EDGES 2
-
-graph_t* load_graph()
-{
-    printf("Loading TEST graph from - %zu nodes\n", (size_t)NUM_NODES);
-
-    graph_t* g = init_graph(NUM_NODES, NUM_EDGES, NUM_FEATURES, NUM_LABELS);
-
-    // Edges: creating a graph where each pair of nodes in each split is connected
-    size_t edges[] = {
-        0, 1, 2, 3, 4, 5,  // source nodes
-        1, 0, 3, 2, 5, 4,  // destination nodes
-    };
-
-    memcpy(g->edge_index, edges, 2 * NUM_EDGES * sizeof(*g->edge_index));
-
-    // Train nodes (0, 1)
-    mat_set(g->x, 0, 0, 1.0); mat_set(g->x, 0, 1, 0.5); mat_set(g->x, 0, 2, 2.0);
-    mat_set(g->x, 1, 0, 1.5); mat_set(g->x, 1, 1, 0.8); mat_set(g->x, 1, 2, 2.2);
-
-    // Valid nodes (2, 3)
-    mat_set(g->x, 2, 0, 2.0); mat_set(g->x, 2, 1, 1.0); mat_set(g->x, 2, 2, 1.8);
-    mat_set(g->x, 3, 0, 2.3); mat_set(g->x, 3, 1, 1.2); mat_set(g->x, 3, 2, 1.5);
-
-    // Test nodes (4, 5)
-    mat_set(g->x, 4, 0, 3.0); mat_set(g->x, 4, 1, 1.5); mat_set(g->x, 4, 2, 1.0);
-    mat_set(g->x, 5, 0, 3.2); mat_set(g->x, 5, 1, 1.8); mat_set(g->x, 5, 2, 0.8);
-
-    // Train labels
-    mat_set(g->y, 0, 0, 1.0); mat_set(g->y, 0, 1, 0.0); // class 0
-    mat_set(g->y, 1, 0, 0.0); mat_set(g->y, 1, 1, 1.0); // class 1
-
-    // Valid labels
-    mat_set(g->y, 2, 0, 1.0); mat_set(g->y, 2, 1, 0.0); // class 0
-    mat_set(g->y, 3, 0, 0.0); mat_set(g->y, 3, 1, 1.0); // class 1
-
-    // Test labels
-    mat_set(g->y, 4, 0, 0.0); mat_set(g->y, 4, 1, 1.0); // class 1
-    mat_set(g->y, 5, 0, 1.0); mat_set(g->y, 5, 1, 0.0); // class 0
-
-    // Set node years for completeness
-    g->node_year[0] = 2018; g->node_year[1] = 2019;
-    g->node_year[2] = 2019; g->node_year[3] = 2020;
-    g->node_year[4] = 2020; g->node_year[5] = 2021;
-
-    return g;
-}
-
-void load_split_graph(graph_t** train_graph, graph_t** valid_graph, graph_t** test_graph)
-{
-    printf("Loading TEST graph split from - ");
-    printf("Train: %zu nodes | Valid: %zu nodes | Test: %zu nodes\n",
-           (size_t)NUM_TRAIN_NODES, (size_t)NUM_VALID_NODES, (size_t)NUM_TEST_NODES);
-
-    // Initialize the three subgraphs
-    *train_graph = init_graph(NUM_TRAIN_NODES, NUM_TRAIN_EDGES, NUM_FEATURES, NUM_LABELS);
-    *valid_graph = init_graph(NUM_VALID_NODES, NUM_VALID_EDGES, NUM_FEATURES, NUM_LABELS);
-    *test_graph = init_graph(NUM_TEST_NODES, NUM_TEST_EDGES, NUM_FEATURES, NUM_LABELS);
-
-    // Train subgraph (nodes 0, 1 -> remapped to 0, 1)
-    // Edges: (0,1), (1,0)
-    EDGE_AT(*train_graph, 0, SRC_NODE) = 0; EDGE_AT(*train_graph, 0, DST_NODE) = 1;
-    EDGE_AT(*train_graph, 1, SRC_NODE) = 1; EDGE_AT(*train_graph, 1, DST_NODE) = 0;
-
-    // Train features
-    mat_set((*train_graph)->x, 0, 0, 1.0); mat_set((*train_graph)->x, 0, 1, 0.5); mat_set((*train_graph)->x, 0, 2, 2.0);
-    mat_set((*train_graph)->x, 1, 0, 1.5); mat_set((*train_graph)->x, 1, 1, 0.8); mat_set((*train_graph)->x, 1, 2, 2.2);
-
-    // Train labels
-    mat_set((*train_graph)->y, 0, 0, 1.0); mat_set((*train_graph)->y, 0, 1, 0.0);
-    mat_set((*train_graph)->y, 1, 0, 0.0); mat_set((*train_graph)->y, 1, 1, 1.0);
-
-    // Train node years
-    (*train_graph)->node_year[0] = 2018;
-    (*train_graph)->node_year[1] = 2019;
-
-    // Valid subgraph (nodes 2, 3 -> remapped to 0, 1)
-    // Edges: (0,1), (1,0) (remapped from (2,3), (3,2))
-    EDGE_AT(*valid_graph, 0, SRC_NODE) = 0; EDGE_AT(*valid_graph, 0, DST_NODE) = 1;
-    EDGE_AT(*valid_graph, 1, SRC_NODE) = 1; EDGE_AT(*valid_graph, 1, DST_NODE) = 0;
-
-    // Valid features
-    mat_set((*valid_graph)->x, 0, 0, 2.0); mat_set((*valid_graph)->x, 0, 1, 1.0); mat_set((*valid_graph)->x, 0, 2, 1.8);
-    mat_set((*valid_graph)->x, 1, 0, 2.3); mat_set((*valid_graph)->x, 1, 1, 1.2); mat_set((*valid_graph)->x, 1, 2, 1.5);
-
-    // Valid labels
-    mat_set((*valid_graph)->y, 0, 0, 1.0); mat_set((*valid_graph)->y, 0, 1, 0.0);
-    mat_set((*valid_graph)->y, 1, 0, 0.0); mat_set((*valid_graph)->y, 1, 1, 1.0);
-
-    // Valid node years
-    (*valid_graph)->node_year[0] = 2019;
-    (*valid_graph)->node_year[1] = 2020;
-
-    // Test subgraph (nodes 4, 5 -> remapped to 0, 1)
-    // Edges: (0,1), (1,0) (remapped from (4,5), (5,4))
-    EDGE_AT(*test_graph, 0, SRC_NODE) = 0; EDGE_AT(*test_graph, 0, DST_NODE) = 1;
-    EDGE_AT(*test_graph, 1, SRC_NODE) = 1; EDGE_AT(*test_graph, 1, DST_NODE) = 0;
-
-    // Test features
-    mat_set((*test_graph)->x, 0, 0, 3.0); mat_set((*test_graph)->x, 0, 1, 1.5); mat_set((*test_graph)->x, 0, 2, 1.0);
-    mat_set((*test_graph)->x, 1, 0, 3.2); mat_set((*test_graph)->x, 1, 1, 1.8); mat_set((*test_graph)->x, 1, 2, 0.8);
-
-    // Test labels
-    mat_set((*test_graph)->y, 0, 0, 0.0); mat_set((*test_graph)->y, 0, 1, 1.0);
-    mat_set((*test_graph)->y, 1, 0, 1.0); mat_set((*test_graph)->y, 1, 1, 0.0);
-
-    // Test node years
-    (*test_graph)->node_year[0] = 2020;
-    (*test_graph)->node_year[1] = 2021;
-}
-
-#else // ogb-arxiv
+#ifdef USE_OGB_ARXIV
 
 // Then number of nodes and edges for each split has been pre-counted
 
@@ -166,7 +41,7 @@ void load_split_graph(graph_t** train_graph, graph_t** valid_graph, graph_t** te
 #define NUM_FEATURES 128
 
 #ifndef PROCESSED_PATH
-    #define PROCESSED_PATH "./dataset/arxiv/processed/"
+    #define PROCESSED_PATH "./arxiv/processed/"
 #endif
 
 graph_t* load_graph()
@@ -204,7 +79,7 @@ graph_t* load_graph()
 
     for (size_t i = 0; i < NUM_NODES && p < end; i++) {
         for (size_t j = 0; j < NUM_FEATURES && p < end; j++) {
-            MAT_AT(g->x, i, j) = strtod(p, &p);
+            MIDX(g->x, i, j) = strtod(p, &p);
             if (p < end && *p == ',') p++; // Skip comma
         }
 
@@ -219,10 +94,10 @@ graph_t* load_graph()
 
     for (size_t i = 0; i < NUM_NODES && p < end; i++) {
         for (size_t j = 0; j < NUM_LABELS; j++) {
-            MAT_AT(g->y, i, j) = 0;
+            MIDX(g->y, i, j) = 0;
         }
         size_t label = strtoull(p, &p, 10);
-        MAT_AT(g->y, i, label) = 1.0;
+        MIDX(g->y, i, label) = 1.0;
         if (p < end && *p == '\n') p++; // Skip newline
     }
     sb.count = 0;
@@ -387,7 +262,7 @@ void load_split_graph(graph_t** train_graph, graph_t** valid_graph, graph_t** te
 
     for (size_t i = 0; i < NUM_NODES && p < end; i++) {
         graph_t* sub_graph = NULL;
-        size_t idx;
+        size_t idx = 0;
         graph_split_t split = split_map[i];
 
         switch (split) {
@@ -408,7 +283,7 @@ void load_split_graph(graph_t** train_graph, graph_t** valid_graph, graph_t** te
         }
 
         for (size_t j = 0; j < NUM_FEATURES && p < end; j++) {
-            MAT_AT(sub_graph->x, idx, j) = strtod(p, &p);
+            MIDX(sub_graph->x, idx, j) = strtod(p, &p);
             if (p < end && *p == ',') p++; // Skip comma
         }
 
@@ -423,7 +298,7 @@ void load_split_graph(graph_t** train_graph, graph_t** valid_graph, graph_t** te
 
     for (size_t i = 0; i < NUM_NODES && p < end; i++) {
         graph_t* sub_graph = NULL;
-        size_t idx;
+        size_t idx = 0;
         graph_split_t split = split_map[i];
 
         switch (split) {
@@ -444,10 +319,10 @@ void load_split_graph(graph_t** train_graph, graph_t** valid_graph, graph_t** te
         }
 
         for (size_t j = 0; j < NUM_LABELS; j++) {
-            MAT_AT(sub_graph->y, idx, j) = 0;
+            MIDX(sub_graph->y, idx, j) = 0;
         }
         size_t label = strtoull(p, &p, 10);
-        MAT_AT(sub_graph->y, idx, label) = 1.0;
+        MIDX(sub_graph->y, idx, label) = 1.0;
         if (p < end && *p == '\n') p++; // Skip newline
     }
     sb.count = 0;
@@ -498,17 +373,141 @@ void load_split_graph(graph_t** train_graph, graph_t** valid_graph, graph_t** te
     nob_sb_free(sb);
 }
 
+#else // USE_OGB_ARXIV
 
-#endif // TESTGRAPH
+#define NUM_NODES 6
+#define NUM_EDGES 6
+#define NUM_LABELS 2
+#define NUM_FEATURES 3
 
+// Split sizes for test graph
+#define NUM_TRAIN_NODES 2
+#define NUM_VALID_NODES 2
+#define NUM_TEST_NODES 2
 
+#define NUM_TRAIN_EDGES 2
+#define NUM_VALID_EDGES 2
+#define NUM_TEST_EDGES 2
+
+#define SET(m, i, j, n) (m)->data[(i)*(m)->stride+(j)] = (n)
+
+graph_t* load_graph()
+{
+    printf("Loading TEST graph from - %zu nodes\n", (size_t)NUM_NODES);
+
+    graph_t* g = init_graph(NUM_NODES, NUM_EDGES, NUM_FEATURES, NUM_LABELS);
+
+    // Edges: creating a graph where each pair of nodes in each split is connected
+    size_t edges[] = {
+        0, 1, 2, 3, 4, 5,  // source nodes
+        1, 0, 3, 2, 5, 4,  // destination nodes
+    };
+
+    memcpy(g->edge_index, edges, 2 * NUM_EDGES * sizeof(*g->edge_index));
+
+    // Train nodes (0, 1)
+    SET(g->x, 0, 0, 1.0); SET(g->x, 0, 1, 0.5); SET(g->x, 0, 2, 2.0);
+    SET(g->x, 1, 0, 1.5); SET(g->x, 1, 1, 0.8); SET(g->x, 1, 2, 2.2);
+
+    // Valid nodes (2, 3)
+    SET(g->x, 2, 0, 2.0); SET(g->x, 2, 1, 1.0); SET(g->x, 2, 2, 1.8);
+    SET(g->x, 3, 0, 2.3); SET(g->x, 3, 1, 1.2); SET(g->x, 3, 2, 1.5);
+
+    // Test nodes (4, 5)
+    SET(g->x, 4, 0, 3.0); SET(g->x, 4, 1, 1.5); SET(g->x, 4, 2, 1.0);
+    SET(g->x, 5, 0, 3.2); SET(g->x, 5, 1, 1.8); SET(g->x, 5, 2, 0.8);
+
+    // Train labels
+    SET(g->y, 0, 0, 1.0); SET(g->y, 0, 1, 0.0); // class 0
+    SET(g->y, 1, 0, 0.0); SET(g->y, 1, 1, 1.0); // class 1
+
+    // Valid labels
+    SET(g->y, 2, 0, 1.0); SET(g->y, 2, 1, 0.0); // class 0
+    SET(g->y, 3, 0, 0.0); SET(g->y, 3, 1, 1.0); // class 1
+
+    // Test labels
+    SET(g->y, 4, 0, 0.0); SET(g->y, 4, 1, 1.0); // class 1
+    SET(g->y, 5, 0, 1.0); SET(g->y, 5, 1, 0.0); // class 0
+
+    // Set node years for completeness
+    g->node_year[0] = 2018; g->node_year[1] = 2019;
+    g->node_year[2] = 2019; g->node_year[3] = 2020;
+    g->node_year[4] = 2020; g->node_year[5] = 2021;
+
+    return g;
+}
+
+void load_split_graph(graph_t** train_graph, graph_t** valid_graph, graph_t** test_graph)
+{
+    printf("Loading TEST graph split from - ");
+    printf("Train: %zu nodes | Valid: %zu nodes | Test: %zu nodes\n",
+           (size_t)NUM_TRAIN_NODES, (size_t)NUM_VALID_NODES, (size_t)NUM_TEST_NODES);
+
+    // Initialize the three subgraphs
+    *train_graph = init_graph(NUM_TRAIN_NODES, NUM_TRAIN_EDGES, NUM_FEATURES, NUM_LABELS);
+    *valid_graph = init_graph(NUM_VALID_NODES, NUM_VALID_EDGES, NUM_FEATURES, NUM_LABELS);
+    *test_graph = init_graph(NUM_TEST_NODES, NUM_TEST_EDGES, NUM_FEATURES, NUM_LABELS);
+
+    // Train subgraph (nodes 0, 1 -> remapped to 0, 1)
+    // Edges: (0,1), (1,0)
+    EDGE_AT(*train_graph, 0, SRC_NODE) = 0; EDGE_AT(*train_graph, 0, DST_NODE) = 1;
+    EDGE_AT(*train_graph, 1, SRC_NODE) = 1; EDGE_AT(*train_graph, 1, DST_NODE) = 0;
+
+    // Train features
+    SET((*train_graph)->x, 0, 0, 1.0); SET((*train_graph)->x, 0, 1, 0.5); SET((*train_graph)->x, 0, 2, 2.0);
+    SET((*train_graph)->x, 1, 0, 1.5); SET((*train_graph)->x, 1, 1, 0.8); SET((*train_graph)->x, 1, 2, 2.2);
+
+    // Train labels
+    SET((*train_graph)->y, 0, 0, 1.0); SET((*train_graph)->y, 0, 1, 0.0);
+    SET((*train_graph)->y, 1, 0, 0.0); SET((*train_graph)->y, 1, 1, 1.0);
+
+    // Train node years
+    (*train_graph)->node_year[0] = 2018;
+    (*train_graph)->node_year[1] = 2019;
+
+    // Valid subgraph (nodes 2, 3 -> remapped to 0, 1)
+    // Edges: (0,1), (1,0) (remapped from (2,3), (3,2))
+    EDGE_AT(*valid_graph, 0, SRC_NODE) = 0; EDGE_AT(*valid_graph, 0, DST_NODE) = 1;
+    EDGE_AT(*valid_graph, 1, SRC_NODE) = 1; EDGE_AT(*valid_graph, 1, DST_NODE) = 0;
+
+    // Valid features
+    SET((*valid_graph)->x, 0, 0, 2.0); SET((*valid_graph)->x, 0, 1, 1.0); SET((*valid_graph)->x, 0, 2, 1.8);
+    SET((*valid_graph)->x, 1, 0, 2.3); SET((*valid_graph)->x, 1, 1, 1.2); SET((*valid_graph)->x, 1, 2, 1.5);
+
+    // Valid labels
+    SET((*valid_graph)->y, 0, 0, 1.0); SET((*valid_graph)->y, 0, 1, 0.0);
+    SET((*valid_graph)->y, 1, 0, 0.0); SET((*valid_graph)->y, 1, 1, 1.0);
+
+    // Valid node years
+    (*valid_graph)->node_year[0] = 2019;
+    (*valid_graph)->node_year[1] = 2020;
+
+    // Test subgraph (nodes 4, 5 -> remapped to 0, 1)
+    // Edges: (0,1), (1,0) (remapped from (4,5), (5,4))
+    EDGE_AT(*test_graph, 0, SRC_NODE) = 0; EDGE_AT(*test_graph, 0, DST_NODE) = 1;
+    EDGE_AT(*test_graph, 1, SRC_NODE) = 1; EDGE_AT(*test_graph, 1, DST_NODE) = 0;
+
+    // Test features
+    SET((*test_graph)->x, 0, 0, 3.0); SET((*test_graph)->x, 0, 1, 1.5); SET((*test_graph)->x, 0, 2, 1.0);
+    SET((*test_graph)->x, 1, 0, 3.2); SET((*test_graph)->x, 1, 1, 1.8); SET((*test_graph)->x, 1, 2, 0.8);
+
+    // Test labels
+    SET((*test_graph)->y, 0, 0, 0.0); SET((*test_graph)->y, 0, 1, 1.0);
+    SET((*test_graph)->y, 1, 0, 1.0); SET((*test_graph)->y, 1, 1, 0.0);
+
+    // Test node years
+    (*test_graph)->node_year[0] = 2020;
+    (*test_graph)->node_year[1] = 2021;
+}
+
+#endif // USE_OGB_ARXIV
 
 
 void destroy_graph(graph_t *g)
 {
     free(g->edge_index);
-    mat_destroy(g->x);
-    mat_destroy(g->y);
+    matrix_destroy(g->x);
+    matrix_destroy(g->y);
     // Optional members
     if (g->node_year != NULL) free(g->node_year);
 

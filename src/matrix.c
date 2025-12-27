@@ -9,7 +9,7 @@
 #include "matrix.h"
 #include "perf.h"
 
-#include "nob.h"
+#include "../nob.h"
 
 static long get_cache_line_size()
 {
@@ -33,301 +33,114 @@ static long get_cache_line_size()
     return 64;
 }
 
-matrix_t* mat_create(size_t height, size_t width)
+Matrix* matrix_create(size_t M, size_t N)
 {
-    matrix_t *mat = malloc(sizeof(matrix_t));
-    if (!mat){
+    Matrix *m = malloc(sizeof(*m));
+    if (!m){
         ERROR("Could not allocate the matrix struct on heap");
     }
 
     size_t alignment = get_cache_line_size();
-    size_t size = height * width * sizeof(*mat->data);
+    size_t size = M * N * sizeof(*m->data);
     size_t padded_size = (size + alignment - 1) & ~(alignment - 1);
 
-    mat->data = aligned_alloc(alignment, padded_size);
-    if (!mat->data) {
+    m->data = aligned_alloc(alignment, padded_size);
+    if (!m->data) {
         ERROR("Could not allocate data for the matrix");
     }
 
-    mat->height = height;
-    mat->width = width;
-    mat->capacity = height * width;
-
-#pragma omp parallel for
-    for (size_t i = 0; i < height; i++) {
-        for (size_t j = 0; j < width; j++) {
-            MAT_AT(mat, i, j) = 0;
-        }
-    }
-
-    return mat;
-}
-
-void mat_destroy(matrix_t *mat)
-{
-    free(mat->data);
-    free(mat);
-}
-
-void mat_zero(matrix_t *matrix)
-{
-    if (!matrix || !matrix->data) return;
-    memset(matrix->data, 0, matrix->capacity * sizeof(*matrix->data));
-}
-
-double mat_get(const matrix_t *m, size_t i, size_t j)
-{
-    assert(m != NULL && m->data != NULL);
-    assert(i < m->height && j < m->width);
-    return MAT_AT(m, i, j);
-}
-
-void mat_set(matrix_t *m, size_t i, size_t j, double value)
-{
-    assert(m != NULL && m->data != NULL);
-    assert(i < BATCH_DIM(m));
-    assert(j < NODE_DIM(m));
-    MAT_AT(m, i, j) = value;
-}
-
-double* mat_row(matrix_t *mat, size_t i)
-{
-    assert(i < mat->height);
-    return mat->data + (i * mat->width);
-}
-
-void mat_cpy(matrix_t* dst, matrix_t* src)
-{
-    MAT_ASSERT(dst, src);
-    for (size_t i = 0; i < dst->height; ++i) {
-        for (size_t j = 0; j < dst->width; ++j) {
-            MAT_AT(dst, i, j) = MAT_AT(src, i, j);
-        }
-    }
-}
-
-void mat_copy_row(matrix_t* dst, size_t dst_row, matrix_t* src, size_t src_row)
-{
-    assert(dst->width == src->width);
-    assert(dst_row < dst->height);
-    assert(src_row < src->height);
-
-    memcpy(&MAT_AT(dst, dst_row, 0),
-           &MAT_AT(src, src_row, 0),
-           src->width * sizeof(double));
-}
-
-void mat_sum(matrix_t* dst, matrix_t* A)
-{
-    MAT_ASSERT(dst, A);
-    for (size_t i = 0; i < dst->height; ++i) {
-        for (size_t j = 0; j < dst->width; ++j) {
-            MAT_AT(dst, i, j) += MAT_AT(A, i, j);
-        }
-    }
-}
-
-void mat_fill(matrix_t *matrix, double value)
-{
-    if (!matrix || !matrix->data) return;
-
-    for (size_t i = 0; i < matrix->capacity; i++) {
-        matrix->data[i] = value;
-    }
-}
-
-void mat_rand(matrix_t* m, float low, float high)
-{
-    for (size_t i = 0; i < m->height; ++i) {
-        for (size_t j = 0; j < m->width; ++j) {
-            MAT_AT(m, i, j) = ((double)rand() / RAND_MAX) * (high - low) + low;
-        }
-    }
-}
-
-void mat_transpose(matrix_t *m)
-{
-    size_t height = m->height;
-    size_t width = m->width;
-
-    double *temp_data = malloc(height * width * sizeof(double));
-    assert(temp_data != NULL);
-
-    for (size_t i = 0; i < height; i++) {
-        for (size_t j = 0; j < width; j++) {
-            temp_data[j * height + i] = MAT_AT(m, i, j);
-        }
-    }
-
-    memcpy(m->data, temp_data, height * width * sizeof(double));
-    free(temp_data);
-
-    m->height = width;
-    m->width = height;
-}
-
-void mat_transpose_to(matrix_t *A, matrix_t *B)
-{
-    assert(A->height == B->width);
-    assert(A->width == B->height);
-
-    size_t height = A->height;
-    size_t width = A->width;
-    for (size_t i = 0; i < height; i++) {
-        for (size_t j = 0; j < width; j++) {
-            MAT_AT(B, j, i) = MAT_AT(A, i, j);
-        }
-    }
-}
-
-void dot(matrix_t *A, matrix_t *B, matrix_t *C)
-{
-    // Verify inner dimensions match
-    assert(A->width == B->height && "Inner dimensions must match for matrix multiplication");
-
-    assert(C->height == A->height && "Output height must match A height");
-    assert(C->width == B->width && "Output width must match B width");
-
-    size_t M = A->height;
-    size_t N = A->width;
-    size_t P = B->width;
-
-    // uint64_t flops = 2ULL * M * P * N;
+    m->M = M;
+    m->N = N;
+    m->stride = N;
 
 #pragma omp parallel for
     for (size_t i = 0; i < M; i++) {
-        for (size_t j = 0; j < P; j++) {
-            double sum = 0.0;
-            for (size_t k = 0; k < N; k++) {
-                sum += MAT_AT(A, i, k) * MAT_AT(B, k, j);
-            }
-            MAT_AT(C, i, j) = sum;
+        for (size_t j = 0; j < N; j++) {
+            m->data[i*m->stride+j] = 0.0;
         }
     }
+
+    return m;
 }
 
-void dot_agg(matrix_t *A, matrix_t *B, matrix_t *C)
+void matrix_destroy(Matrix *m)
 {
-    // Verify inner dimensions match
+    free(m->data);
+    free(m);
+}
 
-    assert(A->width == B->height);
-    assert(C->height == A->height);
-    assert(C->width == B->width);
-
-    size_t M = A->height;
-    size_t N = A->width;
-    size_t P = B->width;
-
-    // uint64_t flops = (2ULL * M * P * N) + (M * P);
-
+void matrix_zero(Matrix *m)
+{
 #pragma omp parallel for
-    for (size_t i = 0; i < M; i++) {
-        for (size_t j = 0; j < P; j++) {
-            double sum = 0.0;
-            for (size_t k = 0; k < N; k++) {
-                sum += MAT_AT(A, i, k) * MAT_AT(B, k, j);
-            }
-            MAT_AT(C, i, j) += sum;
+    for (size_t i = 0; i < m->M; i++) {
+        for (size_t j = 0; j < m->N; j++) {
+            m->data[i*m->stride+j] = 0.0;
+        }
+    }
+
+}
+
+void matrix_fill_random(Matrix *m, double low, double high)
+{
+    double scale = (high - low);
+    // OpenMP can't be used here as rand() isn't thread-safe, variants that might
+    // be of interest are srand48_r or random_r. This can be looked at closed iff
+    // fill_uniform becomes a bottleneck.
+    for (size_t i = 0; i < m->M; i++) {
+        for (size_t j = 0; j < m->N; j++) {
+            m->data[i*m->stride+j] = ((double)rand() / RAND_MAX) * scale + low;
         }
     }
 }
 
-void dot_ex(matrix_t *A, matrix_t *B, matrix_t *C, bool at, bool bt)
-{
-    // Calculate effective dimensions after potential transposition
-    size_t eff_A_rows = at ? A->width : A->height;
-    size_t eff_A_cols = at ? A->height : A->width;
-    size_t eff_B_rows = bt ? B->width : B->height;
-    size_t eff_B_cols = bt ? B->height : B->width;
+void matrix_dgemm(enum LINALG_TRANSPOSE TransA,
+                  enum LINALG_TRANSPOSE TransB,
+                  double alpha,
+                  const Matrix *A,
+                  const Matrix *B,
+                  double beta,
+                  Matrix *C) {
 
-    // Verify dimensions for valid matrix multiplication: eff_A * eff_B = C
-    // Inner dimensions must match: columns of eff_A = rows of eff_B
-    assert(eff_A_cols == eff_B_rows && "Inner dimensions must match for matrix multiplication");
-
-    // Output dimensions must match: C = eff_A_rows @ eff_B_cols
-    assert(C->height == eff_A_rows && "Output height must match effective rows of operand A");
-    assert(C->width == eff_B_cols && "Output width must match effective columns of operand B");
-
-    size_t M = eff_A_rows;
-    size_t N = eff_A_cols;
-    size_t P = eff_B_cols;
-
-    // uint64_t flops = 2ULL * M * N * P;
-
-    // Precompute strides for each matrix
-    size_t a_row_stride = at ? 1 : A->width;
-    size_t a_col_stride = at ? A->width : 1;
-    size_t b_row_stride = bt ? 1 : B->width;
-    size_t b_col_stride = bt ? B->width : 1;
-
-    // TODO unroll and jam
-#pragma omp parallel for
-    for (size_t i = 0; i < M; i++) {
-        for (size_t j = 0; j < P; j++) {
-            double sum = 0.0;
-            for (size_t k = 0; k < N; k++) {
-                sum += A->data[i*a_row_stride + k*a_col_stride] *
-                       B->data[k*b_row_stride + j*b_col_stride];
-            }
-            MAT_AT(C, i, j) = sum;
-        }
-    }
+    size_t M = (TransA==LinalgNoTrans) ? A->M : A->N;
+    size_t K = (TransA==LinalgNoTrans) ? A->N : A->M;
+    size_t N = (TransB==LinalgNoTrans) ? B->N : B->M;
+    dgemm(M, N, K,
+          TransA,
+          TransB,
+          alpha,
+          A->data, A->stride,
+          B->data, B->stride,
+          beta,
+          C->data, C->stride);
 }
 
-// https://randomascii.wordpress.com/2012/02/25/comparing-floating-point-numbers-2012-edition/
-bool mat_equal(matrix_t *A, matrix_t *B, size_t *row, size_t *col)
+void matrix_spec(Matrix* m, const char* name)
 {
-    // Calculate the difference.
-    MAT_ASSERT(A, B);
-    for (size_t i = 0; i < A->height; i++) {
-        for (size_t j = 0; j < A->width; j++) {
-            double a = MAT_AT(A, i, j);
-            double b = MAT_AT(B, i, j);
-            double diff = fabs(a - b);
-            a = fabs(a);
-            b = fabs(b);
-            // Find the largest
-            double largest = (b > a) ? b : a;
-
-            if (diff > largest * DBL_EPSILON) {
-                if (row != NULL && col != NULL) {
-                    *row = i;
-                    *col = j;
-                }
-                return false;
-            }
-        }
-    }
-    return true;
-}
-
-void mat_spec(matrix_t* mat, const char* name)
-{
-    if (mat != NULL) {
-        printf("%s (%zux%zu)\n", name, mat->height, mat->width);
+    if (m != NULL) {
+        printf("%s (%zux%zu)\n", name, m->M, m->N);
     } else {
         printf("%s (nil)\n", name);
     }
 }
 
-void mat_print(matrix_t* mat, const char *name, size_t padding)
+void matrix_print(Matrix* m, const char *name, size_t padding)
 {
     printf("%*s%s = [\n", (int) padding, "", name);
-    for (size_t i = 0; i < mat->height; ++i) {
+    for (size_t i = 0; i < m->rows; ++i) {
         printf("%*s    ", (int) padding, "");
-        for (size_t j = 0; j < mat->width; ++j) {
-            printf("%f ", MAT_AT(mat, i, j));
+        for (size_t j = 0; j < m->cols; ++j) {
+            printf("%f ", m->data[i*m->stride+j]);
         }
         printf("\n");
     }
     printf("%*s]\n", (int) padding, "");
 }
 
-const char* mat_shape(matrix_t* m)
+const char* matrix_shape(Matrix* m)
 {
     if (m == NULL ) {
         return "(nil)";
     }
-    return nob_temp_sprintf("(%zux%zu)", m->height, m->width);
+    return nob_temp_sprintf("(%zux%zu)", m->M, m->N);
 
 }

@@ -32,8 +32,8 @@ typedef struct {
     size_t num_node_features;
     size_t num_label_classes;
     size_t *edge_index; // Graph connectivity in COO format with shape [2, num_edges]
-    matrix_t *x; // Node feature matrix with shape [num_nodes, num_node_features]
-    matrix_t *y; // node-level targets of shape [num_nodes, num_label_classes] (One-hot encoding?)
+    Matrix *x; // Node feature matrix with shape [num_nodes, num_node_features]
+    Matrix *y; // node-level targets of shape [num_nodes, num_label_classes] (One-hot encoding?)
     // Optional members
     size_t *node_year;
 } graph_t;

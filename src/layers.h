@@ -25,31 +25,31 @@
 
 // TODO: add references to graph struct
 typedef struct {
-    matrix_t *input;            // Points to previous layer's output
-    matrix_t *output;
-    matrix_t *agg;
-    matrix_t *Wagg, *Wroot;
-    matrix_t *grad_output;      // Gradients w.r.t. this layer's output (from downstream)
-    matrix_t *grad_input;       // Gradients w.r.t. this layer's input (to upstream)
-    matrix_t *grad_Wagg, *grad_Wroot;
+    Matrix *input;            // Points to previous layer's output
+    Matrix *output;
+    Matrix *agg;
+    Matrix *Wagg, *Wroot;
+    Matrix *grad_output;      // Gradients w.r.t. this layer's output (from downstream)
+    Matrix *grad_input;       // Gradients w.r.t. this layer's input (to upstream)
+    Matrix *grad_Wagg, *grad_Wroot;
     double   *mean_scale;       // Scaling factors for mean aggregation (1/neighbor_count)
     size_t   sample_size;
     size_t   agg_size;
 } SageLayer;
 
 typedef struct {
-    matrix_t *input;            // Points to previous layer's output
-    matrix_t *output;
-    matrix_t *grad_output;      // Gradients w.r.t. this layer's output (from downstream)
-    matrix_t *grad_input;       // Gradients w.r.t. this layer's input (to upstream)
+    Matrix *input;            // Points to previous layer's output
+    Matrix *output;
+    Matrix *grad_output;      // Gradients w.r.t. this layer's output (from downstream)
+    Matrix *grad_input;       // Gradients w.r.t. this layer's input (to upstream)
 } ReluLayer;
 
 typedef struct {
-    matrix_t *input;            // Points to previous layer's output
-    matrix_t *output;
-    matrix_t *grad_output;      // Gradients w.r.t. this layer's output (from downstream)
-    matrix_t *grad_input;       // Gradients w.r.t. this layer's input (to upstream)
-    matrix_t *recip_mag;        // 1/||x||_2
+    Matrix *input;            // Points to previous layer's output
+    Matrix *output;
+    Matrix *grad_output;      // Gradients w.r.t. this layer's output (from downstream)
+    Matrix *grad_input;       // Gradients w.r.t. this layer's input (to upstream)
+    Matrix *recip_mag;        // 1/||x||_2
 } NormalizeLayer;
 
 typedef struct {
@@ -60,22 +60,22 @@ typedef struct {
 } SageNet;
 
 typedef struct {
-    matrix_t *input;            // Points to previous layer's output
-    matrix_t *output;
-    matrix_t *W;
-    matrix_t *bias;
-    matrix_t *grad_output;      // Gradients w.r.t. this layer's output (from downstream)
-    matrix_t *grad_input;       // Gradients w.r.t. this layer's input (to upstream)
-    matrix_t *grad_W;
-    matrix_t *grad_bias;
+    Matrix *input;            // Points to previous layer's output
+    Matrix *output;
+    Matrix *W;
+    Matrix *bias;
+    Matrix *grad_output;      // Gradients w.r.t. this layer's output (from downstream)
+    Matrix *grad_input;       // Gradients w.r.t. this layer's input (to upstream)
+    Matrix *grad_W;
+    Matrix *grad_bias;
 } LinearLayer;
 
 typedef struct {
-    matrix_t *input;            // Points to previous layer's output
-    matrix_t *output;
+    Matrix *input;            // Points to previous layer's output
+    Matrix *output;
     // We use cross-entropy derivative since we we'll be using (LogSoftmax+NLLLoss)
-    matrix_t *grad_input;
-    matrix_t *grad_output;      // Gradients w.r.t. this layer's output (from downstream)
+    Matrix *grad_input;
+    Matrix *grad_output;      // Gradients w.r.t. this layer's output (from downstream)
 } LogSoftLayer;
 
 // Init helpers

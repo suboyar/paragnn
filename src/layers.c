@@ -48,20 +48,20 @@ SageLayer* init_sage_layer(size_t batch_size, size_t in_dim, size_t out_dim)
 
     *layer = (SageLayer){
         .input       = NULL, // Set later when connecting layers
-        .output      = MAT_CREATE(batch_size, out_dim),
-        .agg         = MAT_CREATE(batch_size, in_dim),
-        .Wagg        = MAT_CREATE(in_dim, out_dim),
-        .Wroot       = MAT_CREATE(in_dim, out_dim),
-        .grad_input  = MAT_CREATE(batch_size, in_dim),
+        .output      = matrix_create(batch_size, out_dim),
+        .agg         = matrix_create(batch_size, in_dim),
+        .Wagg        = matrix_create(in_dim, out_dim),
+        .Wroot       = matrix_create(in_dim, out_dim),
+        .grad_input  = matrix_create(batch_size, in_dim),
         .grad_output = NULL, // Set later when connecting layers
-        .grad_Wagg   = MAT_CREATE(in_dim, out_dim),
-        .grad_Wroot  = MAT_CREATE(in_dim, out_dim),
+        .grad_Wagg   = matrix_create(in_dim, out_dim),
+        .grad_Wroot  = matrix_create(in_dim, out_dim),
     };
     layer->mean_scale = malloc(batch_size * sizeof(*layer->mean_scale));
 
     // Initialize weights randomly
-    mat_rand(layer->Wagg, -1.0, 1.0);
-    mat_rand(layer->Wroot, -1.0, 1.0);
+    matrix_fill_random(layer->Wagg, -1.0, 1.0);
+    matrix_fill_random(layer->Wroot, -1.0, 1.0);
 
     return layer;
 }
@@ -72,8 +72,8 @@ ReluLayer* init_relu_layer(size_t batch_size, size_t dim)
 
     *layer = (ReluLayer) {
         .input       = NULL, // Set later when connecting layers,
-        .output      = MAT_CREATE(batch_size, dim),
-        .grad_input  = MAT_CREATE(batch_size, dim),
+        .output      = matrix_create(batch_size, dim),
+        .grad_input  = matrix_create(batch_size, dim),
         .grad_output = NULL, // Set later when connecting layers, mat_create(dim, batch_size),
     };
 
@@ -86,10 +86,10 @@ NormalizeLayer* init_l2norm_layer(size_t batch_size, size_t dim)
 
     *layer = (NormalizeLayer) {
         .input       = NULL, // Set later when connecting layers,
-        .output      = MAT_CREATE(batch_size, dim),
-        .grad_input  = MAT_CREATE(batch_size, dim),
+        .output      = matrix_create(batch_size, dim),
+        .grad_input  = matrix_create(batch_size, dim),
         .grad_output = NULL, // Set later when connecting layers, mat_create(dim, batch_size),
-        .recip_mag   = MAT_CREATE(batch_size, 1)
+        .recip_mag   = matrix_create(batch_size, 1)
     };
 
     return layer;
@@ -101,17 +101,17 @@ LinearLayer* init_linear_layer(size_t batch_size, size_t in_dim, size_t out_dim)
 
     *layer = (LinearLayer) {
         .input       = NULL, // Set later when connecting layers
-        .output      = MAT_CREATE(batch_size, out_dim),
-        .W           = MAT_CREATE(in_dim, out_dim),
-        .bias        = MAT_CREATE(1, out_dim),
-        .grad_input  = MAT_CREATE(batch_size, in_dim),
+        .output      = matrix_create(batch_size, out_dim),
+        .W           = matrix_create(in_dim, out_dim),
+        .bias        = matrix_create(1, out_dim),
+        .grad_input  = matrix_create(batch_size, in_dim),
         .grad_output = NULL, // Set later when connecting layers
-        .grad_W      = MAT_CREATE(in_dim, out_dim),
-        .grad_bias   = MAT_CREATE(1, out_dim),
+        .grad_W      = matrix_create(in_dim, out_dim),
+        .grad_bias   = matrix_create(1, out_dim),
     };
 
-    mat_rand(layer->W, -1.0, 1.0);
-    mat_rand(layer->bias, -1.0, 1.0);
+    matrix_fill_random(layer->W, -1.0, 1.0);
+    matrix_fill_random(layer->bias, -1.0, 1.0);
 
     return layer;
 }
@@ -123,8 +123,8 @@ LogSoftLayer* init_logsoft_layer(size_t batch_size, size_t dim)
 
     *layer = (LogSoftLayer) {
         .input       = NULL, // Set later when connecting layers
-        .output      = MAT_CREATE(batch_size, dim),
-        .grad_input  = MAT_CREATE(batch_size, dim),
+        .output      = matrix_create(batch_size, dim),
+        .grad_input  = matrix_create(batch_size, dim),
         .grad_output = NULL, // Set later when connecting layers
     };
 
@@ -149,13 +149,13 @@ void destroy_sage_layer(SageLayer* l)
 {
     if (!l) return;
 
-    if (l->output) mat_destroy(l->output);
-    if (l->agg) mat_destroy(l->agg);
-    if (l->Wagg) mat_destroy(l->Wagg);
-    if (l->Wroot) mat_destroy(l->Wroot);
-    if (l->grad_input) mat_destroy(l->grad_input);
-    if (l->grad_Wagg) mat_destroy(l->grad_Wagg);
-    if (l->grad_Wroot) mat_destroy(l->grad_Wroot);
+    if (l->output) matrix_destroy(l->output);
+    if (l->agg) matrix_destroy(l->agg);
+    if (l->Wagg) matrix_destroy(l->Wagg);
+    if (l->Wroot) matrix_destroy(l->Wroot);
+    if (l->grad_input) matrix_destroy(l->grad_input);
+    if (l->grad_Wagg) matrix_destroy(l->grad_Wagg);
+    if (l->grad_Wroot) matrix_destroy(l->grad_Wroot);
     if (l->mean_scale) free(l->mean_scale);
 
     free(l);
@@ -165,8 +165,8 @@ void destroy_relu_layer(ReluLayer* l)
 {
     if (!l) return;
 
-    if (l->output) mat_destroy(l->output);
-    if (l->grad_input) mat_destroy(l->grad_input);
+    if (l->output) matrix_destroy(l->output);
+    if (l->grad_input) matrix_destroy(l->grad_input);
 
     free(l);
 }
@@ -175,9 +175,9 @@ void destroy_l2norm_layer(NormalizeLayer* l)
 {
     if (!l) return;
 
-    if (l->output) mat_destroy(l->output);
-    if (l->grad_input) mat_destroy(l->grad_input);
-    if (l->recip_mag) mat_destroy(l->recip_mag);
+    if (l->output) matrix_destroy(l->output);
+    if (l->grad_input) matrix_destroy(l->grad_input);
+    if (l->recip_mag) matrix_destroy(l->recip_mag);
 
     free(l);
 }
@@ -186,12 +186,12 @@ void destroy_linear_layer(LinearLayer *l)
 {
     if (!l) return;
 
-    if (l->output) mat_destroy(l->output);
-    if (l->W) mat_destroy(l->W);
-    if (l->bias) mat_destroy(l->bias);
-    if (l->grad_input) mat_destroy(l->grad_input);
-    if (l->grad_W) mat_destroy(l->grad_W);
-    if (l->grad_bias) mat_destroy(l->grad_bias);
+    if (l->output) matrix_destroy(l->output);
+    if (l->W) matrix_destroy(l->W);
+    if (l->bias) matrix_destroy(l->bias);
+    if (l->grad_input) matrix_destroy(l->grad_input);
+    if (l->grad_W) matrix_destroy(l->grad_W);
+    if (l->grad_bias) matrix_destroy(l->grad_bias);
 
     free(l);
 }
@@ -199,8 +199,8 @@ void destroy_logsoft_layer(LogSoftLayer *l)
 {
     if (!l) return;
 
-    if (!l->output) mat_destroy(l->output);
-    if (!l->grad_input) mat_destroy(l->grad_input);
+    if (l->output) matrix_destroy(l->output);
+    if (l->grad_input) matrix_destroy(l->grad_input);
 
     free(l);
 }
@@ -208,23 +208,39 @@ void destroy_logsoft_layer(LogSoftLayer *l)
 // Update weights
 void linear_layer_update_weights(LinearLayer* const l, float lr)
 {
-    MAT_ASSERT(l->W, l->grad_W);
-    float batch_recip = (float) 1/BATCH_DIM(l->input);
+    if(l->W->M != l->grad_W->M) {
+        nob_log(NOB_ERROR, "Expected M to be the same");
+        abort();
+    }
 
-    for (size_t i = 0; i < l->W->height; i++) {
-        for (size_t j = 0; j < l->W->width; j++) {
-            MAT_BOUNDS_CHECK(l->W, i, j);
-            MAT_BOUNDS_CHECK(l->grad_W, i, j);
-            MAT_AT(l->W, i, j) -= batch_recip * lr * MAT_AT(l->grad_W, i, j);
+    if(l->W->N != l->grad_W->N) {
+        nob_log(NOB_ERROR, "Expected N to be the same");
+        abort();
+    }
+
+    size_t M = l->W->M;
+    size_t N = l->W->N;
+
+    double *restrict A = l->W->data;
+    size_t lda = l->W->stride;
+    double *restrict B = l->grad_W->data;
+    size_t ldb = l->grad_W->stride;
+
+    double batch_recip = (double) 1/l->input->batch;
+
+    // We are doing axpy: https://www.netlib.org/lapack/explore-html/d5/d4b/group__axpy.html
+    for (size_t i = 0; i < M; i++) {
+        for (size_t j = 0; j < N; j++) {
+            A[i*lda+j] -= batch_recip * lr * B[i*ldb+j];
         }
     }
 
     if (l->grad_bias != NULL) {
-        MAT_ASSERT(l->grad_bias, l->bias);
-        for (size_t i = 0; i < NODE_DIM(l->bias); i++) {
-            MAT_BOUNDS_CHECK(l->bias, 0, i);
-            MAT_BOUNDS_CHECK(l->grad_bias, 0, i);
-            MAT_AT(l->bias, 0, i) -= batch_recip * lr * MAT_AT(l->grad_bias, 0, i);
+        assert(l->bias->N == N);
+        double *restrict C = l->bias->data;
+        double *restrict D = l->grad_bias->data;
+        for (size_t i = 0; i < N; i++) {
+            C[i] -= batch_recip * lr * D[i];
         }
     }
 
@@ -233,19 +249,42 @@ void linear_layer_update_weights(LinearLayer* const l, float lr)
 
 void sage_layer_update_weights(SageLayer* const l, float lr)
 {
-    MAT_ASSERT(l->Wroot, l->grad_Wroot);
-    MAT_ASSERT(l->Wagg,  l->grad_Wagg);
-    float batch_recip = (float) 1/BATCH_DIM(l->input);
+    if(l->Wroot->M != l->grad_Wroot->M) {
+        nob_log(NOB_ERROR, "Expected M to be the same");
+        abort();
+    }
 
-    for (size_t i = 0; i < l->Wroot->height; i++) {
-        for (size_t j = 0; j < l->Wroot->width; j++) {
-            MAT_BOUNDS_CHECK(l->Wroot, i, j);
-            MAT_BOUNDS_CHECK(l->grad_Wroot, i, j);
-            MAT_AT(l->Wroot, i, j) -= batch_recip * lr * MAT_AT(l->grad_Wroot, i, j);
+    if(l->Wroot->N != l->grad_Wroot->N) {
+        nob_log(NOB_ERROR, "Expected N to be the same");
+        abort();
+    }
 
-            MAT_BOUNDS_CHECK(l->Wagg, i, j);
-            MAT_BOUNDS_CHECK(l->grad_Wagg, i, j);
-            MAT_AT(l->Wagg, i, j) -= batch_recip * lr * MAT_AT(l->grad_Wagg, i, j);
+    if(l->Wagg->M != l->grad_Wagg->M) {
+        nob_log(NOB_ERROR, "Expected M to be the same");
+        abort();
+    }
+
+    if(l->Wagg->N != l->grad_Wagg->N) {
+        nob_log(NOB_ERROR, "Expected N to be the same");
+        abort();
+    }
+
+
+    double *restrict A = l->Wroot->data;
+    size_t lda = l->Wroot->stride;
+    double *restrict B = l->grad_Wroot->data;
+    size_t ldb = l->grad_Wroot->stride;
+
+    double *restrict C = l->Wagg->data;
+    size_t ldc = l->Wagg->stride;
+    double *restrict D = l->grad_Wagg->data;
+    size_t ldd = l->grad_Wagg->stride;
+
+    float batch_recip = (float) 1/l->input->batch;
+    for (size_t i = 0; i < l->Wroot->M; i++) {
+        for (size_t j = 0; j < l->Wroot->N; j++) {
+            A[i*lda+j] -= batch_recip * lr * B[i*ldb+j];
+            C[i*ldc+j] -= batch_recip * lr * D[i*ldd+j];
         }
     }
 
@@ -257,44 +296,44 @@ void sage_layer_zero_gradients(SageLayer* l)
 {
     if (!l) return;
 
-    if (l->grad_output) mat_zero(l->grad_output);
-    if (l->grad_input) mat_zero(l->grad_input);
-    if (l->grad_Wagg) mat_zero(l->grad_Wagg);
-    if (l->grad_Wroot) mat_zero(l->grad_Wroot);
+    if (l->grad_output) matrix_zero(l->grad_output);
+    if (l->grad_input) matrix_zero(l->grad_input);
+    if (l->grad_Wagg) matrix_zero(l->grad_Wagg);
+    if (l->grad_Wroot) matrix_zero(l->grad_Wroot);
 }
 
 void relu_layer_zero_gradients(ReluLayer* l)
 {
     if (!l) return;
 
-    if (l->grad_output) mat_zero(l->grad_output);
-    if (l->grad_input) mat_zero(l->grad_input);
+    if (l->grad_output) matrix_zero(l->grad_output);
+    if (l->grad_input) matrix_zero(l->grad_input);
 }
 
 void normalize_layer_zero_gradients(NormalizeLayer* l)
 {
     if (!l) return;
 
-    if (l->grad_output) mat_zero(l->grad_output);
-    if (l->grad_input) mat_zero(l->grad_input);
+    if (l->grad_output) matrix_zero(l->grad_output);
+    if (l->grad_input) matrix_zero(l->grad_input);
 }
 
 void linear_layer_zero_gradients(LinearLayer* l)
 {
     if (!l) return;
 
-    if (l->grad_output) mat_zero(l->grad_output);
-    if (l->grad_input) mat_zero(l->grad_input);
-    if (l->grad_W) mat_zero(l->grad_W);
-    if (l->grad_bias) mat_zero(l->grad_bias);
+    if (l->grad_output) matrix_zero(l->grad_output);
+    if (l->grad_input) matrix_zero(l->grad_input);
+    if (l->grad_W) matrix_zero(l->grad_W);
+    if (l->grad_bias) matrix_zero(l->grad_bias);
 }
 
 void logsoft_layer_zero_gradients(LogSoftLayer* l)
 {
     if (!l) return;
 
-    if (l->grad_output) mat_zero(l->grad_output);
-    if (l->grad_input) mat_zero(l->grad_input);
+    if (l->grad_output) matrix_zero(l->grad_output);
+    if (l->grad_input) matrix_zero(l->grad_input);
 }
 
 // Network-wide gradient reset
@@ -322,22 +361,22 @@ void sage_layer_info(const SageLayer* const l)
     printf("========================================\n");
     printf("output = input * Wroot + agg  * Wagg\n");
     printf("%-6s = %-5s * %-5s + %-4s * %s\n",
-           mat_shape((l)->output), mat_shape((l)->input),
-           mat_shape((l)->Wroot), mat_shape((l)->agg),
-           mat_shape((l)->Wagg));
+           matrix_shape((l)->output), matrix_shape((l)->input),
+           matrix_shape((l)->Wroot), matrix_shape((l)->agg),
+           matrix_shape((l)->Wagg));
     printf("----------------------------------------\n");
     printf("grad_output = output\n");
     printf("   %-8s = %s\n",
-           mat_shape((l)->grad_output), mat_shape((l)->output));
+           matrix_shape((l)->grad_output), matrix_shape((l)->output));
     printf("grad_input  = input\n");
     printf("   %-7s  = %s\n",
-           mat_shape((l)->grad_input), mat_shape((l)->input));
+           matrix_shape((l)->grad_input), matrix_shape((l)->input));
     printf("grad_Wagg   = Wagg\n");
     printf("   %-6s   = %s\n",
-           mat_shape((l)->grad_Wagg), mat_shape((l)->Wagg));
+           matrix_shape((l)->grad_Wagg), matrix_shape((l)->Wagg));
     printf("grad_Wroot  = Wroot\n");
     printf("   %-7s  = %s\n",
-           mat_shape((l)->grad_Wroot), mat_shape((l)->Wroot));
+           matrix_shape((l)->grad_Wroot), matrix_shape((l)->Wroot));
     printf("========================================\n");
 }
 
@@ -347,14 +386,14 @@ void relu_layer_info(const ReluLayer* const l)
     printf("========================================\n");
     printf("output = relu(input)\n");
     printf("%-6s = relu(%-5s)\n",
-           mat_shape((l)->output), mat_shape((l)->input));
+           matrix_shape((l)->output), matrix_shape((l)->input));
     printf("----------------------------------------\n");
     printf("grad_output = output\n");
     printf("   %-8s = %s\n",
-           mat_shape((l)->grad_output), mat_shape((l)->output));
+           matrix_shape((l)->grad_output), matrix_shape((l)->output));
     printf("grad_input  = input\n");
     printf("   %-7s  = %s\n",
-           mat_shape((l)->grad_input), mat_shape((l)->input));
+           matrix_shape((l)->grad_input), matrix_shape((l)->input));
     printf("========================================\n");
 }
 
@@ -364,14 +403,14 @@ void normalize_layer_info(const NormalizeLayer* const l)
     printf("========================================\n");
     printf("output = l2norm(input)\n");
     printf("%-6s = l2norm(%-5s)\n",
-           mat_shape((l)->output), mat_shape((l)->input));
+           matrix_shape((l)->output), matrix_shape((l)->input));
     printf("----------------------------------------\n");
     printf("grad_output = output\n");
     printf("   %-8s = %s\n",
-           mat_shape((l)->grad_output), mat_shape((l)->output));
+           matrix_shape((l)->grad_output), matrix_shape((l)->output));
     printf("grad_input  = input\n");
     printf("   %-7s  = %s\n",
-           mat_shape((l)->grad_input), mat_shape((l)->input));
+           matrix_shape((l)->grad_input), matrix_shape((l)->input));
     printf("========================================\n");
 }
 
@@ -390,21 +429,21 @@ void linear_layer_info(const LinearLayer* const l)
     printf("========================================\n");
     printf("output = input *   W   + bias\n");
     printf("%-6s = %-5s * %-5s + %s\n",
-           mat_shape((l)->output), mat_shape((l)->input),
-           mat_shape((l)->W), mat_shape((l)->bias));
+           matrix_shape((l)->output), matrix_shape((l)->input),
+           matrix_shape((l)->W), matrix_shape((l)->bias));
     printf("----------------------------------------\n");
     printf("grad_output = output\n");
     printf("   %-8s = %s\n",
-           mat_shape((l)->grad_output), mat_shape((l)->output));
+           matrix_shape((l)->grad_output), matrix_shape((l)->output));
     printf("grad_input  = input\n");
     printf("   %-7s  = %s\n",
-           mat_shape((l)->grad_input), mat_shape((l)->input));
+           matrix_shape((l)->grad_input), matrix_shape((l)->input));
     printf("grad_W      =   W\n");
     printf("   %-6s   = %s\n",
-           mat_shape((l)->grad_W), mat_shape((l)->W));
+           matrix_shape((l)->grad_W), matrix_shape((l)->W));
     printf("grad_bias   = bias\n");
     printf("   %-6s   = %s\n",
-           mat_shape((l)->grad_bias), mat_shape((l)->bias));
+           matrix_shape((l)->grad_bias), matrix_shape((l)->bias));
     printf("========================================\n");
 }
 
@@ -414,13 +453,13 @@ void logsoft_layer_info(const LogSoftLayer* const l)
     printf("========================================\n");
     printf("output = log_softmax(input)\n");
     printf("%-6s = log_softmax(%-5s)\n",
-           mat_shape((l)->output), mat_shape((l)->input));
+           matrix_shape((l)->output), matrix_shape((l)->input));
     printf("----------------------------------------\n");
     printf("grad_input  = input\n");
     printf("   %-8s = %s\n",
-           mat_shape((l)->grad_input), mat_shape((l)->input));
+           matrix_shape((l)->grad_input), matrix_shape((l)->input));
     printf("grad_output = output\n");
     printf("   %-8s = %s\n",
-           mat_shape((l)->grad_output), mat_shape((l)->output));
+           matrix_shape((l)->grad_output), matrix_shape((l)->output));
     printf("========================================\n");
 }

@@ -17,17 +17,17 @@
 #include "graph.h"
 
 #define NOB_IMPLEMENTATION
-#include "nob.h"
+#include "../nob.h"
 
 #define FLAG_IMPLEMENTATION
 #define FLAG_PUSH_DASH_DASH_BACK
-#include "flag.h"
+#include "../flag.h"
 
 #ifndef EPOCH
 #    ifdef USE_OGB_ARXIV
-#        define EPOCH 20               // Goal is to have 500 epochs
+#        define EPOCH 500               // Goal is to have 500 epochs
 #    else
-#        define EPOCH 1
+#        define EPOCH 10
 #    endif // USE_OGB_ARXIV
 #endif // EPOCH
 
@@ -234,7 +234,7 @@ int main(int argc, char** argv)
         PERF_START("epoch");
         inference(sage_net, linearlayer, logsoftlayer, train_graph);
 
-        double loss = nll_loss(logsoftlayer->output, train_graph->y) / BATCH_DIM(train_graph->y);
+        double loss = nll_loss(logsoftlayer->output, train_graph->y) / train_graph->y->batch;
         double acc = accuracy(logsoftlayer->output, train_graph->y);
         printf("[epoch %zu] loss: %f, accuracy: %f\n", epoch, loss, acc);
 

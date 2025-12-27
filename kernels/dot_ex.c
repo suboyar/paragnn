@@ -5,7 +5,7 @@
 #include <sys/param.h>
 
 #include <omp.h>
-#include <openblas/cblas.h>     // NOTE: This might not work on eX3, but is needed for OpenSUSE
+#include <cblas.h>
 
 #define NOB_IMPLEMENTATION      // Needed for matrix.h etc...
 #include "matrix.h"
@@ -1073,6 +1073,7 @@ bool is_valid(matrix_t* src, matrix_t* ref)
     const double abs_tol = 1e-9;
     const double rel_tol = 1e-6;
 
+    // https://randomascii.wordpress.com/2012/02/25/comparing-floating-point-numbers-2012-edition/
     for (size_t i = 0; i < src->height; i++) {
         for (size_t j = 0; j < src->width; j++) {
             double src_val = MAT_AT(src, i, j);

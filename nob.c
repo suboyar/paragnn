@@ -57,16 +57,17 @@ Target targets[] = {
     {
         .name = "paragnn",
         .srcs = STRINGS(
+            SRC_FOLDER"main.c",
             SRC_FOLDER"gnn.c",
             SRC_FOLDER"graph.c",
             SRC_FOLDER"layers.c",
-            SRC_FOLDER"main.c",
             SRC_FOLDER"matrix.c",
-            SRC_FOLDER"gemm.c",
+            SRC_FOLDER"linalg/gemm.c",
+            SRC_FOLDER"linalg/axpy.c",
             SRC_FOLDER"perf.c",
             ),
         .libs = STRINGS("-lm", "-lopenblas"),
-        .release_macros = STRINGS("-DUSE_OGB_ARXIV", "-DEPOCH=10"),
+        .release_macros = STRINGS("-DUSE_OGB_ARXIV"),
     },
     {
         .name = "dot-ex",       // TODO: rename this to tsgemm (tall-skinny gemm)
@@ -159,32 +160,67 @@ const char* get_obj_path(const char* out_dir, const char* src_path)
     return nob_temp_sprintf("%s%.*s.o", out_dir, (int)len, sv.data);
 }
 
-void append_common_flags(bool release)
+void append_common_flags(bool debug, bool release)
 {
     nob_cc_flags(&cmd);
     nob_cc_error_flags(&cmd);
-    nob_cmd_append(&cmd, "-I.", "-I"SRC_FOLDER);
+    nob_cmd_append(&cmd, "-I"SRC_FOLDER);
+
+    if (debug || !release) {
+        nob_cmd_append(&cmd, "-ggdb", "-g3", "-gdwarf-2");
+    }
 
     if (release) {
         nob_cmd_append(&cmd, "-O3", "-march=native", "-DNDEBUG", "-ffast-math");
     } else {
-        nob_cmd_append(&cmd, "-O0", "-ggdb", "-g3", "-gdwarf-2");
+        nob_cmd_append(&cmd, "-O0");
     }
 
     nob_cmd_append(&cmd, "-fopenmp");
 }
 
+bool ungzip(Nob_File_Paths *file_paths, const char* subfolder)
+{
+    for (size_t i = 0; i < file_paths->count; i++) {
+        const char *files = file_paths->items[i];
+        if (*files == '.') continue;
+        nob_log(NOB_INFO, "Extracting %s to %s", files, OGB_ARXIV_PROCESSED);
+
+        if (!subfolder) {
+            subfolder = ".";
+        }
+
+        char *in = nob_temp_sprintf(OGB_ARXIV_PATH"%s/%s", subfolder, files);
+
+        size_t base_len = strlen(files) - 3; // strip .gz
+        const char *out = nob_temp_sprintf("%s%.*s", OGB_ARXIV_PROCESSED, (int)base_len, files);
+
+        nob_cmd_append(&cmd, "gzip", "-d", "-c", in);
+        if (!nob_cmd_run(&cmd, .stdout_path = out)) {
+            nob_log(NOB_ERROR, "Failed to extract %s", files);
+            return false;
+        }
+    }
+    return true;
+}
+
+#define OGB_ARXIV_PROCESSED_COUNT 9
 bool prepare_ogb_dataset()
 {
     bool result = true;
-    Nob_File_Paths file_paths = {0};
+    Nob_File_Paths processed_file_paths = {0};
+    Nob_File_Paths raw_file_paths = {0};
+    Nob_File_Paths split_file_paths = {0};
 
-    if (!flags.extract_ogb && (nob_read_entire_dir(OGB_ARXIV_PROCESSED, &file_paths) && file_paths.count > 2)) {
+    if (!flags.extract_ogb &&
+        nob_read_entire_dir(OGB_ARXIV_PROCESSED, &processed_file_paths) &&
+        processed_file_paths.count == OGB_ARXIV_PROCESSED_COUNT+2) { // . and .. included in dir listing
         nob_log(NOB_INFO, "OGB dataset already processed");
         nob_return_defer(true);
     }
 
-    if(!nob_read_entire_dir(OGB_ARXIV_PATH"raw", &file_paths)) {
+    if(!nob_read_entire_dir(OGB_ARXIV_PATH"raw", &raw_file_paths) ||
+       !nob_read_entire_dir(OGB_ARXIV_PATH"split/time", &split_file_paths)) {
         if (!flags.download_ogb) {
             // Maybe support downloading other datasets from OGB, than only supporting ogb-arxiv
             nob_log(NOB_ERROR, "OGB dataset not found. Run with -download-ogb to fetch it");
@@ -206,33 +242,26 @@ bool prepare_ogb_dataset()
         }
 
         // Try reading the files one more time
-        if(!nob_read_entire_dir(OGB_ARXIV_PATH"raw", &file_paths)) {
+        if(!nob_read_entire_dir(OGB_ARXIV_PATH"raw", &raw_file_paths)) {
             nob_log(NOB_ERROR, "Failed to read raw files after extraction");
             nob_return_defer(false);
         }
-    }
-
-    for (size_t i = 0; i < file_paths.count; i++) {
-        const char *rawfile = file_paths.items[i];
-        if (*rawfile == '.') continue;
-        nob_log(NOB_INFO, "Extracting %s to %s", rawfile, OGB_ARXIV_PROCESSED);
-
-        char *in = nob_temp_sprintf(OGB_ARXIV_PATH"raw/%s", rawfile);
-
-        size_t base_len = strlen(rawfile) - 3; // strip .gz
-        const char *out = nob_temp_sprintf("%s%.*s", OGB_ARXIV_PROCESSED, (int)base_len, rawfile);
-
-        nob_cmd_append(&cmd, "gzip", "-d", "-c", in);
-        if (!nob_cmd_run(&cmd, .stdout_path = out)) {
-            nob_log(NOB_ERROR, "Failed to extract %s", rawfile);
+        if(!nob_read_entire_dir(OGB_ARXIV_PATH"split/time", &split_file_paths)) {
+            nob_log(NOB_ERROR, "Failed to read split files after extraction");
             nob_return_defer(false);
         }
     }
+
+    if (!ungzip(&raw_file_paths, "raw")) nob_return_defer(false);
+    if (!ungzip(&split_file_paths, "split/time")) nob_return_defer(false);
 
     nob_log(NOB_INFO, "OGB dataset ready");
 
 defer:
-    nob_da_free(file_paths);
+    nob_da_free(processed_file_paths);
+    nob_da_free(raw_file_paths);
+    nob_da_free(split_file_paths);
+
     return result;
 }
 
@@ -244,6 +273,7 @@ int build_target(Target* t)
     }
 
     bool release = flags.release;
+    bool debug = flags.debug;
 
     // Determine output directory
     const char* out_dir = flags.out_dir ? flags.out_dir :
@@ -268,7 +298,7 @@ int build_target(Target* t)
         obj_paths[i] = obj;
 
         nob_cc(&cmd);
-        append_common_flags(release);
+        append_common_flags(debug, release);
 
         if (release && t->release_macros.items) {
             for (size_t i = 0; i < t->release_macros.count; i++) {
@@ -301,7 +331,7 @@ int build_target(Target* t)
 
     // Link
     nob_cc(&cmd);
-    append_common_flags(release);
+    append_common_flags(debug, release);
 
     nob_cc_output(&cmd, exec_path);
 
@@ -473,12 +503,6 @@ int main(int argc, char** argv)
     // Default to debug if neither specified
     if (!flags.release && !flags.debug) {
         flags.debug = true;
-    }
-
-    // Handle conflicting flags
-    if (flags.release && flags.debug) {
-        nob_log(NOB_ERROR, "Cannot specify both -debug and -release");
-        return 1;
     }
 
     // Commands

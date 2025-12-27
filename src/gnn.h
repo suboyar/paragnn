@@ -13,10 +13,10 @@ void relu(ReluLayer* const l);
 void normalize(NormalizeLayer* const l);
 void linear(LinearLayer* const l);
 void logsoft(LogSoftLayer* const l);
-double nll_loss(matrix_t* const yhat, matrix_t* const y);
-double accuracy(matrix_t* const yhat, matrix_t* const y);
+double nll_loss(Matrix* const yhat, Matrix* const y);
+double accuracy(Matrix* const yhat, Matrix* const y);
 
-void cross_entropy_backward(LogSoftLayer* const l, matrix_t* const y);
+void cross_entropy_backward(LogSoftLayer* const l, Matrix* const y);
 void linear_backward(LinearLayer* const l);
 void normalize_backward(NormalizeLayer* const l);
 void relu_backward(ReluLayer* const l);

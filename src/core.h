@@ -41,4 +41,6 @@ typedef struct {
     char* filename;
 } FileHandler;
 
+void fill_uniform(double low, double high, double* out, size_t size);
+
 #endif // CORE_H
