@@ -7,7 +7,6 @@
 #include <stdio.h>
 
 #include "core.h"
-#include "perf.h"
 #include "linalg/linalg.h"
 
 #include "../nob.h"

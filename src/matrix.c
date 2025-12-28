@@ -7,7 +7,6 @@
 #include <omp.h>
 
 #include "matrix.h"
-#include "perf.h"
 
 #include "../nob.h"
 

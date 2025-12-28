@@ -66,7 +66,7 @@ Target targets[] = {
             SRC_FOLDER"linalg/copy.c",
             SRC_FOLDER"linalg/scal.c",
             SRC_FOLDER"linalg/gemm.c",
-            SRC_FOLDER"perf.c",
+            SRC_FOLDER"timer.c",
             ),
         .libs = STRINGS("-lm", "-lopenblas"),
         .release_macros = STRINGS("-DUSE_OGB_ARXIV"),

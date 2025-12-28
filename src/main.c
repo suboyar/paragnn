@@ -10,7 +10,7 @@
 #include <omp.h>
 
 #include "core.h"
-#include "perf.h"
+#include "timer.h"
 #include "matrix.h"
 #include "layers.h"
 #include "gnn.h"
@@ -123,7 +123,7 @@ void print_memory_usage()
 
 void inference(SageNet *sage_net, LinearLayer *linearlayer, LogSoftLayer *logsoftlayer, graph_t *g)
 {
-    PERF_FUNC_START();
+    TIMER_FUNC();
 
     for (size_t i = 0; i < sage_net->num_layers; i++) {
         sageconv(sage_net->sagelayer[i], g);
@@ -139,12 +139,11 @@ void inference(SageNet *sage_net, LinearLayer *linearlayer, LogSoftLayer *logsof
 
     logsoft(logsoftlayer);
 
-    PERF_FUNC_END();
 }
 
 void train(SageNet *sage_net, LinearLayer *linearlayer, LogSoftLayer *logsoftlayer, graph_t *g)
 {
-    PERF_FUNC_START();
+    TIMER_FUNC();
 
    cross_entropy_backward(logsoftlayer, g->y);
 
@@ -177,8 +176,6 @@ void train(SageNet *sage_net, LinearLayer *linearlayer, LogSoftLayer *logsoftlay
 #endif
 
     logsoft_layer_zero_gradients(logsoftlayer);
-
-    PERF_FUNC_END();
 }
 
 int main(int argc, char** argv)
@@ -186,21 +183,12 @@ int main(int argc, char** argv)
     srand(0);
     nob_minimal_log_level = NOB_WARNING;
 
-    csv_out.fp       = stdout;
-    csv_out.filename = "stdout";
     flag_str_var(&csv_out.filename, "csv", csv_out.filename, "Name of the csv file to output to");
 
     if (!flag_parse(argc, argv)) {
         usage(stderr);
         flag_print_error(stderr);
         exit(1);
-    }
-
-    if (strcmp(csv_out.filename, "stdout") != 0) {
-        csv_out.fp = fopen(csv_out.filename, "w");
-        if (csv_out.fp == NULL) {
-            ERROR("Could not open file %s: %s", csv_out.filename, strerror(errno));
-        }
     }
 
     print_config();
@@ -229,26 +217,23 @@ int main(int argc, char** argv)
     CONNECT_LAYER(SAGE_NET_OUTPUT(sage_net), logsoftlayer);
 #endif // USE_PREDICTION_HEAD
 
-    PERF_START("run_time");
-    for (size_t epoch = 1; epoch <= EPOCH; epoch++) {
-        PERF_START("epoch");
-        inference(sage_net, linearlayer, logsoftlayer, train_graph);
+    TIMER_BLOCK("run_time", {
+            for (size_t epoch = 1; epoch <= EPOCH; epoch++) {
+                TIMER_BLOCK("epoch", {
+                        inference(sage_net, linearlayer, logsoftlayer, train_graph);
 
-        double loss = nll_loss(logsoftlayer->output, train_graph->y) / train_graph->y->batch;
-        double acc = accuracy(logsoftlayer->output, train_graph->y);
-        printf("[epoch %zu] loss: %f, accuracy: %f\n", epoch, loss, acc);
+                        double loss = nll_loss(logsoftlayer->output, train_graph->y) / train_graph->y->batch;
+                        double acc = accuracy(logsoftlayer->output, train_graph->y);
+                        printf("[epoch %zu] loss: %f, accuracy: %f\n", epoch, loss, acc);
 
-        train(sage_net, linearlayer, logsoftlayer, train_graph);
-        PERF_END("epoch");
-    }
-    PERF_END("run_time");
-    
-    PERF_PRINT();
-    if (csv_out.fp != NULL) PERF_CSV(csv_out.fp);
+                        train(sage_net, linearlayer, logsoftlayer, train_graph);
+                    });
+            }
+        });
 
-    double total_time;
-    PERF_GET_METRIC("run_time", TOTAL_TIME, &total_time);
-    printf("Total run time: %f\n", total_time);
+    timer_print();
+    if (csv_out.fp != NULL) timer_export_csv(csv_out.fp);
+    printf("Total run time: %f\n", timer_get_time("run_time", TIMER_TOTAL_TIME));
 
     destroy_sage_net(sage_net);
 #ifdef USE_PREDICTION_HEAD

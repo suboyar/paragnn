@@ -11,7 +11,7 @@
 #include "gnn.h"
 #include "matrix.h"
 #include "graph.h"
-#include "perf.h"
+#include "timer.h"
 #include "linalg/linalg.h"
 
 #include "../nob.h"
@@ -19,17 +19,26 @@
 // Forward propagation
 void aggregate(SageLayer *const l, graph_t *const g)
 {
+    TIMER_FUNC();
+
     size_t B = l->agg->batch;
     size_t E = g->num_edges;
     size_t F = l->agg->features;
 
-    double *X = l->input->data;
+    double* X = l->input->data;
     size_t ldX = l->input->stride;
+
+    int nthreads = omp_get_max_threads();
+    double* t_gather = calloc(sizeof(double), nthreads);
+    if (!t_gather) ERROR("Could not calloc t_gather");
+    double* t_pool = calloc(sizeof(double), nthreads);
+    if (!t_pool) ERROR("Could not calloc t_pool");
 
     memset(l->agg->data, 0, B*F*sizeof(*l->agg->data));
 
 #pragma omp parallel
     {
+        int tid = omp_get_thread_num();
         size_t* adj = malloc(E * sizeof(size_t));
 
 #pragma omp for
@@ -39,6 +48,7 @@ void aggregate(SageLayer *const l, graph_t *const g)
 
             // NOTE: Collects neighbors from only incoming direction.
 
+            double t0 = omp_get_wtime();
             // Find neighbors of count sample size
             for (size_t edge = 0; edge < E; edge++) {
                 size_t u1 = EDGE_AT(g, edge, 1);
@@ -46,10 +56,13 @@ void aggregate(SageLayer *const l, graph_t *const g)
                     adj[neigh_count++] = EDGE_AT(g, edge, 0);
                 }
             }
+            t_gather[tid] += omp_get_wtime() - t0;
 
             if (neigh_count == 0) continue;
 
             double scale = 1.0 / neigh_count;
+
+            double t1 = omp_get_wtime();
             for (size_t j = 0; j < F; j++) {
                 double sum = 0.0;
                 for (size_t k = 0; k < neigh_count; k++) {
@@ -57,50 +70,51 @@ void aggregate(SageLayer *const l, graph_t *const g)
                 }
                 Y[j] = sum * scale;
             }
+            t_pool[tid] += omp_get_wtime() - t1;
 
             l->mean_scale[i] = scale;
         }
 
         free(adj);
     }
+
+    timer_record_parallel("agg_gather", t_gather, nthreads);
+    timer_record_parallel("agg_pool", t_pool, nthreads);
+
+    free(t_gather);
+    free(t_pool);
 }
 
 void sageconv(SageLayer *const l, graph_t *const g)
 {
-    PERF_FUNC_START();
-
-    PERF_START("aggregate");
     aggregate(l, g);
-    PERF_END("aggregate");
 
-    PERF_START("sage_Wroot");
-    matrix_dgemm(LinalgNoTrans,
-                 LinalgNoTrans,
-                 1.0,
-                 l->input,
-                 l->Wroot,
-                 0.0,
-                 l->output);
-    PERF_END("sage_Wroot");
+    TIMER_BLOCK("sage_Wroot", {
+            matrix_dgemm(LinalgNoTrans,
+                         LinalgNoTrans,
+                         1.0,
+                         l->input,
+                         l->Wroot,
+                         0.0,
+                         l->output);
+        });
 
-    PERF_START("sage_Wagg");
-    matrix_dgemm(LinalgNoTrans,
-                 LinalgNoTrans,
-                 1.0,
-                 l->agg,
-                 l->Wagg,
-                 1.0,
-                 l->output);
-    PERF_END("sage_Wagg");
-
-    PERF_FUNC_END();
+    TIMER_BLOCK("sage_Wagg", {
+            matrix_dgemm(LinalgNoTrans,
+                         LinalgNoTrans,
+                         1.0,
+                         l->agg,
+                         l->Wagg,
+                         1.0,
+                         l->output);
+        });
 
     nob_log(NOB_INFO, "sageconv: ok");
-}
 
+}
 void relu(ReluLayer *const l)
 {
-    PERF_FUNC_START();
+    TIMER_FUNC();
     size_t B = l->input->batch;
     size_t F = l->input->features;
 
@@ -110,13 +124,11 @@ void relu(ReluLayer *const l)
             MIDX(l->output, i, j) = fmax(0.0, MIDX(l->input, i, j));
         }
     }
-
-    PERF_FUNC_END();
 }
 
 void normalize(NormalizeLayer *const l)
 {
-    PERF_FUNC_START();
+    TIMER_FUNC();
 
     size_t B = l->input->batch;
     size_t F = l->input->features;
@@ -139,14 +151,13 @@ void normalize(NormalizeLayer *const l)
         }
     }
 
-    PERF_FUNC_END();
-
     nob_log(NOB_INFO, "normalize: ok");
 }
 
 void linear(LinearLayer *const l)
 {
-    PERF_FUNC_START();
+    TIMER_FUNC();
+
     matrix_dgemm(LinalgNoTrans,
                  LinalgNoTrans,
                  1.0,
@@ -167,7 +178,6 @@ void linear(LinearLayer *const l)
         }
     }
 
-    PERF_FUNC_END();
     nob_log(NOB_INFO, "linear: ok");
 }
 
@@ -176,7 +186,8 @@ void linear(LinearLayer *const l)
 */
 void logsoft(LogSoftLayer *const l)
 {
-    PERF_FUNC_START();
+    TIMER_FUNC();
+
     size_t B = l->input->batch;
     size_t F = l->input->features;
 
@@ -201,16 +212,15 @@ void logsoft(LogSoftLayer *const l)
         }
     }
 
-    PERF_FUNC_END();
     nob_log(NOB_INFO, "log_softmax: ok");
 }
 
 double nll_loss(Matrix *const yhat, Matrix *const y)
 {
+    TIMER_FUNC();
+
     size_t B = yhat->batch;
     size_t F = yhat->features;
-
-    PERF_FUNC_START();
 
     double loss = 0.0;
 #pragma omp parallel for reduction(+:loss)
@@ -226,17 +236,16 @@ double nll_loss(Matrix *const yhat, Matrix *const y)
         loss -= logits;
     }
 
-    PERF_FUNC_END();
     return loss;
 }
 
 double accuracy(Matrix *const yhat, Matrix *const y)
 {
+    TIMER_FUNC();
+
     size_t B = yhat->batch;
     size_t F_yhat = yhat->features;
     size_t F_y = y->features;
-
-    PERF_FUNC_START();
 
     double acc = 0.0;
 #pragma omp parallel for reduction(+:acc)
@@ -269,17 +278,16 @@ double accuracy(Matrix *const yhat, Matrix *const y)
     }
 
     double res = (double)acc/y->batch;
-    PERF_FUNC_END();
     return res;
 }
 
 // Computes gradient flow from both NLLLoss and LogSoftmax.
 void cross_entropy_backward(LogSoftLayer *const l, Matrix *const y)
 {
+    TIMER_FUNC();
+
     size_t B = l->output->batch;
     size_t F = l->output->features;
-
-    PERF_FUNC_START();
 
 #pragma omp parallel for
     for (size_t i = 0; i < B; i++) {
@@ -295,53 +303,49 @@ void cross_entropy_backward(LogSoftLayer *const l, Matrix *const y)
         }
     }
 
-    PERF_FUNC_END();
     nob_log(NOB_INFO, "cross_entropy_backward: ok");
 }
 
 void linear_backward(LinearLayer *const l)
 {
-    // TODO shape assert
-
-    PERF_FUNC_START();
+    TIMER_FUNC();
 
     // Downstream:
     // Column-major: grad_input = W^T @ grad_output
     // Row-major:    grad_input = grad_output @ W^T
     // Note: Row-major storage causes W to be implicitly transposed
     // printf("linear_grad_input\n");
-    PERF_START("linear_grad_input");
-    matrix_dgemm(LinalgNoTrans,
-                 LinalgTrans,
-                 1.0,
-                 l->grad_output,
-                 l->W,
-                 0.0,
-                 l->grad_input);
-    PERF_END("linear_grad_input");
+    TIMER_BLOCK("linear_grad_input", {
+            matrix_dgemm(LinalgNoTrans,
+                         LinalgTrans,
+                         1.0,
+                         l->grad_output,
+                         l->W,
+                         0.0,
+                         l->grad_input);
+        });
 
     // Cost of weights:
     // Column-major: grad_W = grad_output @ input^T
     // Row-major:    grad_W = input^T @ grad_output
     // Note: Similar reasoning - Row-major storage causes input to be implicitly transposed
     // printf("linear_grad_W");
-    PERF_START("linear_grad_W");
-    matrix_dgemm(LinalgTrans,
-                 LinalgNoTrans,
-                 1.0,
-                 l->input,
-                 l->grad_output,
-                 0.0,
-                 l->grad_W);
-    PERF_END("linear_grad_W");
+    TIMER_BLOCK("linear_grad_W", {
+            matrix_dgemm(LinalgTrans,
+                         LinalgNoTrans,
+                         1.0,
+                         l->input,
+                         l->grad_output,
+                         0.0,
+                         l->grad_W);
+        });
 
     if (l->grad_bias != NULL) {
-        PERF_START("linear_grad_bias");
-
         size_t B = l->grad_output->batch;
         size_t F = l->grad_output->features;
 
         // Sum gradients across batch dimension
+        double t0 = omp_get_wtime();
 #pragma omp parallel for
         for (size_t i = 0; i < B; i++) {
             for (size_t j = 0; j < F; j++) {
@@ -350,19 +354,18 @@ void linear_backward(LinearLayer *const l)
             }
         }
 
-        PERF_END("linear_grad_bias");
+        timer_record("linear_grad_bias", omp_get_wtime() - t0);
     }
 
-    PERF_FUNC_END();
     nob_log(NOB_INFO, "linear_backward: ok");
 }
 
 void normalize_backward(NormalizeLayer *const l)
 {
+    TIMER_FUNC();
+
     size_t B = l->input->batch;
     size_t F = l->input->features;
-
-    PERF_FUNC_START();
 
 #pragma omp parallel for
     for (size_t i = 0; i < B; i++) {
@@ -394,13 +397,13 @@ void normalize_backward(NormalizeLayer *const l)
         }
     }
 
-    PERF_FUNC_END();
     nob_log(NOB_INFO, "normalize_backward: ok");
 }
 
 void relu_backward(ReluLayer *const l)
 {
-    PERF_FUNC_START();
+    TIMER_FUNC();
+
     size_t B = l->output->batch;
     size_t F = l->output->features;
 
@@ -415,15 +418,14 @@ void relu_backward(ReluLayer *const l)
         }
     }
 
-    PERF_FUNC_END();
     nob_log(NOB_INFO, "relu_backward: ok");
 }
 
 void sageconv_backward(SageLayer *const l, graph_t *const g)
 {
-    PERF_FUNC_START();
+    TIMER_FUNC();
 
-    PERF_START("sage_grad_Wroot");
+    TIMER_BLOCK("sage_grad_Wroot", {
     matrix_dgemm(LinalgTrans,
                  LinalgNoTrans,
                  1.0,
@@ -431,9 +433,9 @@ void sageconv_backward(SageLayer *const l, graph_t *const g)
                  l->grad_output,
                  0.0,
                  l->grad_Wroot);
-    PERF_END("sage_grad_Wroot");
+        });
 
-    PERF_START("sage_grad_Wagg");
+    TIMER_BLOCK("sage_grad_Wagg", {
     matrix_dgemm(LinalgTrans,
                  LinalgNoTrans,
                  1.0,
@@ -441,9 +443,9 @@ void sageconv_backward(SageLayer *const l, graph_t *const g)
                  l->grad_output,
                  0.0,
                  l->grad_Wagg);
-    PERF_END("sage_grad_Wagg");
+        });
 
-    PERF_START("sage_grad_input_self");
+    TIMER_BLOCK("sage_grad_input_self", {
     matrix_dgemm(LinalgNoTrans,
                  LinalgTrans,
                  1.0,
@@ -451,12 +453,13 @@ void sageconv_backward(SageLayer *const l, graph_t *const g)
                  l->Wroot,
                  0.0,
                  l->grad_input);
-    PERF_END("sage_grad_input_self");
+        });
 
-    PERF_START("sageconv_grad_neighbor");
     size_t E = g->num_edges;
     size_t B = l->Wagg->batch;
     size_t F = l->grad_output->features;
+
+    double t0 = omp_get_wtime();
 #pragma omp parallel for
     for (size_t edge = 0; edge < E; edge++) {
         size_t u0 = EDGE_AT(g, edge, 0);  // source
@@ -472,9 +475,7 @@ void sageconv_backward(SageLayer *const l, graph_t *const g)
             MIDX(l->grad_input, u0, i) += sum * l->mean_scale[u1];
         }
     }
+    timer_record("sageconv_grad_neighbor", omp_get_wtime() - t0);
 
-    PERF_END("sageconv_grad_neighbor");
-
-    PERF_FUNC_END();
     nob_log(NOB_INFO, "sageconv_backward: ok");
 }

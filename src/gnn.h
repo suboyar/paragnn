@@ -6,7 +6,6 @@
 #include "matrix.h"
 #include "layers.h"
 #include "graph.h"
-#include "perf.h"
 
 void sageconv(SageLayer* const l, graph_t* const g);
 void relu(ReluLayer* const l);
