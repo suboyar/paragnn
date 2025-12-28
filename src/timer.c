@@ -194,7 +194,7 @@ void timer_print()
         double avg = e->total_time / e->count;
 
         printf("%-30s %-12.6f %-12.6f %-12.6f %-12.6f %-8zu\n",
-               e->name, avg, e->min_time, e->total_time, e->max_time, e->count);
+               e->name, avg, e->total_time, e->min_time, e->max_time, e->count);
     }
 
     free(sorted_entries);

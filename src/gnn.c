@@ -87,6 +87,7 @@ void aggregate(SageLayer *const l, graph_t *const g)
 
 void sageconv(SageLayer *const l, graph_t *const g)
 {
+    TIMER_FUNC();
     aggregate(l, g);
 
     TIMER_BLOCK("sage_Wroot", {

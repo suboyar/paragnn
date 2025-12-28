@@ -1,5 +1,5 @@
-#ifndef PERF_H
-#define PERF_H
+#ifndef TIMER_H
+#define TIMER_H
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -37,4 +37,4 @@ double timer_get_time(const char* name, enum TimerMetric metric);
 void timer_print();
 void timer_export_csv(FILE *fp);
 
-#endif // PERF_H
+#endif // TIMER_H
