@@ -121,61 +121,49 @@ void print_memory_usage()
     }
 }
 
-void inference(SageNet *sage_net, LinearLayer *linearlayer, LogSoftLayer *logsoftlayer, graph_t *g)
+void inference(SageNet *net, graph_t *g)
 {
     TIMER_FUNC();
 
-    for (size_t i = 0; i < sage_net->num_layers; i++) {
-        sageconv(sage_net->sagelayer[i], g);
-        relu(sage_net->relulayer[i]);
-        normalize(sage_net->normalizelayer[i]);
+    for (size_t i = 0; i < net->enc_depth; i++) {
+        sageconv(net->enc_sage[i], g);
+        relu(net->enc_relu[i]);
+        normalize(net->enc_norm[i]);
     }
 
+    sageconv(net->cls_sage, g);
+
 #ifdef USE_PREDICTION_HEAD
-    linear(linearlayer);
-#else
-    (void) linearlayer;
+    linear(net->linear);
 #endif
 
-    logsoft(logsoftlayer);
+    logsoft(net->logsoft);
 
 }
 
-void train(SageNet *sage_net, LinearLayer *linearlayer, LogSoftLayer *logsoftlayer, graph_t *g)
+void train(SageNet *net, graph_t *g)
 {
     TIMER_FUNC();
 
-   cross_entropy_backward(logsoftlayer, g->y);
+   cross_entropy_backward(net->logsoft, g->y);
 
 #ifdef USE_PREDICTION_HEAD
-    linear_backward(linearlayer);
-#else
-    (void) linearlayer;
+    linear_backward(net->linear);
+    linear_layer_update_weights(net->linear, LEARNING_RATE);
 #endif
 
-    for (size_t i = sage_net->num_layers-1; i < sage_net->num_layers; i--) {
-        normalize_backward(sage_net->normalizelayer[i]);
-        relu_backward(sage_net->relulayer[i]);
-        sageconv_backward(sage_net->sagelayer[i], g);
-    }
+    sageconv_backward(net->cls_sage, g);
+    sage_layer_update_weights(net->cls_sage, LEARNING_RATE);
 
-    // Update weights
-    for (size_t i = sage_net->num_layers-1; i < sage_net->num_layers; i--) {
-        sage_layer_update_weights(sage_net->sagelayer[i], LEARNING_RATE);
+    for (size_t i = net->enc_depth-1; i < net->enc_depth; i--) {
+        normalize_backward(net->enc_norm[i]);
+        relu_backward(net->enc_relu[i]);
+        sageconv_backward(net->enc_sage[i], g);
+        sage_layer_update_weights(net->enc_sage[i], LEARNING_RATE);
     }
-
-#ifdef USE_PREDICTION_HEAD
-    linear_layer_update_weights(linearlayer, LEARNING_RATE);
-#endif
 
     // Reset grads
-    sage_net_zero_gradients(sage_net);
-
-#ifdef USE_PREDICTION_HEAD
-    linear_layer_zero_gradients(linearlayer);
-#endif
-
-    logsoft_layer_zero_gradients(logsoftlayer);
+    sage_net_zero_gradients(net);
 }
 
 int main(int argc, char** argv)
@@ -197,36 +185,19 @@ int main(int argc, char** argv)
     graph_t *train_graph, *valid_graph, *test_graph;
     load_split_graph(&train_graph, &valid_graph, &test_graph);
 
-    size_t batch_size   = train_graph->num_nodes;
-    size_t num_classes  = train_graph->num_label_classes;
-
-#ifdef USE_PREDICTION_HEAD
-    SageNet *sage_net = init_sage_net(NUM_LAYERS, HIDDEN_DIM, HIDDEN_DIM, train_graph);
-    LinearLayer *linearlayer = init_linear_layer(batch_size, HIDDEN_DIM, num_classes);
-    LogSoftLayer *logsoftlayer = init_logsoft_layer(batch_size, num_classes);
-
-    CONNECT_SAGE_NET(sage_net);
-    CONNECT_LAYER(SAGE_NET_OUTPUT(sage_net), linearlayer);
-    CONNECT_LAYER(linearlayer, logsoftlayer);
-#else
-    SageNet *sage_net = init_sage_net(NUM_LAYERS, HIDDEN_DIM, num_classes, train_graph);
-    LinearLayer *linearlayer = NULL;
-    LogSoftLayer *logsoftlayer = init_logsoft_layer(batch_size, num_classes);
-
-    CONNECT_SAGE_NET(sage_net);
-    CONNECT_LAYER(SAGE_NET_OUTPUT(sage_net), logsoftlayer);
-#endif // USE_PREDICTION_HEAD
+    SageNet *net = sage_net_create(NUM_LAYERS, HIDDEN_DIM, train_graph);
+    sage_net_info(net);
 
     TIMER_BLOCK("run_time", {
             for (size_t epoch = 1; epoch <= EPOCH; epoch++) {
                 TIMER_BLOCK("epoch", {
-                        inference(sage_net, linearlayer, logsoftlayer, train_graph);
+                        inference(net, train_graph);
 
-                        double loss = nll_loss(logsoftlayer->output, train_graph->y) / train_graph->y->batch;
-                        double acc = accuracy(logsoftlayer->output, train_graph->y);
+                        double loss = nll_loss(net->logsoft->output, train_graph->y) / train_graph->y->batch;
+                        double acc = accuracy(net->logsoft->output, train_graph->y);
                         printf("[epoch %zu] loss: %f, accuracy: %f\n", epoch, loss, acc);
 
-                        train(sage_net, linearlayer, logsoftlayer, train_graph);
+                        train(net, train_graph);
                     });
             }
         });
@@ -235,20 +206,10 @@ int main(int argc, char** argv)
     if (csv_out.fp != NULL) timer_export_csv(csv_out.fp);
     printf("Total run time: %f\n", timer_get_time("run_time", TIMER_TOTAL_TIME));
 
-    destroy_sage_net(sage_net);
-#ifdef USE_PREDICTION_HEAD
-    destroy_linear_layer(linearlayer);
-#endif
-    destroy_logsoft_layer(logsoftlayer);
-
-    destroy_graph(train_graph);
-    destroy_graph(valid_graph);
-    destroy_graph(test_graph);
-
+    sage_net_destroy(net);
     return 0;
 }
 
 // TODO: Use CRS format for edges
 // TODO: Xavier Initialization for weight matrices
 // TODO: Fast exp: https://jrfonseca.blogspot.com/2008/09/fast-sse2-pow-tables-or-polynomials.html
-// TODO: Reset all matrices after train(), and remove memset(agg, 0, ...) in aggregate()

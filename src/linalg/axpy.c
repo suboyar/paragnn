@@ -4,7 +4,7 @@
 #include "../../nob.h"
 
 void daxpy(const size_t N, const double alpha, const double *restrict X,
-                  const size_t incX, double *restrict Y, const size_t incY)
+           const size_t incX, double *restrict Y, const size_t incY)
 {
 #if defined(USE_CBLAS) || defined(USE_CBLAS_DAXPY)
     cblas_daxpy(N, alpha, X, incX, Y, incY);

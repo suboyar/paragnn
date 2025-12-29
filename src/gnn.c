@@ -127,7 +127,7 @@ void relu(ReluLayer *const l)
     }
 }
 
-void normalize(NormalizeLayer *const l)
+void normalize(L2NormLayer *const l)
 {
     TIMER_FUNC();
 
@@ -362,7 +362,7 @@ void linear_backward(LinearLayer *const l)
     nob_log(NOB_INFO, "linear_backward: ok");
 }
 
-void normalize_backward(NormalizeLayer *const l)
+void normalize_backward(L2NormLayer *const l)
 {
     TIMER_FUNC();
 

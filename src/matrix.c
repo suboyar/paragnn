@@ -7,7 +7,7 @@
 #include <omp.h>
 
 #include "matrix.h"
-
+#include "timer.h"
 #include "../nob.h"
 
 static long get_cache_line_size()
@@ -70,6 +70,10 @@ void matrix_destroy(Matrix *m)
 
 void matrix_zero(Matrix *m)
 {
+    TIMER_FUNC();
+#ifndef MATRIX_ZERO_MANUALLY
+    memset(m->data, 0, m->M * m->N);
+#else
 #pragma omp parallel for
     for (size_t i = 0; i < m->M; i++) {
         for (size_t j = 0; j < m->N; j++) {
@@ -77,6 +81,7 @@ void matrix_zero(Matrix *m)
         }
     }
 
+#endif
 }
 
 void matrix_fill_random(Matrix *m, double low, double high)
