@@ -78,8 +78,8 @@ void aggregate(SageLayer *const l, graph_t *const g)
         free(adj);
     }
 
-    timer_record_parallel("agg_gather", t_gather, nthreads);
-    timer_record_parallel("agg_pool", t_pool, nthreads);
+    timer_record_parallel("gather", t_gather, nthreads);
+    timer_record_parallel("pool", t_pool, nthreads);
 
     free(t_gather);
     free(t_pool);
@@ -88,9 +88,7 @@ void aggregate(SageLayer *const l, graph_t *const g)
 void sageconv(SageLayer *const l, graph_t *const g)
 {
     TIMER_FUNC();
-    aggregate(l, g);
-
-    TIMER_BLOCK("sage_Wroot", {
+    TIMER_BLOCK("Wroot", {
             matrix_dgemm(LinalgNoTrans,
                          LinalgNoTrans,
                          1.0,
@@ -100,7 +98,9 @@ void sageconv(SageLayer *const l, graph_t *const g)
                          l->output);
         });
 
-    TIMER_BLOCK("sage_Wagg", {
+    aggregate(l, g);
+
+    TIMER_BLOCK("Wagg", {
             matrix_dgemm(LinalgNoTrans,
                          LinalgNoTrans,
                          1.0,
@@ -316,7 +316,7 @@ void linear_backward(LinearLayer *const l)
     // Row-major:    grad_input = grad_output @ W^T
     // Note: Row-major storage causes W to be implicitly transposed
     // printf("linear_grad_input\n");
-    TIMER_BLOCK("linear_grad_input", {
+    TIMER_BLOCK("grad_input", {
             matrix_dgemm(LinalgNoTrans,
                          LinalgTrans,
                          1.0,
@@ -331,7 +331,7 @@ void linear_backward(LinearLayer *const l)
     // Row-major:    grad_W = input^T @ grad_output
     // Note: Similar reasoning - Row-major storage causes input to be implicitly transposed
     // printf("linear_grad_W");
-    TIMER_BLOCK("linear_grad_W", {
+    TIMER_BLOCK("grad_W", {
             matrix_dgemm(LinalgTrans,
                          LinalgNoTrans,
                          1.0,
@@ -355,7 +355,7 @@ void linear_backward(LinearLayer *const l)
             }
         }
 
-        timer_record("linear_grad_bias", omp_get_wtime() - t0);
+        timer_record("grad_bias", omp_get_wtime() - t0, NULL);
     }
 
     nob_log(NOB_INFO, "linear_backward: ok");
@@ -426,7 +426,7 @@ void sageconv_backward(SageLayer *const l, graph_t *const g)
 {
     TIMER_FUNC();
 
-    TIMER_BLOCK("sage_grad_Wroot", {
+    TIMER_BLOCK("grad_Wroot", {
     matrix_dgemm(LinalgTrans,
                  LinalgNoTrans,
                  1.0,
@@ -436,7 +436,7 @@ void sageconv_backward(SageLayer *const l, graph_t *const g)
                  l->grad_Wroot);
         });
 
-    TIMER_BLOCK("sage_grad_Wagg", {
+    TIMER_BLOCK("grad_Wagg", {
     matrix_dgemm(LinalgTrans,
                  LinalgNoTrans,
                  1.0,
@@ -446,7 +446,7 @@ void sageconv_backward(SageLayer *const l, graph_t *const g)
                  l->grad_Wagg);
         });
 
-    TIMER_BLOCK("sage_grad_input_self", {
+    TIMER_BLOCK("grad_input", {
     matrix_dgemm(LinalgNoTrans,
                  LinalgTrans,
                  1.0,
@@ -476,7 +476,7 @@ void sageconv_backward(SageLayer *const l, graph_t *const g)
             MIDX(l->grad_input, u0, i) += sum * l->mean_scale[u1];
         }
     }
-    timer_record("sageconv_grad_neighbor", omp_get_wtime() - t0);
+    timer_record("grad_neigh", omp_get_wtime() - t0, NULL);
 
     nob_log(NOB_INFO, "sageconv_backward: ok");
 }
