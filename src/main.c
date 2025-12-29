@@ -56,52 +56,18 @@ void usage(FILE *stream)
     flag_print_options(stream);
 }
 
-void print_cpu_affinity()
+void print_config(void)
 {
-    cpu_set_t mask;
-    CPU_ZERO(&mask);
-
-    if (sched_getaffinity(0, sizeof(mask), &mask) == -1) {
-        perror("sched_getaffinity");
-        return;
-    }
-
-    int num_cpus = CPU_COUNT(&mask);
-    printf("CPUs in affinity mask: %d [", num_cpus);
-
-    int first = 1;
-    for (int i = 0; i < CPU_SETSIZE; i++) {
-        if (CPU_ISSET(i, &mask)) {
-            if (!first) printf(",");
-            printf("%d", i);
-            first = 0;
-        }
-    }
-    printf("]\n");
-}
-
-void print_config()
-{
-    printf("==============================CONFIG============================\n");
-    printf("Epoch: %zu\n", (size_t)EPOCH);
-    printf("Learning rate: %f\n", (float)LEARNING_RATE);
-    printf("Layers: %zu\n", (size_t)NUM_LAYERS);
-    printf("Hidden dim: %zu\n", (size_t)HIDDEN_DIM);
-    printf("CSV file: %s\n", csv_out.filename);
-#ifndef USE_OGB_ARXIV
-    printf("Graph Dataset: dev\n");
+    const char *dataset =
+#ifdef USE_OGB_ARXIV
+        "ogb-arxiv";
 #else
-    printf("Graph Dataset: ogb-arxiv\n");
+        "dev";
 #endif
-#ifndef USE_PREDICTION_HEAD
-    printf("Prediction Head: Disabled\n");
-#else
-    printf("Prediction Head: Enabled\n");
-#endif
-    printf("OpenMP Threads: %d\n", omp_get_max_threads());
-    printf("Slurm Partition: %s\n", getenv("SLURM_JOB_PARTITION"));
-    print_cpu_affinity();
-    printf("================================================================\n\n");
+
+    printf("Config: epochs=%zu, lr=%.4f, layers=%zu, hidden=%zu, data=%s, partition=%s, threads=%d\n",
+           (size_t)EPOCH, (float)LEARNING_RATE, (size_t)NUM_LAYERS,
+           (size_t)HIDDEN_DIM, dataset, getenv("SLURM_JOB_PARTITION"), omp_get_max_threads());
 }
 
 // TODO: Check out getrusage from <sys/resource.h>
