@@ -351,6 +351,7 @@ void linear_backward(LinearLayer *const l)
         for (size_t i = 0; i < B; i++) {
             for (size_t j = 0; j < F; j++) {
                 // Accumulate the bias used by all batch samples
+#pragma omp atomic
                 MIDX(l->grad_bias, 0, j) += MIDX(l->grad_output, i, j);
             }
         }
@@ -473,6 +474,7 @@ void sageconv_backward(SageLayer *const l, graph_t *const g)
             for (size_t j = 0; j < F; j++) {
                 sum += MIDX(l->grad_output, u1, j) * MIDX(l->Wagg, i, j);
             }
+#pragma omp atomic
             MIDX(l->grad_input, u0, i) += sum * l->mean_scale[u1];
         }
     }
