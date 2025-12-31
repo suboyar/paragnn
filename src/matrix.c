@@ -53,10 +53,8 @@ Matrix* matrix_create(size_t M, size_t N)
     m->stride = N;
 
 #pragma omp parallel for
-    for (size_t i = 0; i < M; i++) {
-        for (size_t j = 0; j < N; j++) {
-            m->data[i*m->stride+j] = 0.0;
-        }
+    for (size_t i = 0; i < M*N; i++) {
+        m->data[i] = 0.0;
     }
 
     return m;
@@ -68,20 +66,23 @@ void matrix_destroy(Matrix *m)
     free(m);
 }
 
+#define PARALLEL_THRESHOLD 32768 // 256KB of doubles i.e L2 cache
+
 void matrix_zero(Matrix *m)
 {
     TIMER_FUNC();
-#ifndef MATRIX_ZERO_MANUALLY
-    memset(m->data, 0, m->M * m->N);
-#else
-#pragma omp parallel for
-    for (size_t i = 0; i < m->M; i++) {
-        for (size_t j = 0; j < m->N; j++) {
-            m->data[i*m->stride+j] = 0.0;
+
+    size_t n = m->M * m->N;
+    memset(m->data, 0, n*sizeof(double));
+
+    if (n < PARALLEL_THRESHOLD) {
+        memset(m->data, 0, n*sizeof(double));
+    } else {
+#pragma omp parallel for simd
+        for (size_t i = 0; i < n; i++) {
+            m->data[i] = 0.0;
         }
     }
-
-#endif
 }
 
 void matrix_fill_random(Matrix *m, double low, double high)
