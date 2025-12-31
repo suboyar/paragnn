@@ -498,6 +498,23 @@ void sage_layer_update_weights(SageLayer* const l, float lr)
     nob_log(NOB_INFO, "update_sageconv_weights: ok");
 }
 
+void linear_layer_update_weights(LinearLayer* const l, float lr)
+{
+    double scale = (double)-lr/l->input->batch;
+
+    daxpy(l->W->M*l->W->N, scale,
+          l->grad_W->data, 1,
+          l->W->data, 1);
+
+    if (l->grad_bias != NULL) {
+        daxpy(l->bias->N, scale,
+              l->grad_bias->data, 1,
+              l->bias->data, 1);
+    }
+
+    nob_log(NOB_INFO, "update_linear_weights: ok");
+}
+
 // Reset gradient
 void sage_layer_zero_gradients(SageLayer* l)
 {
@@ -519,6 +536,14 @@ void l2norm_layer_zero_gradients(L2NormLayer* l)
     matrix_zero(l->grad_input);
 }
 
+void linear_layer_zero_gradients(LinearLayer* l)
+{
+    matrix_zero(l->grad_output);
+    matrix_zero(l->grad_input);
+    matrix_zero(l->grad_W);
+    matrix_zero(l->grad_bias);
+}
+
 void logsoft_layer_zero_gradients(LogSoftLayer* l)
 {
     matrix_zero(l->grad_input);
@@ -535,5 +560,8 @@ void sage_net_zero_gradients(SageNet* net)
     }
 
     sage_layer_zero_gradients(net->cls_sage);
+#ifdef USE_PREDICTION_HEAD
+    linear_layer_zero_gradients(net->linear);
+#endif
     logsoft_layer_zero_gradients(net->logsoft);
 }
