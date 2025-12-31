@@ -483,3 +483,59 @@ void sageconv_backward(SageLayer *const l, graph_t *const g)
 
     nob_log(NOB_INFO, "sageconv_backward: ok");
 }
+
+// Update weights
+void sage_layer_update_weights(SageLayer* const l, float lr)
+{
+    double scale = (double)-lr;
+
+    daxpy(l->Wroot->M*l->Wroot->N, scale,
+          l->grad_Wroot->data, 1,
+          l->Wroot->data, 1);
+
+    daxpy(l->Wagg->M*l->Wagg->N, scale,
+          l->grad_Wagg->data, 1,
+          l->Wagg->data, 1);
+
+    nob_log(NOB_INFO, "update_sageconv_weights: ok");
+}
+
+// Reset gradient
+void sage_layer_zero_gradients(SageLayer* l)
+{
+    matrix_zero(l->grad_output); // just a call to memset
+    matrix_zero(l->grad_input);
+    matrix_zero(l->grad_Wagg);
+    matrix_zero(l->grad_Wroot);
+}
+
+void relu_layer_zero_gradients(ReluLayer* l)
+{
+    matrix_zero(l->grad_output);
+    matrix_zero(l->grad_input);
+}
+
+void l2norm_layer_zero_gradients(L2NormLayer* l)
+{
+    matrix_zero(l->grad_output);
+    matrix_zero(l->grad_input);
+}
+
+void logsoft_layer_zero_gradients(LogSoftLayer* l)
+{
+    matrix_zero(l->grad_input);
+}
+
+// Network-wide gradient reset
+void sage_net_zero_gradients(SageNet* net)
+{
+    TIMER_FUNC();
+    for (size_t i = 0; i < net->enc_depth; i++) {
+        sage_layer_zero_gradients(net->enc_sage[i]);
+        relu_layer_zero_gradients(net->enc_relu[i]);
+        l2norm_layer_zero_gradients(net->enc_norm[i]);
+    }
+
+    sage_layer_zero_gradients(net->cls_sage);
+    logsoft_layer_zero_gradients(net->logsoft);
+}

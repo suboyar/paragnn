@@ -81,16 +81,6 @@ void linear_layer_destroy(LinearLayer *l);
 void logsoft_layer_destroy(LogSoftLayer *l);
 void sage_net_destroy(SageNet *n);
 
-void linear_layer_update_weights(LinearLayer* const l, float lr);
-void sage_layer_update_weights(SageLayer* const l, float lr);
-
-void sage_layer_zero_gradients(SageLayer* l);
-void relu_layer_zero_gradients(ReluLayer* l);
-void normalize_layer_zero_gradients(L2NormLayer* l);
-void linear_layer_zero_gradients(LinearLayer* l);
-void logsoft_layer_zero_gradients(LogSoftLayer* l);
-void sage_net_zero_gradients(SageNet* net);
-
 void sage_net_info(const SageNet *net);
 
 #endif // LAYERS_H
