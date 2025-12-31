@@ -65,7 +65,7 @@ void print_config(void)
         "dev";
 #endif
 
-    printf("Config: epochs=%zu, lr=%.4f, layers=%zu, hidden=%zu, data=%s, partition=%s, threads=%d\n",
+    printf("Config: epochs=%zu, lr=%g, layers=%zu, hidden=%zu, data=%s, partition=%s, threads=%d\n",
            (size_t)EPOCH, (float)LEARNING_RATE, (size_t)NUM_LAYERS,
            (size_t)HIDDEN_DIM, dataset, getenv("SLURM_JOB_PARTITION"), omp_get_max_threads());
 }
@@ -111,7 +111,7 @@ void train(SageNet *net, graph_t *g)
 {
     TIMER_FUNC();
 
-   cross_entropy_backward(net->logsoft, g->y);
+    cross_entropy_backward(net->logsoft, g->y);
 
 #ifdef USE_PREDICTION_HEAD
     linear_backward(net->linear);

@@ -52,11 +52,24 @@ void aggregate(SageLayer *const l, graph_t *const g)
             double t0 = omp_get_wtime();
             // Find neighbors of count sample size
             for (size_t edge = 0; edge < E; edge++) {
-                size_t u1 = EDGE_AT(g, edge, 1);
-                if (i == u1) {  // Paper i cites u1
-                    adj[neigh_count++] = EDGE_AT(g, edge, 0);
+                size_t src = EDGE_AT(g, edge, SRC_NODE);
+                size_t dst = EDGE_AT(g, edge, DST_NODE);
+
+                // The source_to_target flow is the default of torch_geometric.nn.conv.message_passing,
+                // and as far as I can tell non of the entries of OGB leaderboard that uses SageCONV
+                // changes this to target_to_source. But, many seems to transform ogb-arxiv (directed graph)
+                // to have symmetric edges, making it a undirected graph. GraphSAGE paper also uses undirected
+                // citation graph dataset for their experiments.
+
+                if (i == dst) { // paper src cites i (source_to_target)
+                    adj[neigh_count++] = src;
                 }
+
+                // else if (i == src) { // paper i cites dst (target_to_source)
+                //     adj[neigh_count++] = dst;
+                // }
             }
+
             t_gather[tid] += omp_get_wtime() - t0;
 
             if (neigh_count == 0) continue;
@@ -463,18 +476,18 @@ void sageconv_backward(SageLayer *const l, graph_t *const g)
     double t0 = omp_get_wtime();
 #pragma omp parallel for
     for (size_t edge = 0; edge < E; edge++) {
-        size_t u0 = EDGE_AT(g, edge, 0);  // source
-        size_t u1 = EDGE_AT(g, edge, 1);  // target
+        size_t src = EDGE_AT(g, edge, SRC_NODE);
+        size_t dst = EDGE_AT(g, edge, DST_NODE);
 
-        // u0 gets gradient from u1's computation (outgoing gradient)
-        // grad_input[u0] += grad_output[u1] @ Wagg^T
+        // With source_to_target flow, src gets gradient from dst's computation
+        // (outgoing gradient) grad_input[src] += grad_output[dst] @ Wagg^T
         for (size_t i = 0; i < B; i++) {
             double sum = 0.0;
             for (size_t j = 0; j < F; j++) {
-                sum += MIDX(l->grad_output, u1, j) * MIDX(l->Wagg, i, j);
+                sum += MIDX(l->grad_output, dst, j) * MIDX(l->Wagg, i, j);
             }
 #pragma omp atomic
-            MIDX(l->grad_input, u0, i) += sum * l->mean_scale[u1];
+            MIDX(l->grad_input, src, i) += sum * l->mean_scale[dst];
         }
     }
     timer_record("grad_neigh", omp_get_wtime() - t0, NULL);
