@@ -369,34 +369,33 @@ void normalize_backward(L2NormLayer *const l)
     size_t B = l->input->batch;
     size_t F = l->input->features;
 
-#pragma omp parallel for
-    for (size_t i = 0; i < B; i++) {
-        double grad_local_data[F * F];
-        Matrix grad_local = {
-            .M = F,
-            .N = F,
-            .stride = F,
-            .data = grad_local_data
-        };
-        for (size_t j = 0; j < F; j++) {
-            for (size_t k = 0; k < F; k++) {
-                MIDX(&grad_local, j, k) = - MIDX(l->output, i, j) * MIDX(l->output, i, k);
+#pragma omp parallel
+    {
+        Matrix* grad_local = matrix_create(F, F);
+#pragma omp for
+        for (size_t i = 0; i < B; i++) {
+            for (size_t j = 0; j < F; j++) {
+                for (size_t k = 0; k < F; k++) {
+                    MIDX(grad_local, j, k) = - MIDX(l->output, i, j) * MIDX(l->output, i, k);
 
-                if (j == k) {     // Kronecker delta
-                    MIDX(&grad_local, j, k) = 1 + MIDX(&grad_local, j, k);
+                    if (j == k) {     // Kronecker delta
+                        MIDX(grad_local, j, k) = 1 + MIDX(grad_local, j, k);
+                    }
+
+                    MIDX(grad_local, j, k) *= MIDX(l->recip_mag, i, 0);
                 }
+            }
 
-                MIDX(&grad_local, j, k) *= MIDX(l->recip_mag, i, 0);
+            for (size_t j = 0; j < F; j++) {
+                double sum = 0.0;
+                for (size_t k = 0; k < F; k++) {
+                    sum += MIDX(l->grad_output, i, k) * MIDX(grad_local, k, j);
+                }
+                MIDX(l->grad_input, i, j) = sum;
             }
         }
 
-        for (size_t j = 0; j < F; j++) {
-            double sum = 0.0;
-            for (size_t k = 0; k < F; k++) {
-                sum += MIDX(l->grad_output, i, k) * MIDX(&grad_local, k, j);
-            }
-            MIDX(l->grad_input, i, j) = sum;
-        }
+        matrix_destroy(grad_local);
     }
 
     nob_log(NOB_INFO, "normalize_backward: ok");
