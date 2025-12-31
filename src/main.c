@@ -159,9 +159,9 @@ int main(int argc, char** argv)
                 TIMER_BLOCK("epoch", {
                         inference(net, train_graph);
 
-                        double loss = nll_loss(net->logsoft->output, train_graph->y) / train_graph->y->batch;
+                        double loss = nll_loss(net->logsoft->output, train_graph->y);
                         double acc = accuracy(net->logsoft->output, train_graph->y);
-                        printf("[epoch %zu] loss: %f, accuracy: %f\n", epoch, loss, acc);
+                        printf("[epoch %zu] loss: %f, accuracy: %.2f%%\n", epoch, loss, 100*acc);
 
                         train(net, train_graph);
                     });

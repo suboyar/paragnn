@@ -218,7 +218,7 @@ void logsoft(LogSoftLayer *const l)
     nob_log(NOB_INFO, "log_softmax: ok");
 }
 
-double nll_loss(Matrix *const yhat, Matrix *const y)
+double nll_loss(Matrix* const yhat, Matrix* const y)
 {
     TIMER_FUNC();
 
@@ -239,7 +239,7 @@ double nll_loss(Matrix *const yhat, Matrix *const y)
         loss -= logits;
     }
 
-    return loss;
+    return loss/B;
 }
 
 double accuracy(Matrix *const yhat, Matrix *const y)
@@ -285,6 +285,7 @@ double accuracy(Matrix *const yhat, Matrix *const y)
 }
 
 // Computes gradient flow from both NLLLoss and LogSoftmax.
+// NOTE: we assume mean reduction from NLLLoss
 void cross_entropy_backward(LogSoftLayer *const l, Matrix *const y)
 {
     TIMER_FUNC();
@@ -292,17 +293,14 @@ void cross_entropy_backward(LogSoftLayer *const l, Matrix *const y)
     size_t B = l->output->batch;
     size_t F = l->output->features;
 
+    double scale = 1.0 / B;
+
 #pragma omp parallel for
     for (size_t i = 0; i < B; i++) {
         for (size_t j = 0; j < F; j++) {
-            MIDX(l->grad_input, i, j) = exp(MIDX(l->output, i, j));
-        }
-
-        for (size_t j = 0; j < F; j++) {
-            if (MIDX(y, i, j) == 1.0) { //  True class
-                MIDX(l->grad_input, i, j) -= 1;
-                break;
-            }
+            double softmax_val = exp(MIDX(l->output, i, j));
+            double target = MIDX(y, i, j);
+            MIDX(l->grad_input, i, j) = (softmax_val - target) * scale;
         }
     }
 
