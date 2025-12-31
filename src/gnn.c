@@ -132,25 +132,26 @@ void normalize(L2NormLayer *const l)
 {
     TIMER_FUNC();
 
-    size_t B = l->input->batch;
-    size_t F = l->input->features;
-
+    const double eps = 1e-12;
+    const size_t B = l->input->batch;
+    const size_t F = l->input->features;
 
 #pragma omp parallel for
     for (size_t i = 0; i < B; i++) {
-        double norm = 0.0;
+        double sum_sq = 0.0;
         for (size_t j = 0; j < F; j++) {
             double val = MIDX(l->input, i, j);
-            norm += val * val;
+            sum_sq += val * val;
         }
 
-        MIDX(l->recip_mag, i, 0) = (double)1/sqrt(norm);
+        double norm = sqrt(sum_sq);
+        double recip_mag = 1.0 / fmax(norm, eps);
 
-        if (norm > 1e-8) {
-            for (size_t j = 0; j < F; j++) {
-                MIDX(l->output, i, j) = MIDX(l->input, i, j) * MIDX(l->recip_mag, i, 0);
-            }
+        for (size_t j = 0; j < F; j++) {
+            MIDX(l->output, i, j) = MIDX(l->input, i, j) * recip_mag;
         }
+
+        MIDX(l->recip_mag, i, 0) = recip_mag;
     }
 
     nob_log(NOB_INFO, "normalize: ok");
