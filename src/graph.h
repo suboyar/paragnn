@@ -5,8 +5,12 @@
 
 #include "matrix.h"
 
+#ifndef SRC_NODE
 #define SRC_NODE 0
+#endif
+#ifndef DST_NODE
 #define DST_NODE 1
+#endif
 
 #define EDGE_AT(g, edge, end) (g)->edge_index[(end)*(g)->num_edges + (edge)]
 #define GRAPH_NODES(m)    ((m)->height)
