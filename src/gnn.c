@@ -35,6 +35,7 @@ void aggregate(SageLayer *const l, graph_t *const g)
     if (!t_pool) ERROR("Could not calloc t_pool");
 
     memset(l->agg->data, 0, B*F*sizeof(*l->agg->data));
+    memset(l->mean_scale, 0, B * sizeof(*l->mean_scale));
 
 #pragma omp parallel
     {
