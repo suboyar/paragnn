@@ -31,8 +31,8 @@ SageLayer* sage_layer_create(size_t batch_size, size_t in_dim, size_t out_dim)
     layer->mean_scale = malloc(batch_size * sizeof(*layer->mean_scale));
 
     // Initialize weights randomly
-    matrix_fill_random(layer->Wagg, -1.0, 1.0);
-    matrix_fill_random(layer->Wroot, -1.0, 1.0);
+    matrix_fill_xavier_uniform(layer->Wroot, in_dim, out_dim);
+    matrix_fill_xavier_uniform(layer->Wagg, in_dim, out_dim);
 
     return layer;
 }
@@ -84,8 +84,8 @@ LinearLayer* linear_layer_create(size_t batch_size, size_t in_dim, size_t out_di
         .grad_bias   = matrix_create(1, out_dim),
     };
 
-    matrix_fill_random(layer->W, -1.0, 1.0);
-    matrix_fill_random(layer->bias, -1.0, 1.0);
+    matrix_fill_xavier_uniform(layer->W, in_dim, out_dim);
+    matrix_fill_xavier_uniform(layer->bias, 1, out_dim);
 
     return layer;
 }

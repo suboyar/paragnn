@@ -87,14 +87,30 @@ void matrix_zero(Matrix *m)
 
 void matrix_fill_random(Matrix *m, double low, double high)
 {
-    double scale = (high - low);
+    const size_t n = m->M * m->N;
+    const double scale = (high - low);
+    const double recip_rand_max = 1.0 / RAND_MAX;
+
     // OpenMP can't be used here as rand() isn't thread-safe, variants that might
     // be of interest are srand48_r or random_r. This can be looked at closed iff
     // fill_uniform becomes a bottleneck.
-    for (size_t i = 0; i < m->M; i++) {
-        for (size_t j = 0; j < m->N; j++) {
-            m->data[i*m->stride+j] = ((double)rand() / RAND_MAX) * scale + low;
-        }
+    for (size_t i = 0; i < n; i++) {
+        m->data[i] = ((double)rand() / recip_rand_max) * scale + low;
+    }
+}
+
+void matrix_fill_xavier_uniform(Matrix *m, size_t in, size_t out)
+{
+
+    const size_t n = m->M * m->N;
+    const double limit = sqrt(6.0 / (in + out));
+    const double recip_rand_max = 1.0 / RAND_MAX;
+
+    // OpenMP can't be used here as rand() isn't thread-safe, variants that might
+    // be of interest are srand48_r or random_r. This can be looked at closed iff
+    // fill_uniform becomes a bottleneck.
+    for (size_t i = 0; i < n; i++) {
+        m->data[i] = limit * (2 * (double)rand() / recip_rand_max - 1.0);;
     }
 }
 
