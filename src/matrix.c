@@ -110,7 +110,7 @@ void matrix_fill_xavier_uniform(Matrix *m, size_t in, size_t out)
     // be of interest are srand48_r or random_r. This can be looked at closed iff
     // fill_uniform becomes a bottleneck.
     for (size_t i = 0; i < n; i++) {
-        m->data[i] = limit * (2 * (double)rand() / recip_rand_max - 1.0);;
+        m->data[i] = limit * (2 * (double)rand() * recip_rand_max - 1.0);;
     }
 }
 
