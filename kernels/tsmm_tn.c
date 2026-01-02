@@ -294,6 +294,16 @@ void unroll_v3(size_t M, size_t N, size_t K,
                     C[(i+2)*ldc+j+3] += a2 * b3;
                     C[(i+3)*ldc+j+3] += a3 * b3;
                 }
+
+#pragma omp simd
+                for (size_t j = N_unroll; j < N; j++) {
+                    register double b0 = B[k*ldb+j+0];
+
+                    C[(i+0)*ldc+j+0] += a0 * b0;
+                    C[(i+1)*ldc+j+0] += a1 * b0;
+                    C[(i+2)*ldc+j+0] += a2 * b0;
+                    C[(i+3)*ldc+j+0] += a3 * b0;
+                }
             }
         }
 
@@ -410,9 +420,20 @@ void cache_block_v2(size_t M, size_t N, size_t K,
                         C[(i+2)*ldc+j+3] += a2 * b3;
                         C[(i+3)*ldc+j+3] += a3 * b3;
                     }
+
+#pragma omp simd
+                    for (size_t j = N_unroll; j < N; j++) {
+                        register double b0 = B[k*ldb+j+0];
+
+                        C[(i+0)*ldc+j+0] += a0 * b0;
+                        C[(i+1)*ldc+j+0] += a1 * b0;
+                        C[(i+2)*ldc+j+0] += a2 * b0;
+                        C[(i+3)*ldc+j+0] += a3 * b0;
+                    }
                 }
             }
         }
+
 #pragma omp for
         for (size_t i = M_unroll; i < M; i++) {
             for (size_t k = 0; k < K; k++) {

@@ -8,14 +8,15 @@ Using 16 threads(omp) and 16 threads(openblas)
 
 | function       | description                            | time(s) |   MFLOP/s |     MB/s | flop/byte | MB(L3-local) | MB(L3-remote) |
 |----------------+----------------------------------------+---------+-----------+----------+-----------+--------------+---------------|
-| naive_v1       | baseline (ijk)                         |   6.245 |   1908.62 | 87390.49 |      0.02 |      8527.76 |          0.00 |
-| naive_v2       | baseline (ikj)                         |   0.363 |  32850.32 | 12958.16 |      2.54 |        73.47 |          0.00 |
-| unroll_v1      | unroll-jam M (ikj)                     |   0.105 | 113725.33 |   233.90 |    486.22 |         0.38 |          0.00 |
-| unroll_v2      | unroll-jam M + unroll K (ikj)          |   0.099 | 120924.64 |  3264.18 |     37.05 |         5.03 |          0.00 |
-| unroll_v3      | unroll-jam M + unroll N (ikj)          |   0.098 | 122215.24 |   429.45 |    284.58 |         0.65 |          0.00 |
-| cache_block_v1 | K block + unroll-jam M (ikj)           |   0.067 | 177862.38 |    85.17 |   2088.28 |         0.09 |          0.00 |
-| cache_block_v2 | K block + unroll-jam M + unroll N(ikj) |   0.055 | 215908.96 |   259.71 |    831.35 |         0.22 |          0.00 |
-| blas           | OpenBLAS (crème de la crème)           |   0.053 | 227031.17 |  5081.03 |     44.68 |         4.17 |          0.00 |
+| naive_v1       | baseline (ijk)                         |   5.433 |   2194.09 | 83449.54 |      0.03 |      7083.68 |          0.00 |
+| naive_v2       | baseline (ikj)                         |   0.208 |  57443.89 |  8240.13 |      6.97 |        26.72 |          0.00 |
+| unroll_v1      | unroll-jam M (ikj)                     |   0.060 | 199849.98 |   756.06 |    264.33 |         0.70 |          0.00 |
+| unroll_v2      | unroll-jam M + unroll K (ikj)          |   0.055 | 217205.10 |  3706.56 |     58.60 |         3.18 |          0.00 |
+| unroll_v3      | unroll-jam M + unroll N (ikj)          |   0.055 | 216719.15 |   733.71 |    295.37 |         0.63 |          0.00 |
+| cache_block_v1 | K block + unroll-jam M (ikj)           |   0.056 | 213030.66 |   357.30 |    596.22 |         0.31 |          0.00 |
+| cache_block_v2 | K block + unroll-jam M + unroll N(ikj) |   0.047 | 251406.23 |   347.32 |    723.85 |         0.26 |          0.00 |
+| blas           | OpenBLAS (crème de la crème)           |   0.052 | 228659.49 |  6275.44 |     36.44 |         5.11 |          0.00 |
+
 
 
 ** habanaq
