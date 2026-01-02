@@ -55,19 +55,6 @@ static CPUVendor detect_cpu_vendor(void)
     return CPU_UNKNOWN;
 }
 
-int get_amdzen1_l3_pmu_type(void)
-{
-    FILE *f = fopen("/sys/devices/amd_l3/type", "r");
-    if (!f) {
-        return -1;  // L3 PMU not available
-    }
-
-    int type;
-    fscanf(f, "%d", &type);
-    fclose(f);
-    return type;
-}
-
 cache_counter_t cache_counter_init(void)
 {
     cache_counter_t counter = {0};

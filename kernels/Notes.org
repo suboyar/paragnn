@@ -1,5 +1,41 @@
 #+title: My findings
 
+* tsgemm_nt
+** rome16q
+OpenBLAS config: OpenBLAS 0.3.30.dev DYNAMIC_ARCH NO_AFFINITY USE_OPENMP Haswell MAX_THREADS=64
+OpenBLAS coretype: Haswell
+Using 16 threads(omp) and 16 threads(openblas)
+
+| function       | description                            | time(s) |   MFLOP/s |     MB/s | flop/byte | MB(L3-local) | MB(L3-remote) |
+|----------------+----------------------------------------+---------+-----------+----------+-----------+--------------+---------------|
+| naive_v1       | baseline (ijk)                         |   6.245 |   1908.62 | 87390.49 |      0.02 |      8527.76 |          0.00 |
+| naive_v2       | baseline (ikj)                         |   0.363 |  32850.32 | 12958.16 |      2.54 |        73.47 |          0.00 |
+| unroll_v1      | unroll-jam M (ikj)                     |   0.105 | 113725.33 |   233.90 |    486.22 |         0.38 |          0.00 |
+| unroll_v2      | unroll-jam M + unroll K (ikj)          |   0.099 | 120924.64 |  3264.18 |     37.05 |         5.03 |          0.00 |
+| unroll_v3      | unroll-jam M + unroll N (ikj)          |   0.098 | 122215.24 |   429.45 |    284.58 |         0.65 |          0.00 |
+| cache_block_v1 | K block + unroll-jam M (ikj)           |   0.067 | 177862.38 |    85.17 |   2088.28 |         0.09 |          0.00 |
+| cache_block_v2 | K block + unroll-jam M + unroll N(ikj) |   0.055 | 215908.96 |   259.71 |    831.35 |         0.22 |          0.00 |
+| blas           | OpenBLAS (crème de la crème)           |   0.053 | 227031.17 |  5081.03 |     44.68 |         4.17 |          0.00 |
+
+
+** habanaq
+OpenBLAS config: OpenBLAS 0.3.30.dev DYNAMIC_ARCH NO_AFFINITY USE_OPENMP SkylakeX MAX_THREADS=64
+OpenBLAS coretype: SkylakeX
+Using 36 threads(omp) and 36 threads(openblas)
+
+| function       | description                            | time(s) |   MFLOP/s |     MB/s | flop/byte | MB(L3-local) | MB(L3-remote) |
+|----------------+----------------------------------------+---------+-----------+----------+-----------+--------------+---------------|
+| naive_v1       | baseline (ijk)                         |   3.424 |   3481.44 | 99382.57 |      0.04 |      5316.69 | 0.00          |
+| naive_v2       | baseline (ikj)                         |   0.276 |  43135.11 |  8488.38 |      5.08 |        36.65 | 0.00          |
+| unroll_v1      | unroll-jam M (ikj)                     |   0.062 | 192662.97 |   528.80 |    364.34 |         0.51 | 0.00          |
+| unroll_v2      | unroll-jam M + unroll K (ikj)          |   0.061 | 196143.94 |  2819.32 |     69.57 |         2.68 | 0.00          |
+| unroll_v3      | unroll-jam M + unroll N (ikj)          |   0.059 | 203635.47 |  3217.37 |     63.29 |         2.94 | 0.00          |
+| cache_block_v1 | K block + unroll-jam M (ikj)           |   0.051 | 233331.35 |   294.81 |    791.45 |         0.24 | 0.00          |
+| cache_block_v2 | K block + unroll-jam M + unroll N(ikj) |   0.042 | 281918.15 |  2092.30 |    134.74 |         1.38 | 0.00          |
+| blas           | OpenBLAS (crème de la crème)           |   0.029 | 412437.40 |  3273.06 |    126.01 |         1.48 | 0.00          |
+
+
+
 * dot_ex
 
 ** OUTER_SIMD
@@ -48,7 +84,7 @@ sums. After all k-iterations, these partial sums had to be
 horizontally reduced to scalars before storing to the C matrix. Which
 uses the below instructions to accomplish
 
-#+begin_src asm
+ #+begin_src asm
         add     rax, 32
         cmp     rax, QWORD PTR [rsp+248]
         jne     .L94

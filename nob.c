@@ -72,12 +72,13 @@ Target targets[] = {
         .release_macros = STRINGS("-DUSE_OGB_ARXIV"),
     },
     {
-        .name = "dot-ex",       // TODO: rename this to tsgemm (tall-skinny gemm)
+        .name = "tsgemm_tn",
         .srcs = STRINGS(
             SRC_FOLDER"matrix.c",
-            SRC_FOLDER"perf.c",
+            SRC_FOLDER"timer.c",
             KERNEL_FOLDER"cache_counter.c",
-            KERNEL_FOLDER"dot_ex.c",
+            KERNEL_FOLDER"tsgemm_tn.c",
+            SRC_FOLDER"linalg/gemm.c",
             ),
         .libs = STRINGS("-lm", "-lopenblas"),
     },
