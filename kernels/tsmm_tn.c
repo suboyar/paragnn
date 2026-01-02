@@ -134,29 +134,35 @@ void unroll_v1(size_t M, size_t N, size_t K,
 
     const size_t M_unroll = (M / 4) * 4;
 
-#pragma omp parallel for simd
-    for (size_t i = 0; i < M_unroll; i+=4) {
-        for (size_t k = 0; k < K; k++) {
-            register double a0 = A[k*lda+i+0] * alpha;
-            register double a1 = A[k*lda+i+1] * alpha;
-            register double a2 = A[k*lda+i+2] * alpha;
-            register double a3 = A[k*lda+i+3] * alpha;
+#pragma omp parallel
+    {
 
-            for (size_t j = 0; j < N; j++) {
-                C[(i+0)*ldc+j] += a0 * B[k*ldb+j];
-                C[(i+1)*ldc+j] += a1 * B[k*ldb+j];
-                C[(i+2)*ldc+j] += a2 * B[k*ldb+j];
-                C[(i+3)*ldc+j] += a3 * B[k*ldb+j];
+#pragma omp for
+        for (size_t i = 0; i < M_unroll; i+=4) {
+            for (size_t k = 0; k < K; k++) {
+                register double a0 = A[k*lda+i+0] * alpha;
+                register double a1 = A[k*lda+i+1] * alpha;
+                register double a2 = A[k*lda+i+2] * alpha;
+                register double a3 = A[k*lda+i+3] * alpha;
+
+#pragma omp simd
+                for (size_t j = 0; j < N; j++) {
+                    C[(i+0)*ldc+j] += a0 * B[k*ldb+j];
+                    C[(i+1)*ldc+j] += a1 * B[k*ldb+j];
+                    C[(i+2)*ldc+j] += a2 * B[k*ldb+j];
+                    C[(i+3)*ldc+j] += a3 * B[k*ldb+j];
+                }
             }
         }
-    }
 
-#pragma omp parallel for simd
-    for (size_t i = M_unroll; i < M; i++) {
-        for (size_t k = 0; k < K; k++) {
-            register double a = A[k*lda+i] * alpha;
-            for (size_t j = 0; j < N; j++) {
-                C[i*ldc+j] += a * B[k*ldb+j];
+#pragma omp for simd
+        for (size_t i = M_unroll; i < M; i++) {
+            for (size_t k = 0; k < K; k++) {
+                register double a = A[k*lda+i] * alpha;
+#pragma omp simd
+                for (size_t j = 0; j < N; j++) {
+                    C[i*ldc+j] += a * B[k*ldb+j];
+                }
             }
         }
     }
@@ -174,31 +180,34 @@ void unroll_v2(size_t M, size_t N, size_t K,
     const size_t M_unroll = (M / 4) * 4;
     const size_t K_unroll = (K / 4) * 4;
 
-
 #pragma omp parallel
     {
 #pragma omp for
         for (size_t i = 0; i < M_unroll; i+=4) {
             for (size_t k = 0; k < K_unroll; k += 4) {
-                register double a00 = alpha * A[(k+0)*lda + (i+0)];
-                register double a01 = alpha * A[(k+1)*lda + (i+0)];
-                register double a02 = alpha * A[(k+2)*lda + (i+0)];
-                register double a03 = alpha * A[(k+3)*lda + (i+0)];
+                register double
+                    a00 = alpha * A[(k+0)*lda + (i+0)],
+                    a01 = alpha * A[(k+1)*lda + (i+0)],
+                    a02 = alpha * A[(k+2)*lda + (i+0)],
+                    a03 = alpha * A[(k+3)*lda + (i+0)];
 
-                register double a10 = alpha * A[(k+0)*lda + (i+1)];
-                register double a11 = alpha * A[(k+1)*lda + (i+1)];
-                register double a12 = alpha * A[(k+2)*lda + (i+1)];
-                register double a13 = alpha * A[(k+3)*lda + (i+1)];
+                register double
+                    a10 = alpha * A[(k+0)*lda + (i+1)],
+                    a11 = alpha * A[(k+1)*lda + (i+1)],
+                    a12 = alpha * A[(k+2)*lda + (i+1)],
+                    a13 = alpha * A[(k+3)*lda + (i+1)];
 
-                register double a20 = alpha * A[(k+0)*lda + (i+2)];
-                register double a21 = alpha * A[(k+1)*lda + (i+2)];
-                register double a22 = alpha * A[(k+2)*lda + (i+2)];
-                register double a23 = alpha * A[(k+3)*lda + (i+2)];
+                register double
+                    a20 = alpha * A[(k+0)*lda + (i+2)],
+                    a21 = alpha * A[(k+1)*lda + (i+2)],
+                    a22 = alpha * A[(k+2)*lda + (i+2)],
+                    a23 = alpha * A[(k+3)*lda + (i+2)];
 
-                register double a30 = alpha * A[(k+0)*lda + (i+3)];
-                register double a31 = alpha * A[(k+1)*lda + (i+3)];
-                register double a32 = alpha * A[(k+2)*lda + (i+3)];
-                register double a33 = alpha * A[(k+3)*lda + (i+3)];
+                register double
+                    a30 = alpha * A[(k+0)*lda + (i+3)],
+                    a31 = alpha * A[(k+1)*lda + (i+3)],
+                    a32 = alpha * A[(k+2)*lda + (i+3)],
+                    a33 = alpha * A[(k+3)*lda + (i+3)];
 
 #pragma omp simd
                 for (size_t j = 0; j < N; j++) {
@@ -231,11 +240,11 @@ void unroll_v2(size_t M, size_t N, size_t K,
             }
         }
 
-#pragma omp for simd
+#pragma omp for
         for (size_t i = M_unroll; i < M; i++) {
             for (size_t k = 0; k < K; k++) {
                 register double a = A[k*lda+i] * alpha;
-#pragma omp for
+#pragma omp simd
                 for (size_t j = 0; j < N; j++) {
                     C[i*ldc+j] += a * B[k*ldb+j];
                 }
@@ -337,7 +346,7 @@ void cache_block_v1(size_t M, size_t N, size_t K,
         for (size_t kb = 0; kb < K; kb += K_block) {
             size_t k_end = MIN(kb+K_block, K);
 
-#pragma omp for simd
+#pragma omp for
             for (size_t i = 0; i < M_unroll; i+=4) {
                 for (size_t k = kb; k < k_end; k++) {
                     register double a0 = A[k*lda+i+0] * alpha;
@@ -345,6 +354,7 @@ void cache_block_v1(size_t M, size_t N, size_t K,
                     register double a2 = A[k*lda+i+2] * alpha;
                     register double a3 = A[k*lda+i+3] * alpha;
 
+#pragma omp simd
                     for (size_t j = 0; j < N; j++) {
                         C[(i+0)*ldc+j] += a0 * B[k*ldb+j];
                         C[(i+1)*ldc+j] += a1 * B[k*ldb+j];
@@ -354,10 +364,11 @@ void cache_block_v1(size_t M, size_t N, size_t K,
                 }
             }
 
-#pragma omp for simd
+#pragma omp for
             for (size_t i = M_unroll; i < M; i++) {
                 for (size_t k = 0; k < K; k++) {
                     register double a = A[k*lda+i] * alpha;
+#pragma omp simd
                     for (size_t j = 0; j < N; j++) {
                         C[i*ldc+j] += a * B[k*ldb+j];
                     }
@@ -441,6 +452,99 @@ void cache_block_v2(size_t M, size_t N, size_t K,
 #pragma omp simd
                 for (size_t j = 0; j < N; j++) {
                     C[i*ldc+j] += a * B[k*ldb+j];
+                }
+            }
+        }
+    }
+}
+
+void cache_block_v3(size_t M, size_t N, size_t K,
+                    double alpha,
+                    double *restrict A, size_t lda,
+                    double *restrict B, size_t ldb,
+                    double beta,
+                    double *restrict C, size_t ldc)
+{
+    dgemm_beta(M, N, beta, ldc, C);
+
+    const size_t K_BLOCK = 256;
+    const size_t KR = 4;
+    const size_t MR = 4;
+
+    const size_t M_unroll = (M / MR) * MR;
+
+#pragma omp parallel
+    {
+        for (size_t kb = 0; kb < K; kb += K_BLOCK) {
+            size_t k_end = (kb + K_BLOCK < K) ? kb + K_BLOCK : K;
+            size_t k_unroll = kb + ((k_end - kb) / KR) * KR;
+
+#pragma omp for
+            for (size_t i = 0; i < M_unroll; i += MR) {
+                for (size_t k = kb; k < k_unroll; k += KR) {
+                    register double
+                        a00 = alpha * A[(k+0)*lda + i+0],
+                        a01 = alpha * A[(k+1)*lda + i+0],
+                        a02 = alpha * A[(k+2)*lda + i+0],
+                        a03 = alpha * A[(k+3)*lda + i+0];
+
+                    register double
+                        a10 = alpha * A[(k+0)*lda + i+1],
+                        a11 = alpha * A[(k+1)*lda + i+1],
+                        a12 = alpha * A[(k+2)*lda + i+1],
+                        a13 = alpha * A[(k+3)*lda + i+1];
+
+                    register double
+                        a20 = alpha * A[(k+0)*lda + i+2],
+                        a21 = alpha * A[(k+1)*lda + i+2],
+                        a22 = alpha * A[(k+2)*lda + i+2],
+                        a23 = alpha * A[(k+3)*lda + i+2];
+
+                    register double
+                        a30 = alpha * A[(k+0)*lda + i+3],
+                        a31 = alpha * A[(k+1)*lda + i+3],
+                        a32 = alpha * A[(k+2)*lda + i+3],
+                        a33 = alpha * A[(k+3)*lda + i+3];
+
+#pragma omp simd
+                    for (size_t j = 0; j < N; j++) {
+                        register double b0 = B[(k+0)*ldb + j];
+                        register double b1 = B[(k+1)*ldb + j];
+                        register double b2 = B[(k+2)*ldb + j];
+                        register double b3 = B[(k+3)*ldb + j];
+
+                        C[(i+0)*ldc + j] += a00*b0 + a01*b1 + a02*b2 + a03*b3;
+                        C[(i+1)*ldc + j] += a10*b0 + a11*b1 + a12*b2 + a13*b3;
+                        C[(i+2)*ldc + j] += a20*b0 + a21*b1 + a22*b2 + a23*b3;
+                        C[(i+3)*ldc + j] += a30*b0 + a31*b1 + a32*b2 + a33*b3;
+                    }
+                }
+
+                for (size_t k = k_unroll; k < k_end; k++) {
+                    register double a0 = alpha * A[k*lda + i+0];
+                    register double a1 = alpha * A[k*lda + i+1];
+                    register double a2 = alpha * A[k*lda + i+2];
+                    register double a3 = alpha * A[k*lda + i+3];
+
+#pragma omp simd
+                    for (size_t j = 0; j < N; j++) {
+                        double b = B[k*ldb + j];
+                        C[(i+0)*ldc + j] += a0 * b;
+                        C[(i+1)*ldc + j] += a1 * b;
+                        C[(i+2)*ldc + j] += a2 * b;
+                        C[(i+3)*ldc + j] += a3 * b;
+                    }
+                }
+            }
+        }
+
+#pragma omp for
+        for (size_t i = M_unroll; i < M; i++) {
+            for (size_t k = 0; k < K; k++) {
+                register double a = alpha * A[k*lda + i];
+#pragma omp simd
+                for (size_t j = 0; j < N; j++) {
+                    C[i*ldc + j] += a * B[k*ldb + j];
                 }
             }
         }
@@ -534,7 +638,7 @@ void run_benchmark(Matrix* A, Matrix* B, Matrix* C, Matrix* ref, MatmulKernel ke
         fflush(stdout);
     }
 
-    assert(A->M == B->M && "K dimension mismatch (rows of A and B must match for TN gemm)");
+    assert(A->M == B->M && "K dimension mismatch (rows of A and B must match for TN matrix multiplication)");
 
 
     uint64_t flops = 2ULL * M * N * K;
@@ -662,9 +766,9 @@ int main(void)
             // NEW_KERNEL(unroll_v2, "unroll-jam M + unroll K (ikj)"),
             // NEW_KERNEL(unroll_v3, "unroll-jam M + unroll N (ikj)"),
             // NEW_KERNEL(cache_block_v1, "K block + unroll-jam M (ikj)"),
-            NEW_KERNEL(cache_block_v2, "K block + unroll-jam M + unroll N(ikj)"),
-            NEW_KERNEL(pack_v1, ""),
-            NEW_KERNEL(blas, "OpenBLAS (crème de la crème)"),
+            // NEW_KERNEL(cache_block_v2, "K block + unroll-jam M + unroll N (ikj)"),
+            NEW_KERNEL(cache_block_v3, "K block + unroll-jam M + unroll K (ikj)"),
+            // NEW_KERNEL(blas, "OpenBLAS (crème de la crème)"),
         };
 
         for (size_t i = 0; i < ARRAY_LEN(kernels); i++) {
