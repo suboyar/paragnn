@@ -72,12 +72,12 @@ Target targets[] = {
         .release_macros = STRINGS("-DUSE_OGB_ARXIV"),
     },
     {
-        .name = "tsgemm_tn",
+        .name = "tsmm_tn",
         .srcs = STRINGS(
             SRC_FOLDER"matrix.c",
             SRC_FOLDER"timer.c",
             KERNEL_FOLDER"cache_counter.c",
-            KERNEL_FOLDER"tsgemm_tn.c",
+            KERNEL_FOLDER"tsmm_tn.c",
             SRC_FOLDER"linalg/gemm.c",
             ),
         .libs = STRINGS("-lm", "-lopenblas"),
