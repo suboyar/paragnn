@@ -23,29 +23,19 @@
 #define FLAG_PUSH_DASH_DASH_BACK
 #include "../flag.h"
 
-#ifndef EPOCH
-#    ifdef USE_OGB_ARXIV
-#        define EPOCH 100               // Goal is to have 500 epochs
-#    else
-#        define EPOCH 10
-#    endif // USE_OGB_ARXIV
-#endif // EPOCH
+#ifdef NDEBUG
+static size_t epochs = 1000;
+static size_t layers = 4;
+static size_t channels = 256;
+static float lr = 0.01f;
+#else
+static size_t epochs = 50;
+static size_t layers = 2;
+static size_t channels = 4;
+static float lr = 0.01f;
+#endif // NDEBUG
 
-#ifndef LEARNING_RATE
-#define LEARNING_RATE 0.01f
-#endif
-
-#ifndef NUM_LAYERS
-#define NUM_LAYERS 3
-#endif
-
-#ifndef HIDDEN_DIM
-#    ifdef USE_OGB_ARXIV
-#        define HIDDEN_DIM 256
-#    else
-#        define HIDDEN_DIM 5
-#    endif // USE_OGB_ARXIV
-#endif // HIDDEN_DIM
+static char *csv_name = NULL;
 
 void usage(FILE *stream)
 {
@@ -64,8 +54,7 @@ void print_config(void)
 #endif
 
     printf("Config: epochs=%zu, lr=%g, layers=%zu, hidden=%zu, data=%s, partition=%s, threads=%d\n",
-           (size_t)EPOCH, (float)LEARNING_RATE, (size_t)NUM_LAYERS,
-           (size_t)HIDDEN_DIM, dataset, getenv("SLURM_JOB_PARTITION"), omp_get_max_threads());
+           epochs, lr, layers, channels, dataset, getenv("SLURM_JOB_PARTITION"), omp_get_max_threads());
 }
 
 // TODO: Check out getrusage from <sys/resource.h>
@@ -117,13 +106,13 @@ void train(SageNet *net, graph_t *g)
 #endif
 
     sageconv_backward(net->cls_sage, g);
-    sage_layer_update_weights(net->cls_sage, LEARNING_RATE);
+    sage_layer_update_weights(net->cls_sage, lr);
 
     for (size_t i = net->enc_depth-1; i < net->enc_depth; i--) {
         normalize_backward(net->enc_norm[i]);
         relu_backward(net->enc_relu[i]);
         sageconv_backward(net->enc_sage[i], g);
-        sage_layer_update_weights(net->enc_sage[i], LEARNING_RATE);
+        sage_layer_update_weights(net->enc_sage[i], lr);
     }
 
     // Reset grads
@@ -135,8 +124,11 @@ int main(int argc, char** argv)
     srand(0);
     nob_minimal_log_level = NOB_WARNING;
 
-    char *csv_name = NULL;
-    flag_str_var(&csv_name, "csv", "", "Name of file or stream to output the csv to");
+    flag_str_var(&csv_name, "csv", "", "Output path for timing CSV (use 'stdout' for console)");
+    flag_size_var(&epochs, "epochs", 1000, "Number of training epochs");
+    flag_size_var(&layers, "layers", 4, "Number of layers in the SageNet model");
+    flag_size_var(&channels, "channels", 256, "Number of hidden channels per layer");
+    flag_float_var(&lr, "lr", 0.01f, "Learning rate for training");
 
     if (!flag_parse(argc, argv)) {
         usage(stderr);
@@ -150,11 +142,11 @@ int main(int argc, char** argv)
     graph_t *train_graph, *valid_graph, *test_graph;
     load_split_graph(&train_graph, &valid_graph, &test_graph);
 
-    SageNet *net = sage_net_create(NUM_LAYERS, HIDDEN_DIM, train_graph);
+    SageNet *net = sage_net_create(layers, channels, train_graph);
     sage_net_info(net);
 
     TIMER_BLOCK("run_time", {
-            for (size_t epoch = 1; epoch <= EPOCH; epoch++) {
+            for (size_t epoch = 1; epoch <= epochs; epoch++) {
                 TIMER_BLOCK("epoch", {
                         inference(net, train_graph);
 
