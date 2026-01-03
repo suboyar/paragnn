@@ -15,6 +15,11 @@ typedef struct {
     Matrix *grad_input;       // Gradients w.r.t. this layer's input (to upstream)
     Matrix *grad_Wagg, *grad_Wroot;
     double *mean_scale;       // Scaling factors for mean aggregation (1/neighbor_count)
+
+    const char *timer_dWroot;
+    const char *timer_dWagg;
+    const char *timer_dinput;
+    const char *timer_dneigh;
 } SageLayer;
 
 typedef struct {

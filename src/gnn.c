@@ -439,34 +439,34 @@ void sageconv_backward(SageLayer *const l, graph_t *const g)
 {
     TIMER_FUNC();
 
-    TIMER_BLOCK("grad_Wroot", {
-    matrix_dgemm(LinalgTrans,
-                 LinalgNoTrans,
-                 1.0,
-                 l->input,
-                 l->grad_output,
-                 0.0,
-                 l->grad_Wroot);
+    TIMER_BLOCK(l->timer_dWroot, {
+            matrix_dgemm(LinalgTrans,
+                         LinalgNoTrans,
+                         1.0,
+                         l->input,
+                         l->grad_output,
+                         0.0,
+                         l->grad_Wroot);
         });
 
-    TIMER_BLOCK("grad_Wagg", {
-    matrix_dgemm(LinalgTrans,
-                 LinalgNoTrans,
-                 1.0,
-                 l->agg,
-                 l->grad_output,
-                 0.0,
-                 l->grad_Wagg);
-        });
+    TIMER_BLOCK(l->timer_dWagg, {
+                    matrix_dgemm(LinalgTrans,
+                                 LinalgNoTrans,
+                                 1.0,
+                                 l->agg,
+                                 l->grad_output,
+                                 0.0,
+                                 l->grad_Wagg);
+                });
 
-    TIMER_BLOCK("grad_input", {
-    matrix_dgemm(LinalgNoTrans,
-                 LinalgTrans,
-                 1.0,
-                 l->grad_output,
-                 l->Wroot,
-                 0.0,
-                 l->grad_input);
+    TIMER_BLOCK(l->timer_dinput, {
+            matrix_dgemm(LinalgNoTrans,
+                         LinalgTrans,
+                         1.0,
+                         l->grad_output,
+                         l->Wroot,
+                         0.0,
+                         l->grad_input);
         });
 
     size_t E = g->num_edges;
@@ -490,7 +490,7 @@ void sageconv_backward(SageLayer *const l, graph_t *const g)
             MIDX(l->grad_input, src, i) += sum * l->mean_scale[dst];
         }
     }
-    timer_record("grad_neigh", omp_get_wtime() - t0, NULL);
+    timer_record(l->timer_dneigh, omp_get_wtime() - t0, NULL);
 
     nob_log(NOB_INFO, "sageconv_backward: ok");
 }

@@ -138,15 +138,42 @@ SageNet* sage_net_create(size_t num_layers, size_t hidden_dim, graph_t *g)
         net->enc_sage[i] = sage_layer_create(batch_size, layer_in, layer_out);
         net->enc_relu[i] = relu_layer_create(batch_size, layer_out);
         net->enc_norm[i] = l2norm_layer_create(batch_size, layer_out);
+
+#ifdef VERBOSE_TIMERS
+        net->enc_sage[i]->timer_dWroot = nob_temp_sprintf("L%zu_dWr:%zu->%zu", i, layer_in, layer_out);
+        net->enc_sage[i]->timer_dWagg  = nob_temp_sprintf("L%zu_dWa:%zu->%zu", i, layer_in, layer_out);
+        net->enc_sage[i]->timer_dinput = nob_temp_sprintf("L%zu_dIn:%zu", i, layer_in);
+        net->enc_sage[i]->timer_dneigh = nob_temp_sprintf("L%zu_dNe:%zu", i, layer_in);
+#else
+        net->enc_sage[i]->timer_dWroot = "dWroot";
+        net->enc_sage[i]->timer_dWagg  = "dWagg";
+        net->enc_sage[i]->timer_dinput = "dinput";
+        net->enc_sage[i]->timer_dneigh = "dneigh";
+#endif
     }
 
     size_t final_in = (num_layers == 1) ? in_features : hidden_dim;
 
 #ifndef USE_PREDICTION_HEAD
+    size_t final_out = num_classes;
     net->cls_sage = sage_layer_create(batch_size, final_in, num_classes);
 #else
+    size_t final_out = hidden_dim;
     net->cls_sage = sage_layer_create(batch_size, final_in, hidden_dim);
     LinearLayer *linearlayer = init_linear_layer(batch_size, hidden_dim, num_classes);
+#endif
+
+#ifdef VERBOSE_TIMERS
+    net->cls_sage->timer_dWroot = nob_temp_sprintf("Lc_dWr:%zu->%zu", final_in, final_out);
+    net->cls_sage->timer_dWagg  = nob_temp_sprintf("Lc_dWa:%zu->%zu", final_in, final_out);
+    net->cls_sage->timer_dinput = nob_temp_sprintf("Lc_dIn:%zu", final_in);
+    net->cls_sage->timer_dneigh = nob_temp_sprintf("Lc_dNe:%zu", final_in);
+#else
+    (void)final_out;
+    net->cls_sage->timer_dWroot = "dWroot";
+    net->cls_sage->timer_dWagg  = "dWagg";
+    net->cls_sage->timer_dinput = "dinput";
+    net->cls_sage->timer_dneigh = "dneigh";
 #endif
 
     net->logsoft = logsoft_layer_create(batch_size, num_classes);
