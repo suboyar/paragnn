@@ -290,7 +290,7 @@ void timer_print(void)
         }
     }
 
-    const int max_line_width = 100;
+    const int max_line_width = 120;
     int max_name_width = max_line_width - fixed_cols_width - 1;
     if (name_col_width > max_name_width) {
         name_col_width = max_name_width;
@@ -313,8 +313,38 @@ void timer_print(void)
     free(all_entries);
 }
 
-void timer_export_csv(FILE *fp)
+static void build_path(TimerEntry* e, char* buf, size_t buf_size)
 {
-    (void) fp;
-    NOB_TODO("Implement timer_export_csv();");
+    if (e->parent) {
+        build_path(e->parent, buf, buf_size);
+        strncat(buf, "/", buf_size - strlen(buf) - 1);
+    }
+    strncat(buf, e->name, buf_size - strlen(buf) - 1);
+}
+
+void timer_export_csv(const char *fname)
+{
+    if (!fname) return;
+    FILE *f = (strcmp(fname, "stdout") == 0) ? stdout : fopen(fname, "w+");
+    if (!f) ERROR("Could not open file %s for csv export: %s", fname, strerror(errno));
+
+    // +1 for / (slashes)
+    char path[(128+1)*MAX_STACK_DEPTH]; // TODO do #define MAX_LEN_NAME 128
+
+    if (f == stdout) fprintf(f, "\n--- CSV_OUTPUT_BEGIN ---\n");
+    fprintf(f, "name,parent,avg(s),total(s),min(s),max(s),calls\n");
+
+    for (size_t i = 0; i < reg.capacity; i++) {
+        if (reg.entries[i].name != NULL && reg.entries[i].count > 0) {
+            TimerEntry* e = &reg.entries[i];
+            path[0] = '\0';
+            if (e->parent) build_path(e->parent, path, NOB_ARRAY_LEN(path));
+
+            double avg = e->total_time / e->count;
+            fprintf(f, "%s,%s,%f,%f,%f,%f,%zu\n",
+                    e->name, path, avg, e->total_time, e->min_time, e->max_time, e->count);
+        }
+    }
+
+    if (f == stdout) fprintf(f, "--- CSV_OUTPUT_END ---\n");
 }

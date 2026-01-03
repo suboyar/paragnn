@@ -47,8 +47,6 @@
 #    endif // USE_OGB_ARXIV
 #endif // HIDDEN_DIM
 
-FileHandler csv_out = {0};
-
 void usage(FILE *stream)
 {
     fprintf(stream, "Usage: ./paragnn [OPTIONS]\n");
@@ -137,7 +135,8 @@ int main(int argc, char** argv)
     srand(0);
     nob_minimal_log_level = NOB_WARNING;
 
-    flag_str_var(&csv_out.filename, "csv", csv_out.filename, "Name of the csv file to output to");
+    char *csv_name = NULL;
+    flag_str_var(&csv_name, "csv", "", "Name of file or stream to output the csv to");
 
     if (!flag_parse(argc, argv)) {
         usage(stderr);
@@ -169,13 +168,13 @@ int main(int argc, char** argv)
         });
 
     timer_print();
-    if (csv_out.fp != NULL) timer_export_csv(csv_out.fp);
     printf("Total run time: %f\n", timer_get_time("run_time", TIMER_TOTAL_TIME));
+
+    timer_export_csv(csv_name);
 
     sage_net_destroy(net);
     return 0;
 }
 
 // TODO: Use CRS format for edges
-// TODO: Xavier Initialization for weight matrices
 // TODO: Fast exp: https://jrfonseca.blogspot.com/2008/09/fast-sse2-pow-tables-or-polynomials.html
