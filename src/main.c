@@ -124,7 +124,7 @@ int main(int argc, char** argv)
     srand(0);
     nob_minimal_log_level = NOB_WARNING;
 
-    flag_str_var(&csv_name, "csv", "", "Output path for timing CSV (use 'stdout' for console)");
+    flag_str_var(&csv_name, "csv", NULL, "Output path for timing CSV (use 'stdout' for console)");
     flag_size_var(&epochs, "epochs", 1000, "Number of training epochs");
     flag_size_var(&layers, "layers", 4, "Number of layers in the SageNet model");
     flag_size_var(&channels, "channels", 256, "Number of hidden channels per layer");
