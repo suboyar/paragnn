@@ -89,6 +89,7 @@ typedef struct {
     bool   debug;
     bool   release;
     bool   clean;
+    bool   omp_off;
     bool   extract_ogb;
     bool   download_ogb;
     bool   help;
@@ -163,13 +164,18 @@ const char* get_obj_path(const char* out_dir, const char* src_path)
     return nob_temp_sprintf("%s%.*s.o", out_dir, (int)len, sv.data);
 }
 
-void append_common_flags(bool debug, bool release)
+typedef enum {
+    COMPILING,
+    LINKING,
+} BuildPhase;
+
+void append_common_flags(bool release, BuildPhase phase)
 {
     nob_cc_flags(&cmd);
     nob_cc_error_flags(&cmd);
     nob_cmd_append(&cmd, "-I"SRC_FOLDER);
 
-    if (debug || !release) {
+    if (!release) {
         nob_cmd_append(&cmd, "-ggdb", "-g3", "-gdwarf-2");
     }
 
@@ -179,7 +185,11 @@ void append_common_flags(bool debug, bool release)
         nob_cmd_append(&cmd, "-O0");
     }
 
-    nob_cmd_append(&cmd, "-fopenmp");
+    if (phase == COMPILING && flags.omp_off) {
+        nob_cmd_append(&cmd, "-Wno-unknown-pragmas");
+    } else {
+        nob_cmd_append(&cmd, "-fopenmp");
+    }
 }
 
 bool ungzip(Nob_File_Paths *file_paths, const char* subfolder)
@@ -301,7 +311,7 @@ int build_target(Target* t)
         obj_paths[i] = obj;
 
         nob_cc(&cmd);
-        append_common_flags(debug, release);
+        append_common_flags(release, COMPILING);
 
         if (release && t->release_macros.items) {
             for (size_t i = 0; i < t->release_macros.count; i++) {
@@ -334,7 +344,8 @@ int build_target(Target* t)
 
     // Link
     nob_cc(&cmd);
-    append_common_flags(debug, release);
+    append_common_flags(release, LINKING);
+    nob_cmd_append(&cmd, "-fopenmp");
 
     nob_cc_output(&cmd, exec_path);
 
@@ -347,6 +358,8 @@ int build_target(Target* t)
     }
 
     if (!nob_cmd_run(&cmd)) return 1;
+
+    nob_log(NOB_INFO, "Succesfully compiled: %s", exec_path);
 
     // Run if requested
     if (flags.run) {
@@ -481,6 +494,7 @@ int main(int argc, char** argv)
     flag_bool_var(&flags.clean,        "clean",        false,     "Clean build artifacts");
     flag_list_mut_var(&flags.macros,   "D",                       "Define macro (e.g., -D SIMD_ENABLED)");
     flag_bool_var(&flags.help,         "help",         false,     "Print this help message");
+    flag_bool_var(&flags.omp_off,        "omp-off",      false,     "Don't compile with -fopenmp");
 
     if (!flag_parse(argc, argv)) {
         usage(stderr);
