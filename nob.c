@@ -94,8 +94,9 @@ typedef struct {
     bool   download_ogb;
     bool   help;
     char*  target;
-    char*  submit;
     char*  out_dir;
+    bool   slurm;
+    Flag_List_Mut partitions;
     Flag_List_Mut macros;
     int    rest_argc;
     char** rest_argv;
@@ -129,6 +130,53 @@ bool mkdir_recursive(const char *path)
         if (!nob_mkdir_if_not_exists(sb.items)) return false;
     }
     return true;
+}
+
+typedef enum {
+    NO_DEFAULT = 0,
+    DEFAULT,
+} Default;
+
+typedef struct {
+    const char *name;
+    const char *desc;
+    const char *arch;
+    Default is_default;
+} Partition;
+
+static const Partition partitions[] =  {
+    {"defq",     "DP AMD EPYC 7601 32-Core Processor SMT2 128 threads (Zen1)", "x86-64",  NO_DEFAULT},
+    {"armq",     "DP Cavium ThunderX2 CN9980 SMT4 256 threads",                "aarch64", NO_DEFAULT},
+    {"huaq",     "DP Huawei Kunpeng920-6426 no-HT 128 cores",                  "aarch64", NO_DEFAULT},
+    {"milanq",   "DP AMD EPYC 7763 64-Core Processor SMT2 256 threads (Zen3)", "x86-64",  DEFAULT},
+    {"fpgaq",    "DP AMD EPYC 7413 24-Core Processor SMT2 96 threads (Zen3)",  "x86-64",  DEFAULT},
+    {"genoaxq",  "DP AMD EPYC Genoa-X 9684X 96-Core (SMT2) (Zen4)",            "x86-64",  DEFAULT},
+    {"xeonmaxq", "DP Intel XeonMax 9480 56-core (SMT2 144)",                   "x86-64",  DEFAULT},
+    {"rome16q",  "SP AMD EPYC 7302P 16-Core Processor SMT2 32 threads (Zen2)", "x86-64",  NO_DEFAULT},
+    {"gh200q",   "Nvidia Grace Hopper GH200 APU 72-core cpu",                  "aarch64", DEFAULT},
+    {"habanaq",  "DP Intel Xeon Scalable Platinum 8360Y",                      "x86-64",  DEFAULT},
+};
+
+void list_partitions(void)
+{
+    printf("Valid partitions (* = default):\n");
+    for (size_t i = 0; i < NOB_ARRAY_LEN(partitions); i++) {
+        printf("  %c %-10s %-7s  %s\n",
+               partitions[i].is_default ? '*' : ' ',
+               partitions[i].name,
+               partitions[i].arch,
+               partitions[i].desc);
+
+    }
+}
+
+bool partition_is_valid(const char* name)
+{
+
+    for (size_t i = 0; i < NOB_ARRAY_LEN(partitions); i++) {
+        if (strcmp(partitions[i].name, name) == 0) return true;
+    }
+    return false;
 }
 
 Target* find_target(const char* name)
@@ -300,7 +348,10 @@ int build_target(Target* t)
 
     if (!mkdir_recursive(out_dir)) return 1;
 
-    const char* exec_path = nob_temp_sprintf("%s%s", out_dir, t->name);
+    const char* partition = getenv("SLURM_JOB_PARTITION");
+    const char* exec_path = (partition)
+        ? nob_temp_sprintf("%s%s_%s", out_dir, t->name, partition)
+        : nob_temp_sprintf("%s%s", out_dir, t->name);
 
     // Compile all source files
     const char** obj_paths = nob_temp_alloc(t->srcs.count * sizeof(char*));
@@ -373,94 +424,135 @@ int build_target(Target* t)
     return 0;
 }
 
-struct {
-    const char* name;
-    const char* arch;
-    bool dev;
-} partitions[] = {
-    {.name = "defq",     .arch = "arm",   .dev = false},
-    {.name = "fpgaq",    .arch = "amd",   .dev = false},
-    {.name = "genoaxq",  .arch = "amd",   .dev = false},
-    {.name = "gh200q",   .arch = "arm",   .dev = false},
-    {.name = "milanq",   .arch = "amd",   .dev = false},
-    {.name = "xeonmaxq", .arch = "intel", .dev = false},
-    {.name = "rome16q",  .arch = "amd",   .dev = true},
-};
-
-void list_partitions(void)
+const char** resolve_partitions(size_t *count)
 {
-    int max_len = 0;
-    for (size_t i = 0; i < NOB_ARRAY_LEN(partitions); i++) {
-        int len = (int)strlen(partitions[i].name);
-        if (len > max_len) max_len = len;
-    }
-    max_len += 2;
+    static const char* result[NOB_ARRAY_LEN(partitions)];
+    *count = 0;
 
-    printf("Partitions for benchmarking:\n");
-    for (size_t i = 0; i < NOB_ARRAY_LEN(partitions); i++) {
-        if (!partitions[i].dev) {
-            printf("  %-*s (%s)\n", max_len, partitions[i].name, partitions[i].arch);
+    // No partitions specified: default to bench
+    if (flags.partitions.count == 0) {
+        for (size_t i = 0; i < NOB_ARRAY_LEN(partitions); i++) {
+            if (partitions[i].is_default) result[(*count)++] = partitions[i].name;
+        }
+        return result;
+    }
+
+    if (strcmp(flags.partitions.items[0], "all") == 0) {
+        for (size_t i = 0; i < NOB_ARRAY_LEN(partitions); i++) {
+            result[(*count)++] = partitions[i].name;
+        }
+        return result;
+    }
+
+    if (strcmp(flags.partitions.items[0], "x86-64") == 0) {
+        for (size_t i = 0; i < NOB_ARRAY_LEN(partitions); i++) {
+            if (strcmp(partitions[i].arch, "x86-64") == 0) result[(*count)++] = partitions[i].name;
+        }
+        return result;
+    }
+
+    if (strcmp(flags.partitions.items[0], "aarch64") == 0) {
+        for (size_t i = 0; i < NOB_ARRAY_LEN(partitions); i++) {
+            if (strcmp(partitions[i].arch, "aarch64") == 0) result[(*count)++] = partitions[i].name;
+        }
+        return result;
+    }
+
+    bool found_invalid = false;
+    // Check if partitions where given as comma separated list
+    if (strchr(flags.partitions.items[0], ',')) {
+        char *p = flags.partitions.items[0], *tok;
+        while ((tok = strsep(&p, ","))) {
+            if (*tok) {
+                if (!partition_is_valid(tok)) {
+                    nob_log(NOB_ERROR, "Unknown partition: %s", tok);
+                    found_invalid = true;
+                } else {
+                    result[(*count)++] = tok;
+                }
+            }
+        }
+        goto leave;
+    }
+
+    for (size_t j = 0; j < flags.partitions.count; j++) {
+        const char *p = flags.partitions.items[j];
+        if (!partition_is_valid(p)) {
+            nob_log(NOB_ERROR, "Unknown partition: %s", p);
+            found_invalid = true;
+        } else {
+            result[(*count)++] = p;
         }
     }
 
-    printf("Partitions for development:\n");
-    for (size_t i = 0; i < NOB_ARRAY_LEN(partitions); i++) {
-        if (partitions[i].dev) {
-            printf("  %-*s (%s)\n", max_len, partitions[i].name, partitions[i].arch);
-        }
-    }
-}
-
-bool partition_is_valid(const char* name)
-{
-    for (size_t i = 0; i < NOB_ARRAY_LEN(partitions); i++) {
-        if (strcmp(partitions[i].name, name) == 0) return true;
-    }
-    return false;
-}
-
-int run_benchmark(const char* partition)
-{
-    nob_cmd_append(&cmd, "sbatch", "-p", partition);
-
-    if (flags.target && strcmp(flags.target, "paragnn") != 0) {
-        nob_cmd_append(&cmd, nob_temp_sprintf("--export=BENCHMARK_TARGET=%s", flags.target));
-        nob_cmd_append(&cmd, "-J", flags.target);
+leave:
+    if (found_invalid) {
+        list_partitions();
+        return NULL;
     }
 
-    nob_cmd_append(&cmd, "-o", nob_temp_sprintf("logs/%s-%%x-%%j.out", partition));
-    nob_cmd_append(&cmd, "run_benchmark.sbatch");
-
-    return nob_cmd_run(&cmd) ? 0 : 1;
+    return result;
 }
 
-int submit_job(void)
+const char* get_config_suffix(void)
 {
-#if 0
+    if (flags.macros.count == 0) return "default";
+
+    Nob_String_Builder sb = {0};
+    for (size_t i = 0; i < flags.macros.count; i++) {
+        if (i > 0) nob_sb_append_cstr(&sb, "-");
+        // Strip "USE_" prefix if present for brevity
+        const char *m = flags.macros.items[i];
+        if (strncmp(m, "USE_", 4) == 0) m += 4;
+        // Convert to lowercase
+        for (; *m; m++) nob_da_append(&sb, tolower(*m));
+    }
+    nob_sb_append_null(&sb);
+    return nob_temp_strdup(sb.items);
+}
+
+int submit_slurm(void)
+{
     if (!nob_mkdir_if_not_exists("logs/")) return 1;
 
-    bool is_bench = strcmp(flags.submit, "bench") == 0;
-    bool is_dev = strcmp(flags.submit, "dev") == 0;
+    size_t count;
+    const char **parts = resolve_partitions(&count);
+    if (!parts) return 1;
 
-    if (is_bench || is_dev) {
-        for (size_t i = 0; i < NOB_ARRAY_LEN(partitions); i++) {
-            if (partitions[i].dev != is_dev) continue;
-            if (run_benchmark(partitions[i].name)) return 1;
+    const char *config = get_config_suffix();
+
+    Nob_String_Builder macros_str = {0};
+    for (size_t i = 0; i < flags.macros.count; i++) {
+        if (i > 0) nob_sb_append_cstr(&macros_str, " ");
+        nob_sb_append_cstr(&macros_str, nob_temp_sprintf("-D %s", flags.macros.items[i]));
+    }
+    if (macros_str.count == 0) nob_sb_append_null(&macros_str);
+
+    time_t now = time(NULL);
+    struct tm *local_time = localtime(&now);
+    char date_string[20];
+    strftime(date_string, sizeof(date_string), "%Y%m%d-%H%M%S", local_time);
+
+    int ret = 0;
+    for (size_t i = 0; i < count; i++) {
+        nob_cmd_append(&cmd, "sbatch", "-p", parts[i]);
+        nob_cmd_append(&cmd, nob_temp_sprintf("--export=BENCHMARK_TARGET=%s,BENCHMARK_CONFIG=%s,BENCHMARK_MACROS=%s",
+                                              flags.target, config, macros_str.items));
+        nob_cmd_append(&cmd, "-J", nob_temp_sprintf("%s-%s", flags.target, config));
+        nob_cmd_append(&cmd, "-o", nob_temp_sprintf("logs/%s-%s-%s-%s.out",
+                                                    date_string, parts[i], flags.target, config));
+        nob_cmd_append(&cmd, "--exclusive");
+        nob_cmd_append(&cmd, "run_benchmark.sbatch");
+
+        if (!nob_cmd_run(&cmd)) {
+            nob_log(NOB_ERROR, "Submitting %s to %s", flags.target, parts[i]);
+            ret = 1;
+        } else {
+            nob_log(NOB_INFO, "Submitting %s to %s", flags.target, parts[i]);
         }
-        return 0;
     }
 
-    if (partition_is_valid(flags.submit)) {
-        return run_benchmark(flags.submit);
-    }
-
-    nob_log(NOB_ERROR, "Unknown partition: %s", flags.submit);
-    list_partitions();
-    return 1;
-#else
-    NOB_TODO("submitting needs to be redone");
-    return 1;
-#endif
+    return ret;
 }
 
 int clean(void)
@@ -483,18 +575,19 @@ int main(int argc, char** argv)
 {
     NOB_GO_REBUILD_URSELF(argc, argv);
 
-    flag_str_var(&flags.target,        "target",       "paragnn", "Build target (see list below)");
-    flag_bool_var(&flags.download_ogb, "download-ogb", false,     "Download OGB arxiv dataset");
-    flag_bool_var(&flags.extract_ogb,  "extract-ogb",  false,     "Re-extract OGB raw files");
-    flag_bool_var(&flags.run,          "run",          false,     "Run after building");
-    flag_bool_var(&flags.debug,        "debug",        false,     "Build in debug mode (default)");
-    flag_bool_var(&flags.release,      "release",      false,     "Build in release mode");
-    flag_str_var(&flags.out_dir,       "outdir",       NULL,      "Output directory");
-    flag_str_var(&flags.submit,        "submit",       NULL,      "Submit to Slurm (partition or 'bench'/'dev'/'list')");
-    flag_bool_var(&flags.clean,        "clean",        false,     "Clean build artifacts");
-    flag_list_mut_var(&flags.macros,   "D",                       "Define macro (e.g., -D SIMD_ENABLED)");
-    flag_bool_var(&flags.help,         "help",         false,     "Print this help message");
+    flag_str_var(&flags.target,          "target",       "paragnn", "Build target (see list below)");
+    flag_bool_var(&flags.download_ogb,   "download-ogb", false,     "Download OGB arxiv dataset");
+    flag_bool_var(&flags.extract_ogb,    "extract-ogb",  false,     "Re-extract OGB raw files");
+    flag_bool_var(&flags.run,            "run",          false,     "Run after building");
+    flag_bool_var(&flags.slurm,          "slurm",        false,     "Submit job to Slurm");
+    flag_list_mut_var(&flags.partitions, "p",                       "Partition(s) to submit to (or 'list', 'all', 'aarch64', 'x86_64')");
+    flag_bool_var(&flags.debug,          "debug",        false,     "Build in debug mode (default)");
     flag_bool_var(&flags.omp_off,        "omp-off",      false,     "Don't compile with -fopenmp");
+    flag_bool_var(&flags.release,        "release",      false,     "Build in release mode");
+    flag_str_var(&flags.out_dir,         "o",            NULL,      "Output directory");
+    flag_bool_var(&flags.clean,          "clean",        false,     "Clean build artifacts");
+    flag_list_mut_var(&flags.macros,     "D",                       "Define macro (e.g., -D SIMD_ENABLED)");
+    flag_bool_var(&flags.help,           "help",         false,     "Print this help message");
 
     if (!flag_parse(argc, argv)) {
         usage(stderr);
@@ -527,12 +620,13 @@ int main(int argc, char** argv)
         return clean();
     }
 
-    if (flags.submit != NULL) {
-        if (strcmp(flags.submit, "list") == 0) {
-            list_partitions();
-            return 0;
-        }
-        return submit_job();
+    if (flags.partitions.count > 0 && strcmp(flags.partitions.items[0], "list") == 0) {
+        list_partitions();
+        return 0;
+    }
+
+    if (flags.slurm) {
+        return submit_slurm();
     }
 
     // Build target
