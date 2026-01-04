@@ -348,10 +348,7 @@ int build_target(Target* t)
 
     if (!mkdir_recursive(out_dir)) return 1;
 
-    const char* partition = getenv("SLURM_JOB_PARTITION");
-    const char* exec_path = (partition)
-        ? nob_temp_sprintf("%s%s_%s", out_dir, t->name, partition)
-        : nob_temp_sprintf("%s%s", out_dir, t->name);
+    const char* exec_path = nob_temp_sprintf("%s%s", out_dir, t->name);
 
     // Compile all source files
     const char** obj_paths = nob_temp_alloc(t->srcs.count * sizeof(char*));
