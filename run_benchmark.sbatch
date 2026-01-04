@@ -14,9 +14,15 @@ set -x
 TARGET=${BENCHMARK_TARGET:-paragnn}
 COMPDIR=build/$SLURM_JOB_PARTITION/$TARGET
 EXEC=$COMPDIR/${TARGET}
-
-NOB="./nob-$(uname -m)"
-[[ -f $NOB ]] || gcc -ggdb -o "$NOB" nob.c
+ARCH=$(uname -m)
+LOCKFILE=".nob-$ARCH.lock"
+NOB="./nob-$ARCH"
+(
+    flock -x 200
+    if [[ ! -f $NOB ]] || [[ nob.c -nt $NOB ]]; then
+        gcc -ggdb -DNOB_NO_REBUILD -o "$NOB" nob.c
+    fi
+) 200>"$LOCKFILE"
 
 echo "Compiling $TARGET (${BENCHMARK_CONFIG:-default})"
 $NOB -release -target $TARGET -o $COMPDIR $BENCHMARK_MACROS
@@ -44,7 +50,7 @@ case $TARGET in
         numactl -C$CPUSET $EXEC -csv stdout -epochs 1000 -layers 4 -channels 256 -lr 0.01
         ;;
     tsmm_tn)
-        numactl -C$CPUSET $EXEC -csv stdout
+        numactl -C$CPUSET $EXEC -csv stdout -N 100
         ;;
     *)
         echo "Unknown target: ${TARGET}" >&2

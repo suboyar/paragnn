@@ -570,7 +570,9 @@ void usage(FILE* stream)
 
 int main(int argc, char** argv)
 {
+#ifndef NOB_NO_REBUILD
     NOB_GO_REBUILD_URSELF(argc, argv);
+#endif
 
     flag_str_var(&flags.target,          "target",       "paragnn", "Build target (see list below)");
     flag_bool_var(&flags.download_ogb,   "download-ogb", false,     "Download OGB arxiv dataset");
