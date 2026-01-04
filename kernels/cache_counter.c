@@ -14,6 +14,16 @@
 
 #include "cache_counter.h"
 #include "core.h"
+#include "../nob.h"
+
+// Extracted form cputype.h: https://github.com/torvalds/linux/blob/54e82e93ca93e49cb4c33988adec5c8cb9d0df31/arch/arm64/include/asm/cputype.h
+#define ARM_CPU_IMP_ARM    0x41
+#define ARM_CPU_IMP_CAVIUM 0x43
+#define ARM_CPU_IMP_HISI   0x48
+
+#define ARM_CPU_PART_NEOVERSE_V2  0xD4F
+#define CAVIUM_CPU_PART_THUNDERX2 0x0AF
+#define HISI_CPU_PART_TSV110      0xD01
 
 static long perf_event_open(struct perf_event_attr *hw_event, pid_t pid, int cpu, int group_fd, unsigned long flags)
 {
@@ -21,10 +31,12 @@ static long perf_event_open(struct perf_event_attr *hw_event, pid_t pid, int cpu
 }
 
 typedef enum {
+    CPU_UNKNOWN,
     CPU_AMD,
     CPU_INTEL,
-    CPU_ARM,
-    CPU_UNKNOWN
+    CPU_ARM_NEOVERSE_V2,
+    CPU_ARM_THUNDERX2,
+    CPU_ARM_KUNPENG_920,
 } CPUVendor;
 
 static CPUVendor detect_cpu_vendor(void)
@@ -50,7 +62,19 @@ static CPUVendor detect_cpu_vendor(void)
 
     return CPU_UNKNOWN;
 #elif defined(__aarch64__) || defined(__arm__)
-    return CPU_ARM;
+    // ref: https://developer.arm.com/documentation/107771/0102/AArch64-registers/AArch64-Identification-registers-summary/MIDR-EL1--Main-ID-Register
+    uint64_t midr;
+    __asm__ __volatile__("mrs %0, midr_el1" : "=r"(midr));
+
+    uint8_t implementer = (midr >> 24) & 0xFF;
+    uint16_t part_num = (midr >> 4) & 0xFFF;
+
+    // eX3 has only these ARM CPUs, and I don't think they will add any new ones
+    // before I finish my thesis. So this should be enough.
+
+    if (implementer == ARM_CPU_IMP_ARM && part_num == ARM_CPU_PART_NEOVERSE_V2) return CPU_ARM_NEOVERSE_V2;
+    if (implementer == ARM_CPU_IMP_CAVIUM && part_num == CAVIUM_CPU_PART_THUNDERX2) return CPU_ARM_THUNDERX2;
+    if (implementer == ARM_CPU_IMP_HISI && part_num == HISI_CPU_PART_TSV110) return CPU_ARM_KUNPENG_920;
 #endif
     return CPU_UNKNOWN;
 }
@@ -104,7 +128,7 @@ cache_counter_t cache_counter_init(void)
         }
     }
 
-    else if (vendor == CPU_ARM) {
+    else if (vendor == CPU_ARM_NEOVERSE_V2) {
         pe.type = PERF_TYPE_RAW;
 
         pe.config = 0x400B;
@@ -129,8 +153,10 @@ cache_counter_t cache_counter_init(void)
         if (counter.l3_miss_generic.fd == -1) {
             // Fall back to generic cache misses
             llc_errno = errno;
-            fprintf(stderr, "warning: LLC event not available (%s), falling back to generic cache misses\n",
-                    strerror(llc_errno));
+            // TODO: as of now cache_counter_init gets called in a parallel region causing this to be printed to many times
+            //
+            // fprintf(stderr, "warning: LLC event not available (%s), falling back to generic cache misses\n",
+            //         strerror(llc_errno));
 
             pe.type = PERF_TYPE_HARDWARE;
             pe.config = PERF_COUNT_HW_CACHE_MISSES;
@@ -221,7 +247,7 @@ void cache_counter_print(cache_counter_t counter)
 {
     CPUVendor vendor = detect_cpu_vendor();
 
-    if (vendor == CPU_AMD || vendor == CPU_INTEL || vendor == CPU_ARM) {
+    if (vendor == CPU_AMD || vendor == CPU_INTEL || vendor == CPU_ARM_NEOVERSE_V2) {
         if (counter.l3_miss_local.available) {
             printf("L3 misses (local):  %12lld\n", counter.l3_miss_local.count);
         }
