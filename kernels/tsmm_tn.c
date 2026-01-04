@@ -1,11 +1,18 @@
+#define _GNU_SOURCE
 #include <math.h>
 #include <float.h>
 #include <stdio.h>
 #include <stdbool.h>
+#include <string.h>
 #include <sys/param.h>
+#include <unistd.h>
 
 #include <omp.h>
 #include <cblas.h>
+
+#define FLAG_IMPLEMENTATION
+#define FLAG_PUSH_DASH_DASH_BACK
+#include "../flag.h"
 
 #define NOB_IMPLEMENTATION      // Needed for matrix.h etc...
 #include "matrix.h"
@@ -15,10 +22,6 @@
 #define NUM_TRAIN_NODES 90941
 #define NUM_VALID_NODES 29799
 #define NUM_TEST_NODES 48603
-
-#ifndef NTIMES
-#    define NTIMES 10
-#endif // NTIMES
 
 #ifndef ENABLE_INNER_SIMD
 #  define OUTER_SIMD simd
@@ -30,8 +33,12 @@
 
 #define ARRAY_LEN(array) (sizeof(array)/sizeof(array[0]))
 
-FileHandler csv_out = {0};
-cache_counter_t* thread_counters = NULL;
+static char *csv_name;
+static Flag_List_Mut kernel_filter;
+static long unsigned ntimes;
+static bool help;
+
+static cache_counter_t* thread_counters = NULL;
 
 typedef void (*gemmfunc)(size_t M, size_t N, size_t K,
                          double alpha,
@@ -53,6 +60,24 @@ typedef struct {
 } MatmulKernel;
 
 #define NEW_KERNEL(fn_, desc_) (MatmulKernel){.name=#fn_, .desc=(desc_), .fn=(fn_)}
+
+typedef struct {
+    const char *fname;
+    const char *desc;
+    double time;
+    double flops_per_sec;
+    double bandwidth;
+    double ai;
+    uint64_t l3_local;
+    uint64_t l3_remote;
+} Result;
+typedef struct {
+    Result *items;
+    size_t count;
+    size_t capacity;
+} Results;
+
+static Results results = {0};
 
 inline static void dgemm_beta(size_t M, size_t N, double beta, size_t ldc, double *C)
 {
@@ -597,6 +622,8 @@ bool is_valid(Matrix* src, Matrix* ref)
 
 void run_benchmark(Matrix* A, Matrix* B, Matrix* C, Matrix* ref, MatmulKernel kernel)
 {
+    bool interactive = isatty(STDOUT_FILENO);
+
     size_t M = A->N; // TransA==LinalgTrans
     size_t K = A->M;  // TransA==LinalgTrans
     size_t N = B->N;
@@ -609,8 +636,10 @@ void run_benchmark(Matrix* A, Matrix* B, Matrix* C, Matrix* ref, MatmulKernel ke
     size_t ldc = C->stride;
 
     // Validate once
-    printf("%s: verify", kernel.name);
-    fflush(stdout);
+    if (interactive) {
+        printf("%s: verify", kernel.name);
+        fflush(stdout);
+    }
     kernel.fn(M, N, K,
               alpha,
               A->data, lda,
@@ -624,8 +653,10 @@ void run_benchmark(Matrix* A, Matrix* B, Matrix* C, Matrix* ref, MatmulKernel ke
     matrix_zero(C);
 
     // Warm up
-    printf("\r\033[K%s: warmup", kernel.name);
-    fflush(stdout);
+    if (interactive) {
+        printf("\r\033[K%s: warmup", kernel.name);
+        fflush(stdout);
+    }
     for (size_t i = 0; i < 10; i++) {
         kernel.fn(M, N, K,
                   alpha,
@@ -634,8 +665,10 @@ void run_benchmark(Matrix* A, Matrix* B, Matrix* C, Matrix* ref, MatmulKernel ke
                   beta,
                   C->data, ldc);
         matrix_zero(C);
-        printf(".");
-        fflush(stdout);
+        if (interactive) {
+            printf(".");
+            fflush(stdout);
+        }
     }
 
     assert(A->M == B->M && "K dimension mismatch (rows of A and B must match for TN matrix multiplication)");
@@ -649,9 +682,11 @@ void run_benchmark(Matrix* A, Matrix* B, Matrix* C, Matrix* ref, MatmulKernel ke
     uint64_t l3_remote = 0;
 
     // Timed runs
-    printf("\r\033[K%s: run", kernel.name);
-    fflush(stdout);
-    for (size_t i = 0; i < NTIMES; i++) {
+    if (interactive) {
+        printf("\r\033[K%s: run", kernel.name);
+        fflush(stdout);
+    }
+    for (size_t i = 0; i < ntimes; i++) {
 #pragma omp parallel
         {
             int tid = omp_get_thread_num();
@@ -686,29 +721,102 @@ void run_benchmark(Matrix* A, Matrix* B, Matrix* C, Matrix* ref, MatmulKernel ke
             }
         }
         matrix_zero(C);
-        putchar('.');
-        fflush(stdout);
+        if (interactive) {
+            putchar('.');
+            fflush(stdout);
+        }
     }
 
     double bandwidth = bytes / min_time;
-    double flops_per_s = (double) flops / min_time;
-    double intensity = flops_per_s / bandwidth;
-    printf("\r\033[K%s: %s\n", kernel.name, kernel.desc);
+    double flops_per_sec = (double) flops / min_time;
+    double intensity = flops_per_sec / bandwidth;
+
+    Result result = {
+        .fname = kernel.name,
+        .desc = (kernel.fn != blas) ? kernel.desc : "OpenBLAS", // reporting with "crème de la crème" feels a bit unprofessional
+        .time = min_time,
+        .flops_per_sec = flops_per_sec,
+        .bandwidth = bandwidth,
+        .ai = intensity,
+        .l3_local = l3_local,
+        .l3_remote = l3_remote
+    };
+    nob_da_append(&results, result);
+
+    if (interactive) printf("\r\033[K%s: %s\n", kernel.name, kernel.desc);
+    else printf("%s: %s\n", kernel.name, kernel.desc);
     printf("    %.3fs, %.2f MFlops/s, %.2f MBytes/s, %.2f flop/byte, "
            "%.2f MB(L3-local), %.2f MB(L3-remote)\n",
-           min_time, flops_per_s/1e6, bandwidth/1e6, intensity,
+           min_time, flops_per_sec/1e6, bandwidth/1e6, intensity,
            (double)l3_local/1e6, (double)l3_remote/1e6);
 }
 
-int main(void)
+void export_to_csv(const char *fname)
 {
-    printf("OpenBLAS config: %s\n", openblas_get_config());
-    printf("OpenBLAS coretype: %s\n", openblas_get_corename());
+    if (!fname) return;
+    FILE *f = (strcmp(fname, "stdout") == 0) ? stdout : fopen(fname, "w+");
+    if (!f) ERROR("Could not open file %s for csv export: %s", fname, strerror(errno));
+
+    if (f == stdout) fprintf(f, "\n--- CSV_OUTPUT_BEGIN ---\n");
+
+    fprintf(f, "function,description,time(s),MFLOP/s,MB/s,flop/byte,MB(L3-local),MB(L3-remote),count\n");
+    for (size_t i = 0; i < results.count; i++) {
+        Result *r = &results.items[i];
+        fprintf(f,
+                "%s,%s,%f,%f,%f,%f,%f,%f,%ld\n",
+                r->fname, r->desc, r->time,
+                r->flops_per_sec/1e6, r->bandwidth/1e6, r->ai,
+                (double)r->l3_local/1e6, (double)r->l3_remote/1e6, ntimes);
+    }
+
+    if (f == stdout) fprintf(f, "--- CSV_OUTPUT_END ---\n");
+}
+
+bool kernel_enabled(const char *name)
+{
+    if (kernel_filter.count == 0) return true;  // no filter = run all
+
+    for (size_t i = 0; i < kernel_filter.count; i++) {
+        const char *filter = kernel_filter.items[i];
+
+        // Handle comma-separated values
+        if (strchr(filter, ',')) {
+            char *copy = strdup(filter);
+            char *p = copy, *tok;
+            while ((tok = strsep(&p, ","))) {
+                if (*tok && strcmp(tok, name) == 0) {
+                    free(copy);
+                    return true;
+                }
+            }
+            free(copy);
+        } else if (strcmp(filter, name) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+int main(int argc, char** argv)
+{
+    flag_str_var(&csv_name, "csv", NULL, "Output path for timing CSV (use 'stdout' for console)");
+    flag_uint64_var(&ntimes, "N", 100, "Number of benchmark iterations per kernel");
+    flag_list_mut_var(&kernel_filter, "kernel",  "Run only specified kernels (repeatable, comma-separated)");
+    flag_list_mut_var(&kernel_filter, "k",  "Alias for -kernel");
+    flag_bool_var(&help, "help",  false, "Show this help");
+    flag_bool_var(&help, "h",  false, "Alias for -help");
+
+    if (!flag_parse(argc, argv) || help) {
+        fprintf(stderr, "Usage: ./tsmm_tn [OPTIONS]\n");
+        fprintf(stderr, "OPTIONS:\n");
+        flag_print_options(stderr);
+        if (!help) flag_print_error(stderr);
+        exit(1);
+    }
 
     openblas_set_num_threads(omp_get_max_threads());
     int omp_num_threads = omp_get_max_threads();
     int openblas_num_threads = openblas_get_num_threads();
-    printf("Using %d threads(omp) and %d threads(openblas)\n", omp_num_threads, openblas_num_threads);
     thread_counters = malloc(omp_num_threads * sizeof(cache_counter_t));
     if (!thread_counters) {
         fprintf(stderr, "ERROR: Could not allocate thread_counters\n");
@@ -727,10 +835,17 @@ int main(void)
     size_t MN = 32;
 #endif // NDEBUG
 
+    printf("OpenBLAS config: %s\n", openblas_get_config());
+    printf("OpenBLAS coretype: %s\n", openblas_get_corename());
+    printf("Using %d threads(omp) and %d threads(openblas)\n", omp_num_threads, openblas_num_threads);
+
     for (size_t b = 0; b < ARRAY_LEN(K_values); b++) {
         size_t M = MN;
         size_t K = K_values[b];
         size_t N = MN;
+
+        printf("Benchmarking %zux%zu @ %zux%zu -> %zux%zu (%ld iterations)\n",
+               K, M, K, N, M, N, ntimes);
 
         Matrix* A = matrix_create(K, M);
         Matrix* B = matrix_create(K, N);
@@ -760,20 +875,23 @@ int main(void)
              ref->data, ref->stride);
 
         MatmulKernel kernels[] = {
-            // NEW_KERNEL(naive_v1, "baseline (ijk)"),
-            // NEW_KERNEL(naive_v2, "baseline (ikj)"),
-            // NEW_KERNEL(unroll_v1, "unroll-jam M (ikj)"),
-            // NEW_KERNEL(unroll_v2, "unroll-jam M + unroll K (ikj)"),
-            // NEW_KERNEL(unroll_v3, "unroll-jam M + unroll N (ikj)"),
-            // NEW_KERNEL(cache_block_v1, "K block + unroll-jam M (ikj)"),
-            // NEW_KERNEL(cache_block_v2, "K block + unroll-jam M + unroll N (ikj)"),
+            NEW_KERNEL(naive_v1, "baseline (ijk)"),
+            NEW_KERNEL(naive_v2, "baseline (ikj)"),
+            NEW_KERNEL(unroll_v1, "unroll-jam M (ikj)"),
+            NEW_KERNEL(unroll_v2, "unroll-jam M + unroll K (ikj)"),
+            NEW_KERNEL(unroll_v3, "unroll-jam M + unroll N (ikj)"),
+            NEW_KERNEL(cache_block_v1, "K block + unroll-jam M (ikj)"),
+            NEW_KERNEL(cache_block_v2, "K block + unroll-jam M + unroll N (ikj)"),
             NEW_KERNEL(cache_block_v3, "K block + unroll-jam M + unroll K (ikj)"),
-            // NEW_KERNEL(blas, "OpenBLAS (crème de la crème)"),
+            NEW_KERNEL(blas, "OpenBLAS (crème de la crème)"),
         };
 
         for (size_t i = 0; i < ARRAY_LEN(kernels); i++) {
+            if (!kernel_enabled(kernels[i].name)) continue;
             run_benchmark(A, B, C, ref, kernels[i]);
         }
+
+        export_to_csv(csv_name);
 
         matrix_destroy(A);
         matrix_destroy(B);
