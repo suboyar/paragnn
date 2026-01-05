@@ -217,17 +217,17 @@ typedef enum {
     LINKING,
 } BuildPhase;
 
-void append_common_flags(bool release, BuildPhase phase)
+void append_common_flags(BuildPhase phase)
 {
     nob_cc_flags(&cmd);
     nob_cc_error_flags(&cmd);
     nob_cmd_append(&cmd, "-I"SRC_FOLDER);
 
-    if (!release) {
+    if (flags.debug) {
         nob_cmd_append(&cmd, "-ggdb", "-g3", "-gdwarf-2");
     }
 
-    if (release) {
+    if (flags.release) {
         nob_cmd_append(&cmd, "-O3", "-march=native", "-DNDEBUG", "-ffast-math");
     } else {
         nob_cmd_append(&cmd, "-O0");
@@ -333,9 +333,6 @@ int build_target(Target* t)
         if (!prepare_ogb_dataset()) return 1;
     }
 
-    bool release = flags.release;
-    bool debug = flags.debug;
-
     // Determine output directory
     const char* out_dir = flags.out_dir ? flags.out_dir :
                           t->out_dir    ? t->out_dir : BUILD_FOLDER;
@@ -359,9 +356,9 @@ int build_target(Target* t)
         obj_paths[i] = obj;
 
         nob_cc(&cmd);
-        append_common_flags(release, COMPILING);
+        append_common_flags(COMPILING);
 
-        if (release && t->release_macros.items) {
+        if (flags.release && t->release_macros.items) {
             for (size_t i = 0; i < t->release_macros.count; i++) {
                 bool overwrite = false;
                 for (size_t j = 0; j < flags.macros.count; j++) {
@@ -392,7 +389,7 @@ int build_target(Target* t)
 
     // Link
     nob_cc(&cmd);
-    append_common_flags(release, LINKING);
+    append_common_flags(LINKING);
     nob_cmd_append(&cmd, "-fopenmp");
 
     nob_cc_output(&cmd, exec_path);
