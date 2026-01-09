@@ -68,44 +68,44 @@ void print_memory_usage()
     }
 }
 
-void inference(SageNet *net)
+void inference(SageNet *net, Slice slice)
 {
     TIMER_FUNC();
 
     for (size_t i = 0; i < net->enc_depth; i++) {
-        sageconv(net->enc_sage[i]);
-        relu(net->enc_relu[i]);
-        normalize(net->enc_norm[i]);
+        sageconv(net->enc_sage[i], slice.node, slice.edge);
+        relu(net->enc_relu[i], slice.node);
+        normalize(net->enc_norm[i], slice.node);
     }
 
-    sageconv(net->cls_sage);
+    sageconv(net->cls_sage, slice.node, slice.edge);
 
 #ifdef USE_PREDICTION_HEAD
-    linear(net->linear);
+    linear(net->linear, slice.node);
 #endif
 
-    logsoft(net->logsoft);
+    logsoft(net->logsoft, slice.node);
 
 }
 
-void train(SageNet *net, Slice train_slice)
+void train(SageNet *net, Slice slice)
 {
     TIMER_FUNC();
 
-    cross_entropy_backward(net->logsoft, train_slice.node);
+    cross_entropy_backward(net->logsoft, slice.node);
 
 #ifdef USE_PREDICTION_HEAD
-    linear_backward(net->linear, train_slice.node);
+    linear_backward(net->linear, slice.node);
     linear_layer_update_weights(net->linear, LEARNING_RATE);
 #endif
 
-    sageconv_backward(net->cls_sage, train_slice.node, train_slice.edge);
+    sageconv_backward(net->cls_sage, slice.node, slice.edge);
     sage_layer_update_weights(net->cls_sage, lr);
 
     for (size_t i = net->enc_depth-1; i < net->enc_depth; i--) {
-        normalize_backward(net->enc_norm[i], train_slice.node);
-        relu_backward(net->enc_relu[i], train_slice.node);
-        sageconv_backward(net->enc_sage[i], train_slice.node, train_slice.edge);
+        normalize_backward(net->enc_norm[i], slice.node);
+        relu_backward(net->enc_relu[i], slice.node);
+        sageconv_backward(net->enc_sage[i], slice.node, slice.edge);
         sage_layer_update_weights(net->enc_sage[i], lr);
     }
 
@@ -158,7 +158,7 @@ int main(int argc, char** argv)
     TIMER_BLOCK("run_time", {
             for (size_t epoch = 1; epoch <= epochs; epoch++) {
                 TIMER_BLOCK("epoch", {
-                        inference(net);
+                        inference(net, data->full);
                         double loss = nll_loss(net->logsoft->output, data->labels, data->train.node);
                         double train_acc = accuracy(net->logsoft->output, data->labels, data->num_classes, data->train.node);
                         double valid_acc = accuracy(net->logsoft->output, data->labels, data->num_classes, data->valid.node);

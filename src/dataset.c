@@ -355,7 +355,6 @@ Dataset* load_arxiv_dataset()
     data->num_features = num_features;
     data->num_classes = num_classes;
 
-    size_t node_offset = 0, edge_offset = 0;
     data->train = (Slice) {
         .node = { .start=0, .end=train_size },
         .edge = { .start=0, .end=train_edges }
@@ -369,6 +368,11 @@ Dataset* load_arxiv_dataset()
     data->test = (Slice) {
         .node = { .start=data->valid.node.end, .end=(data->valid.node.end + test_size) },
         .edge = { .start=data->valid.edge.end, .end=(data->valid.edge.end + test_edges) }
+    };
+
+    data->full = (Slice) {
+        .node = { .start=data->train.node.start, .end=data->test.node.end },
+        .edge = { .start=data->train.edge.start, .end=data->test.edge.end }
     };
 
     // Features

@@ -19,15 +19,11 @@
 static inline size_t range_len(Range r) { return r.end - r.start; }
 
 // Forward propagation
-void aggregate(SageLayer *const l)
+void aggregate(SageLayer *const l, Range nodes, Range edges)
 {
     TIMER_FUNC();
 
-    uint32_t num_edges = l->data->num_edges;
-    uint32_t num_inputs = l->data->num_inputs;
     uint32_t in_dim = l->in_dim;
-
-    EdgeIndex edges = l->data->edges;
 
     double* X = l->input->data;
     size_t ldX = l->input->stride;
@@ -38,16 +34,16 @@ void aggregate(SageLayer *const l)
     double* t_pool = calloc(sizeof(double), nthreads);
     if (!t_pool) ERROR("Could not calloc t_pool");
 
-    memset(l->agg->data, 0, num_inputs*in_dim*sizeof(*l->agg->data));
-    memset(l->mean_scale, 0, num_inputs * sizeof(*l->mean_scale));
+    memset(l->agg->data, 0, range_len(nodes) * in_dim * sizeof(*l->agg->data));
+    memset(l->mean_scale, 0, range_len(nodes) * sizeof(*l->mean_scale));
 
 #pragma omp parallel
     {
         int tid = omp_get_thread_num();
-        size_t* adj = malloc(num_edges * sizeof(size_t));
+        size_t* adj = malloc(range_len(nodes) * sizeof(size_t));
 
 #pragma omp for
-        for (size_t i = 0; i < num_inputs; i++) {
+        for (size_t i = nodes.start; i < nodes.end; i++) {
             size_t neigh_count = 0;
             double *Y = l->agg->data + i * l->agg->stride;
 
@@ -55,9 +51,9 @@ void aggregate(SageLayer *const l)
 
             double t0 = omp_get_wtime();
             // Find neighbors of count sample size
-            for (size_t edge = 0; edge < num_edges; edge++) {
-                uint32_t src = EDGE_SRC(&edges, edge);
-                uint32_t dst = EDGE_DST(&edges, edge);
+            for (size_t edge = edges.start; edge < edges.end; edge++) {
+                uint32_t src = EDGE_SRC(&l->data->edges, edge);
+                uint32_t dst = EDGE_DST(&l->data->edges, edge);
 
                 // The source_to_target flow is the default of torch_geometric.nn.conv.message_passing,
                 // and as far as I can tell non of the entries of OGB leaderboard that uses SageCONV
@@ -104,7 +100,7 @@ void aggregate(SageLayer *const l)
     free(t_pool);
 }
 
-void sageconv(SageLayer *const l)
+void sageconv(SageLayer *const l, Range nodes, Range edges)
 {
     TIMER_FUNC();
     TIMER_BLOCK("Wroot", {
@@ -117,7 +113,7 @@ void sageconv(SageLayer *const l)
                          l->output);
         });
 
-    aggregate(l);
+    aggregate(l, nodes, edges);
 
     TIMER_BLOCK("Wagg", {
             matrix_dgemm(LinalgNoTrans,
@@ -132,32 +128,28 @@ void sageconv(SageLayer *const l)
     nob_log(NOB_INFO, "sageconv: ok");
 
 }
-void relu(ReluLayer *const l)
+void relu(ReluLayer *const l, Range nodes)
 {
     TIMER_FUNC();
-    size_t num_inputs = l->data->num_inputs;
-    size_t dim = l->dim;
 
 #pragma omp parallel for
-    for (size_t i = 0; i < num_inputs; i++) {
-        for (size_t j = 0; j < dim; j++) {
+    for (size_t i = nodes.start; i < nodes.end; i++) {
+        for (size_t j = 0; j < l->dim; j++) {
             MIDX(l->output, i, j) = fmax(0.0, MIDX(l->input, i, j));
         }
     }
 }
 
-void normalize(L2NormLayer *const l)
+void normalize(L2NormLayer *const l, Range nodes)
 {
     TIMER_FUNC();
 
     const double eps = 1e-12;
-    size_t num_inputs = l->data->num_inputs;
-    size_t dim = l->dim;
 
 #pragma omp parallel for
-    for (size_t i = 0; i < num_inputs; i++) {
+    for (size_t i = nodes.start; i < nodes.end; i++) {
         double sum_sq = 0.0;
-        for (size_t j = 0; j < dim; j++) {
+        for (size_t j = 0; j < l->dim; j++) {
             double val = MIDX(l->input, i, j);
             sum_sq += val * val;
         }
@@ -165,7 +157,7 @@ void normalize(L2NormLayer *const l)
         double norm = sqrt(sum_sq);
         double recip_mag = 1.0 / fmax(norm, eps);
 
-        for (size_t j = 0; j < dim; j++) {
+        for (size_t j = 0; j < l->dim; j++) {
             MIDX(l->output, i, j) = MIDX(l->input, i, j) * recip_mag;
         }
 
@@ -175,7 +167,7 @@ void normalize(L2NormLayer *const l)
     nob_log(NOB_INFO, "normalize: ok");
 }
 
-void linear(LinearLayer *const l)
+void linear(LinearLayer *const l, Range nodes)
 {
     TIMER_FUNC();
 
@@ -188,12 +180,9 @@ void linear(LinearLayer *const l)
                  l->output);
 
     if (l->bias) {
-        uint32_t num_inputs = l->data->num_inputs;
-        uint32_t out_dim = l->in_dim;
-
 #pragma omp parallel for
-        for (size_t i = 0; i < num_inputs; i++) {
-            for (size_t j = 0; j < out_dim; j++) {
+        for (size_t i = nodes.start; i < nodes.end; i++) {
+            for (size_t j = 0; j < l->out_dim; j++) {
                 MIDX(l->output, i, j) += MIDX(l->bias, 0, j);
             }
         }
@@ -205,16 +194,14 @@ void linear(LinearLayer *const l)
 /*
   Log Sum Exp: https://stackoverflow.com/a/61570752
 */
-void logsoft(LogSoftLayer *const l)
+void logsoft(LogSoftLayer *const l, Range nodes)
 {
     TIMER_FUNC();
 
-    size_t num_inputs = l->data->num_inputs;
     size_t num_classes = l->data->num_classes;
 
-
 #pragma omp parallel for
-    for (size_t i = 0; i < num_inputs; i++) {
+    for (size_t i = nodes.start; i < nodes.end; i++) {
         double max = MIDX(l->input, i, 0);
 
         for (size_t j = 1; j < num_classes; j++) {

@@ -7,11 +7,11 @@
 #include "layers.h"
 #include "dataset.h"
 
-void sageconv(SageLayer* const l);
-void relu(ReluLayer* const l);
-void normalize(L2NormLayer* const l);
-void linear(LinearLayer* const l);
-void logsoft(LogSoftLayer* const l);
+void sageconv(SageLayer* const l, Range nodes, Range edges);
+void relu(ReluLayer* const l, Range nodes);
+void normalize(L2NormLayer* const l, Range nodes);
+void linear(LinearLayer* const l, Range nodes);
+void logsoft(LogSoftLayer* const l, Range nodes);
 double nll_loss(Matrix *const pred, uint32_t *labels, Range nodes);
 double accuracy(Matrix *const pred, uint32_t *labels, uint32_t num_classes, Range nodes);
 
