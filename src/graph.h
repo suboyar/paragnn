@@ -12,39 +12,48 @@
 #define DST_NODE 1
 #endif
 
-#define EDGE_AT(g, edge, end) (g)->edge_index[(end)*(g)->num_edges + (edge)]
-#define GRAPH_NODES(m)    ((m)->height)
-#define GRAPH_FEATURES(m) ((m)->width)
-
-#ifndef NDEBUG
-#define EDGE_BOUNDS_CHECK(g, v, u) do {                                                           \
-        if (EDGE_AT((g), (v), (u)) >= (g)->num_nodes) {                                           \
-            fprintf(stderr, "Edge %zu endpoint %zu points to out-of-bounds node %zu (max %zu)\n", \
-                    (size_t)(v), (size_t)(u), (size_t)EDGE_AT((g), (v), (u)), (g)->num_nodes);    \
-            abort();                                                                              \
-        }                                                                                         \
-    }                                                                                             \
-    while(0);
+#ifdef USE_CSR_EDGE
+    #define EDGE_ROW_START(e, i)  ((e)->row_ptr[i])
+    #define EDGE_ROW_END(e, i)    ((e)->row_ptr[(i) + 1])
+    #define EDGE_COL(e, k)        ((e)->col_idx[k])
 #else
-    #define EDGE_BOUNDS_CHECK(g, v, u) (void)(0)
+    #define EDGE_SRC(e, k)        ((e)->data[2 * (k) + 0])
+    #define EDGE_DST(e, k)        ((e)->data[2 * (k) + 1])
 #endif
 
+typedef struct {
+    uint32_t num_nodes;
+    uint32_t num_edges;
+#ifdef USE_CSR_EDGE
+    uint32_t *row_ptr;
+    uint32_t *col_idx;
+    double *val;
+#else
+    uint32_t *data; // COO format stored as [src0, dst0, src1, dst1, ...]
+#endif
+} EdgeIndex;
 
 typedef struct {
-    size_t num_edges;
-    size_t num_nodes;
-    size_t num_node_features;
-    size_t num_label_classes;
-    size_t *edge_index; // Graph connectivity in COO format with shape [2, num_edges]
-    Matrix *x; // Node feature matrix with shape [num_nodes, num_node_features]
-    Matrix *y; // node-level targets of shape [num_nodes, num_label_classes] (One-hot encoding?)
-    // Optional members
-    size_t *node_year;
-} graph_t;
+    struct {size_t offset; size_t count;} node;
+    struct {size_t offset; size_t count;} edge;
+} Slice;
 
-graph_t* load_graph();
-void load_split_graph(graph_t** train_graph, graph_t** valid_graph, graph_t** test_graph);
+typedef struct {
+    uint32_t num_edges;
+    uint32_t num_inputs;
+    uint32_t num_features;
+    uint32_t num_classes;
+    double *inputs; // Node features with shape [num_nodes, num_node_features]
+    uint32_t *labels; // Labels to each node [num_nodes]
+    EdgeIndex edges;
 
-void destroy_graph(graph_t *g);
+    Slice train;
+    Slice valid;
+    Slice test;
+    Slice full;
+} Dataset;
+
+Dataset* load_arxiv_dataset();
+void destroy_dataset(Dataset *ds);
 
 #endif // GRAPH_H_

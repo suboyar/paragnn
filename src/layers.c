@@ -12,12 +12,15 @@
         (src)->grad_output = (dst)->grad_input;   \
     } while(0);
 
-SageLayer* sage_layer_create(size_t batch_size, size_t in_dim, size_t out_dim)
+SageLayer* sage_layer_create(size_t batch_size, size_t in_dim, size_t out_dim, Dataset *data)
 {
     SageLayer *layer = malloc(sizeof(*layer));
     if (!layer) ERROR("Could not allocate SageLayer");
 
     *layer = (SageLayer){
+        .data        = data,
+        .in_dim      = in_dim,
+        .out_dim     = out_dim,
         .input       = NULL, // Set later when connecting layers
         .output      = matrix_create(batch_size, out_dim),
         .agg         = matrix_create(batch_size, in_dim),
@@ -37,12 +40,14 @@ SageLayer* sage_layer_create(size_t batch_size, size_t in_dim, size_t out_dim)
     return layer;
 }
 
-ReluLayer* relu_layer_create(size_t batch_size, size_t dim)
+ReluLayer* relu_layer_create(size_t batch_size, size_t dim, Dataset *data)
 {
     ReluLayer *layer = malloc(sizeof(*layer));
     if (!layer) ERROR("Could not allocate ReluLayer");
 
     *layer = (ReluLayer) {
+        .data        = data,
+        .dim         = dim,
         .input       = NULL, // Set later when connecting layers,
         .output      = matrix_create(batch_size, dim),
         .grad_input  = matrix_create(batch_size, dim),
@@ -52,12 +57,14 @@ ReluLayer* relu_layer_create(size_t batch_size, size_t dim)
     return layer;
 }
 
-L2NormLayer* l2norm_layer_create(size_t batch_size, size_t dim)
+L2NormLayer* l2norm_layer_create(size_t batch_size, size_t dim, Dataset *data)
 {
     L2NormLayer *layer = malloc(sizeof(*layer));
     if (!layer) ERROR("Could not allocate L2NormLayer");
 
     *layer = (L2NormLayer) {
+        .data        = data,
+        .dim         = dim,
         .input       = NULL, // Set later when connecting layers,
         .output      = matrix_create(batch_size, dim),
         .grad_input  = matrix_create(batch_size, dim),
@@ -68,12 +75,15 @@ L2NormLayer* l2norm_layer_create(size_t batch_size, size_t dim)
     return layer;
 }
 
-LinearLayer* linear_layer_create(size_t batch_size, size_t in_dim, size_t out_dim)
+LinearLayer* linear_layer_create(size_t batch_size, size_t in_dim, size_t out_dim, Dataset *data)
 {
     LinearLayer *layer = malloc(sizeof(*layer));
     if (!layer) ERROR("Could not allocate LinearLayer");
 
     *layer = (LinearLayer) {
+        .data        = data,
+        .in_dim      = in_dim,
+        .out_dim     = out_dim,
         .input       = NULL, // Set later when connecting layers
         .output      = matrix_create(batch_size, out_dim),
         .W           = matrix_create(in_dim, out_dim),
@@ -91,12 +101,14 @@ LinearLayer* linear_layer_create(size_t batch_size, size_t in_dim, size_t out_di
 }
 
 
-LogSoftLayer* logsoft_layer_create(size_t batch_size, size_t dim)
+LogSoftLayer* logsoft_layer_create(size_t batch_size, size_t dim, Dataset *data)
 {
     LogSoftLayer *layer = malloc(sizeof(*layer));
     if (!layer) ERROR("Could not allocate LogSoftLayer");
 
     *layer = (LogSoftLayer) {
+        .data        = data,
+        .dim         = dim,
         .input       = NULL, // Set later when connecting layers
         .output      = matrix_create(batch_size, dim),
         .grad_input  = matrix_create(batch_size, dim),
@@ -105,13 +117,9 @@ LogSoftLayer* logsoft_layer_create(size_t batch_size, size_t dim)
     return layer;
 }
 
-SageNet* sage_net_create(size_t num_layers, size_t hidden_dim, graph_t *g)
+SageNet* sage_net_create(size_t num_layers, size_t hidden_dim, Dataset *data)
 {
     if (num_layers < 1) ERROR("Number of layers needed for SageNet is >=1");
-
-    size_t num_classes = g->num_label_classes;
-    size_t batch_size  = g->num_nodes;
-    size_t in_features = g->num_node_features;
 
     SageNet *net = malloc(sizeof(*net));
     if (!net) ERROR("Could not allocate SageNet");
@@ -132,12 +140,12 @@ SageNet* sage_net_create(size_t num_layers, size_t hidden_dim, graph_t *g)
     }
 
     for (size_t i = 0; i < net->enc_depth; i++) {
-        size_t layer_in  = (i == 0) ? in_features : hidden_dim;
+        size_t layer_in  = (i == 0) ? data->num_features : hidden_dim;
         size_t layer_out = hidden_dim;
 
-        net->enc_sage[i] = sage_layer_create(batch_size, layer_in, layer_out);
-        net->enc_relu[i] = relu_layer_create(batch_size, layer_out);
-        net->enc_norm[i] = l2norm_layer_create(batch_size, layer_out);
+        net->enc_sage[i] = sage_layer_create(data->num_inputs, layer_in, layer_out, data);
+        net->enc_relu[i] = relu_layer_create(data->num_inputs, layer_out, data);
+        net->enc_norm[i] = l2norm_layer_create(data->num_inputs, layer_out, data);
 
 #ifdef VERBOSE_TIMERS
         net->enc_sage[i]->timer_dWroot = nob_temp_sprintf("L%zu_dWr:%zu->%zu", i, layer_in, layer_out);
@@ -152,15 +160,15 @@ SageNet* sage_net_create(size_t num_layers, size_t hidden_dim, graph_t *g)
 #endif
     }
 
-    size_t final_in = (num_layers == 1) ? in_features : hidden_dim;
+    size_t final_in = (num_layers == 1) ? data->num_features : hidden_dim;
 
 #ifndef USE_PREDICTION_HEAD
-    size_t final_out = num_classes;
-    net->cls_sage = sage_layer_create(batch_size, final_in, num_classes);
+    size_t final_out = data->num_classes;
+    net->cls_sage = sage_layer_create(data->num_inputs, final_in, data->num_classes, data);
 #else
     size_t final_out = hidden_dim;
     net->cls_sage = sage_layer_create(batch_size, final_in, hidden_dim);
-    LinearLayer *linearlayer = init_linear_layer(batch_size, hidden_dim, num_classes);
+    LinearLayer *linearlayer = init_linear_layer(batch_size, hidden_dim, num_classes, Dataset *data);
 #endif
 
 #ifdef VERBOSE_TIMERS
@@ -176,12 +184,18 @@ SageNet* sage_net_create(size_t num_layers, size_t hidden_dim, graph_t *g)
     net->cls_sage->timer_dneigh = "dneigh";
 #endif
 
-    net->logsoft = logsoft_layer_create(batch_size, num_classes);
+    net->logsoft = logsoft_layer_create(data->num_inputs, data->num_classes, data);
+
+    Matrix *input = matrix_create(data->num_inputs, data->num_features);
+#pragma omp parallel for
+    for (size_t i = 0; i < data->num_inputs*data->num_features; i++) {
+        input->data[i] = data->inputs[i];
+    }
 
     if (net->enc_depth > 0) {
-        net->enc_sage[0]->input = g->x;
+        net->enc_sage[0]->input = input;
     } else {
-        net->cls_sage->input = g->x;
+        net->cls_sage->input = input;
     }
 
     // Connect each layer
@@ -202,7 +216,6 @@ SageNet* sage_net_create(size_t num_layers, size_t hidden_dim, graph_t *g)
 
     return net;
 }
-
 
 // We don't free matrices that are references from other layers, i.e input and grad_output
 void sage_layer_destroy(SageLayer* l)
@@ -270,6 +283,9 @@ void sage_net_destroy(SageNet *net)
 {
     if (!net) return;
 
+    if (net->enc_depth > 0) matrix_destroy(net->enc_sage[0]->input);
+    else matrix_destroy(net->cls_sage->input);
+
     if (net->enc_depth > 0) {
         for (size_t i = 0; i < net->enc_depth; i++) {
             l2norm_layer_destroy(net->enc_norm[i]);
@@ -282,8 +298,8 @@ void sage_net_destroy(SageNet *net)
         if (net->enc_norm) free(net->enc_norm);
     }
 
-    if (net->cls_sage) free(net->cls_sage);
-    if (net->logsoft) free(net->logsoft);
+    if (net->cls_sage) sage_layer_destroy(net->cls_sage);
+    if (net->logsoft) logsoft_layer_destroy(net->logsoft);
     free(net);
 }
 

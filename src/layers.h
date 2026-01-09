@@ -7,6 +7,9 @@
 #include "graph.h"
 
 typedef struct {
+    Dataset *data;
+    size_t in_dim;
+    size_t out_dim;
     Matrix *input;            // Points to previous layer's output
     Matrix *output;
     Matrix *agg;
@@ -23,6 +26,8 @@ typedef struct {
 } SageLayer;
 
 typedef struct {
+    Dataset *data;
+    size_t dim;
     Matrix *input;            // Points to previous layer's output
     Matrix *output;
     Matrix *grad_output;      // Gradients w.r.t. this layer's output (from downstream)
@@ -30,6 +35,8 @@ typedef struct {
 } ReluLayer;
 
 typedef struct {
+    Dataset *data;
+    size_t dim;
     Matrix *input;            // Points to previous layer's output
     Matrix *output;
     Matrix *grad_output;      // Gradients w.r.t. this layer's output (from downstream)
@@ -38,6 +45,9 @@ typedef struct {
 } L2NormLayer;
 
 typedef struct {
+    Dataset *data;
+    size_t in_dim;
+    size_t out_dim;
     Matrix *input;            // Points to previous layer's output
     Matrix *output;
     Matrix *W;
@@ -49,6 +59,8 @@ typedef struct {
 } LinearLayer;
 
 typedef struct {
+    Dataset *data;
+    size_t dim;
     Matrix *input;            // Points to previous layer's output
     Matrix *output;
     // We use cross-entropy derivative since we are be using (LogSoftmax+NLLLoss)
@@ -72,12 +84,12 @@ typedef struct {
     size_t         num_layers;
 } SageNet;
 
-SageLayer* sage_layer_create(size_t batch_size, size_t in_dim, size_t out_dim);
-ReluLayer* relu_layer_create(size_t batch_size, size_t dim);
-L2NormLayer* l2norm_layer_create(size_t batch_size, size_t dim);
-LinearLayer* linear_layer_create(size_t batch_size, size_t in_dim, size_t out_dim);
-LogSoftLayer* logsoft_layer_create(size_t batch_size, size_t dim);
-SageNet* sage_net_create(size_t num_layers, size_t hidden_dim, graph_t *g);
+SageLayer* sage_layer_create(size_t batch_size, size_t in_dim, size_t out_dim, Dataset *data);
+ReluLayer* relu_layer_create(size_t batch_size, size_t dim, Dataset *data);
+L2NormLayer* l2norm_layer_create(size_t batch_size, size_t dim, Dataset *data);
+LinearLayer* linear_layer_create(size_t batch_size, size_t in_dim, size_t out_dim, Dataset *data);
+LogSoftLayer* logsoft_layer_create(size_t batch_size, size_t dim, Dataset *data);
+SageNet* sage_net_create(size_t num_layers, size_t hidden_dim, Dataset *data);
 
 void sage_layer_destroy(SageLayer* l);
 void relu_layer_destroy(ReluLayer* l);

@@ -69,7 +69,6 @@ Target targets[] = {
             SRC_FOLDER"timer.c",
             ),
         .libs = STRINGS("-lm", "-lopenblas"),
-        .release_macros = STRINGS("-DUSE_OGB_ARXIV"),
     },
     {
         .name = "tsmm_tn",

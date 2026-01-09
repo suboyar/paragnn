@@ -1,443 +1,410 @@
+#define _GNU_SOURCE
+#include <math.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <strings.h>
+#include <inttypes.h>
+#include <sys/mman.h>
+
+#include <omp.h>
 
 #include "graph.h"
 
-static graph_t* init_graph(size_t num_nodes, size_t num_edges, size_t num_features, size_t num_labels)
-{
-    graph_t* g = malloc(sizeof(*g));
-
-    g->num_edges = num_edges;
-    g->num_nodes = num_nodes;
-    g->num_node_features = num_features;
-    g->num_label_classes = num_labels;
-
-    g->edge_index = malloc(2*num_edges * sizeof(*g->edge_index)); // Graph connectivity in COO format with shape [2, num_edges]
-    g->node_year  = malloc(num_nodes * sizeof(*g->edge_index));
-
-    g->x = matrix_create(num_nodes, num_features);
-    g->y = matrix_create(num_nodes, num_labels);
-
-    return g;
-}
-
-
-#ifdef USE_OGB_ARXIV
-
-// Then number of nodes and edges for each split has been pre-counted
-
-#define NUM_NODES 169343
-#define NUM_TRAIN_NODES 90941
-#define NUM_VALID_NODES 29799
-#define NUM_TEST_NODES 48603
-
-// A ~60% reduction of number of edges
-#define NUM_EDGES 1166243
-#define NUM_TRAIN_EDGES 374839
-#define NUM_VALID_EDGES 29119
-#define NUM_TEST_EDGES 60403
-
-#define NUM_LABELS 40
-#define NUM_FEATURES 128
-
-#ifndef PROCESSED_PATH
-    #define PROCESSED_PATH "./arxiv/processed/"
-#endif
-
-graph_t* load_graph()
-{
-    printf("Loading ogb-arxiv graph from [%s] - %zu nodes", PROCESSED_PATH, (size_t)NUM_NODES);
-    Nob_String_Builder sb = {0};
-    char *p;
-    const char *end;
-
-    graph_t *g = init_graph(NUM_NODES, NUM_EDGES, NUM_FEATURES, NUM_LABELS);
-
-    // Edges
-    nob_read_entire_file(PROCESSED_PATH"edge.csv", &sb);
-    p = sb.items;
-    end = sb.items + sb.count;
-
-    for (size_t i = 0; i < NUM_EDGES && p < end; i++) {
-        // Parse first node v
-        size_t src = strtoull(p, &p, 10);
-        if (p < end && *p == ',') p++; // Skip comma
-
-        // Parse second node u
-        size_t dst = strtoull(p, &p, 10);
-        if (p < end && *p == '\n') p++; // Skip newline
-
-        EDGE_AT(g, i, SRC_NODE) = src;
-        EDGE_AT(g, i, DST_NODE) = dst;
-    }
-    sb.count = 0;
-
-    // Features
-    nob_read_entire_file(PROCESSED_PATH"node-feat.csv", &sb);
-    p = sb.items;
-    end = sb.items + sb.count;
-
-    for (size_t i = 0; i < NUM_NODES && p < end; i++) {
-        for (size_t j = 0; j < NUM_FEATURES && p < end; j++) {
-            MIDX(g->x, i, j) = strtod(p, &p);
-            if (p < end && *p == ',') p++; // Skip comma
-        }
-
-        if (p < end && *p == '\n') p++; // Skip newline
-    }
-    sb.count = 0;
-
-    // Labels
-    nob_read_entire_file(PROCESSED_PATH"node-label.csv", &sb);
-    p = sb.items;
-    end = sb.items + sb.count;
-
-    for (size_t i = 0; i < NUM_NODES && p < end; i++) {
-        for (size_t j = 0; j < NUM_LABELS; j++) {
-            MIDX(g->y, i, j) = 0;
-        }
-        size_t label = strtoull(p, &p, 10);
-        MIDX(g->y, i, label) = 1.0;
-        if (p < end && *p == '\n') p++; // Skip newline
-    }
-    sb.count = 0;
-
-    // Node year
-    nob_read_entire_file(PROCESSED_PATH"node_year.csv", &sb);
-    p = sb.items;
-    end = sb.items + sb.count;
-
-    for (size_t i = 0; i < NUM_NODES && p < end; i++) {
-        g->node_year[i] = strtoull(p, &p, 10);
-        if (p < end && *p == '\n') p++; // Skip newline
-    }
-    sb.count = 0;
-
-    nob_sb_free(sb);
-    return g;
-}
+static const uint32_t num_inputs = 169343;
+static const uint32_t num_features = 128;
+static const uint32_t num_classes = 40;
 
 typedef enum {
-    TRAIN_SPLIT,
-    VALID_SPLIT,
-    TEST_SPLIT,
-    INVALID_SPLIT
-} graph_split_t;
+    TRAIN_PARTITION,
+    VALID_PARTITION,
+    TEST_PARTITION,
+    INVALID_PARTITION
+} Partition;
 
-void create_split_mapping(graph_split_t* split_map, size_t* train_split_idx, size_t* valid_split_idx, size_t* test_split_idx)
+typedef struct {
+    Partition split;
+    size_t idx;
+} NodeMapping;
+
+// This is specifically design to only conver cases for node-feat.csv with no space handling
+static inline double parse_double(char** pp)
+{
+    char* p = *pp;
+    double sign = 1.0;
+
+    if (*p == '-') { sign = -1.0; p++; }
+    else if (*p == '+') { p++; }
+
+    int64_t intpart = 0;
+    while (*p >= '0' && *p <= '9') {
+        intpart = intpart * 10 + (*p++ - '0');
+    }
+
+    double val = (double)intpart;
+
+    if (*p == '.') {
+        p++;
+        double scale = 0.1;
+        while (*p >= '0' && *p <= '9') {
+            val += (*p++ - '0') * scale;
+            scale *= 0.1;
+        }
+    }
+
+    if (*p == 'e' || *p == 'E') {
+        p++;
+        int exp_sign = 1;
+        if (*p == '-') { exp_sign = -1; p++; }
+        else if (*p == '+') { p++; }
+
+        int exp = 0;
+        while (*p >= '0' && *p <= '9') {
+            exp = exp * 10 + (*p++ - '0');
+        }
+
+        if (exp_sign > 0) {
+            while (exp-- > 0) val *= 10.0;
+        } else {
+            while (exp-- > 0) val *= 0.1;
+        }
+    }
+
+    *pp = p;
+    return sign * val;
+}
+
+// This is specifically design to only be used for node indicies that aren't bigger
+// then 32bit value. It does not do any space checking or clean-up.
+static inline uint32_t parse_u32(char** pp)
+{
+    char* p = *pp;
+
+    uint32_t val = 0;
+    while (*p >= '0' && *p <= '9') {
+        val = val * 10 + (*p++ - '0');
+    }
+
+    *pp = p;
+    return val;
+}
+
+static uint32_t load_split(const char *path, uint32_t **split)
+{
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) ERROR("Could not open %s: %s", path, strerror(errno));
+    struct stat sb;
+    fstat(fd, &sb);
+    char* data = mmap(NULL, sb.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+
+    char* p = data;
+    char* end = data + sb.st_size;
+    uint32_t size = 0;
+    while (p < end) {
+        if (*p == '\n') size++;
+        p++;
+    }
+
+    *split = malloc(size * sizeof(**split));
+
+    p = data;
+    size_t count = 0;
+    while (p < end) {
+        (*split)[count++] = parse_u32(&p);
+        if (*p == '\n') p++;
+    }
+
+    close(fd);
+    return size;
+}
+
+static void build_node_mapping(NodeMapping* map,  uint32_t num_inputs,
+                               uint32_t* train_idx, uint32_t train_size,
+                               uint32_t* valid_idx, uint32_t valid_size,
+                               uint32_t* test_idx, uint32_t test_size)
 {
     // Initialize all as invalid
-    for (size_t i = 0; i < NUM_NODES; i++) {
-        split_map[i] = INVALID_SPLIT;
-    }
+    for (size_t i = 0; i < num_inputs; i++)
+        map[i] = (NodeMapping){INVALID_PARTITION, SIZE_MAX};
 
-    // Mark train nodes
-    for (size_t i = 0; i < NUM_TRAIN_NODES; i++) {
-        split_map[train_split_idx[i]] = TRAIN_SPLIT;
-    }
-
-    // Mark valid nodes
-    for (size_t i = 0; i < NUM_VALID_NODES; i++) {
-        split_map[valid_split_idx[i]] = VALID_SPLIT;
-    }
-
-    // Mark test nodes
-    for (size_t i = 0; i < NUM_TEST_NODES; i++) {
-        split_map[test_split_idx[i]] = TEST_SPLIT;
-    }
+    for (size_t i = 0; i < train_size; i++)
+        map[train_idx[i]] = (NodeMapping){TRAIN_PARTITION, i};
+    for (size_t i = 0; i < valid_size; i++)
+        map[valid_idx[i]] = (NodeMapping){VALID_PARTITION, i};
+    for (size_t i = 0; i < test_size; i++)
+        map[test_idx[i]] = (NodeMapping){TEST_PARTITION, i};
 }
 
-static inline void parse_split_data(const char* path, size_t* split_idx, size_t split_size, Nob_String_Builder* sb)
+static inline void gather_features(double *dest, double *src, uint32_t *split_idx, size_t split_size)
 {
-    nob_read_entire_file(path, sb);
-    char* p = sb->items;
-    const char* end = sb->items + sb->count;
-
-    for (size_t i = 0; i < split_size && p < end; i++) {
-        // Parse first node v
-        split_idx[i] = strtoull(p, &p, 10);
-        if (p < end && *p == '\n') p++; // Skip newline
-    }
-    sb->count = 0;
-}
-
-static inline void create_node_mappings(size_t* split_map, size_t* split_idx, size_t split_size) {
-    for (size_t i = 0; i < NUM_NODES; i++) {
-        split_map[i] = SIZE_MAX; // Invalid indices
-    }
-
+#pragma omp parallel for
     for (size_t i = 0; i < split_size; i++) {
-        split_map[split_idx[i]] = i;
+        size_t orig = split_idx[i];
+        memcpy(&dest[i * num_features], &src[orig * num_features],
+               num_features * sizeof(double));
     }
+
 }
 
-void load_split_graph(graph_t** train_graph, graph_t** valid_graph, graph_t** test_graph)
+static void load_inputs(double *dest,
+                       uint32_t *train_idx, uint32_t train_offset, uint32_t train_size,
+                       uint32_t *valid_idx, uint32_t valid_offset, uint32_t valid_size,
+                       uint32_t *test_idx, uint32_t test_offset, uint32_t test_size)
 {
-    printf("Loading ogb-arxiv graph split from [%s] - ", PROCESSED_PATH);
-    printf("Train: %zu nodes | Valid: %zu nodes | Test: %zu nodes\n",
-           (size_t)NUM_TRAIN_NODES, (size_t)NUM_VALID_NODES, (size_t)NUM_TEST_NODES);
+    double* temp = malloc(num_inputs * num_features * sizeof(double));
 
-    // Allocate some
-    graph_split_t* split_map = malloc(NUM_NODES * sizeof(*split_map));
+    const char *file = "./arxiv/processed/node-feat.csv";
+    int fd = open(file, O_RDONLY);
+    if (fd < 0) ERROR("Could not open %s: %s", file, strerror(errno));
+    struct stat sb;
+    fstat(fd, &sb);
+    char* data = mmap(NULL, sb.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
 
-    size_t* train_split_idx = malloc(NUM_TRAIN_NODES * sizeof(*train_split_idx));
-    size_t* valid_split_idx = malloc(NUM_VALID_NODES * sizeof(*valid_split_idx));
-    size_t* test_split_idx  = malloc(NUM_TEST_NODES * sizeof(*test_split_idx));
-
-    // A sparse mapping
-    size_t* train_split_map = malloc(NUM_NODES * sizeof(*train_split_map));
-    size_t* valid_split_map = malloc(NUM_NODES * sizeof(*valid_split_map));
-    size_t* test_split_map  = malloc(NUM_NODES * sizeof(*test_split_map));
-
-    Nob_String_Builder sb = {0};
-
-    // Load the split data and parse them to size_t
-    parse_split_data(PROCESSED_PATH"train.csv", train_split_idx, NUM_TRAIN_NODES, &sb);
-    parse_split_data(PROCESSED_PATH"valid.csv", valid_split_idx, NUM_VALID_NODES, &sb);
-    parse_split_data(PROCESSED_PATH"test.csv",  test_split_idx,  NUM_TEST_NODES,  &sb);
-
-    // Node Mapping
-    create_split_mapping(split_map, train_split_idx, valid_split_idx, test_split_idx);
-
-    // Create ...
-    create_node_mappings(train_split_map, train_split_idx, NUM_TRAIN_NODES);
-    create_node_mappings(valid_split_map, valid_split_idx, NUM_VALID_NODES);
-    create_node_mappings(test_split_map,  test_split_idx,  NUM_TEST_NODES);
-
-    // Initilize the graphs
-    *train_graph = init_graph(NUM_TRAIN_NODES, NUM_TRAIN_EDGES, NUM_FEATURES, NUM_LABELS);
-    *valid_graph = init_graph(NUM_VALID_NODES, NUM_VALID_EDGES, NUM_FEATURES, NUM_LABELS);
-    *test_graph = init_graph(NUM_TEST_NODES, NUM_TEST_EDGES, NUM_FEATURES, NUM_LABELS);
-
-    char *p;
-    const char *end;
-
-    // Edges
-    nob_read_entire_file(PROCESSED_PATH"edge.csv", &sb);
-    p = sb.items;
-    end = sb.items + sb.count;
-
-    size_t train_edge_idx = 0;
-    size_t valid_edge_idx = 0;
-    size_t test_edge_idx = 0;
-    for (size_t i = 0; i < NUM_EDGES && p < end; i++) {
-        // Parse first node v
-        size_t src = strtoull(p, &p, 10);
-        if (p < end && *p == ',') p++; // Skip comma
-
-        // Parse second node u
-        size_t dst = strtoull(p, &p, 10);
-        if (p < end && *p == '\n') p++; // Skip newline
-
-        graph_split_t src_split = split_map[src];
-        graph_split_t dst_split = split_map[dst];
-        graph_split_t split = (src_split == dst_split) ? src_split : INVALID_SPLIT;
-
-        switch(split) {
-        case TRAIN_SPLIT:
-            EDGE_AT(*train_graph, train_edge_idx, SRC_NODE) = train_split_map[src];
-            EDGE_AT(*train_graph, train_edge_idx, DST_NODE) = train_split_map[dst];
-            train_edge_idx++;
-            break;
-        case VALID_SPLIT:
-            EDGE_AT(*valid_graph, valid_edge_idx, SRC_NODE) = valid_split_map[src];
-            EDGE_AT(*valid_graph, valid_edge_idx, DST_NODE) = valid_split_map[dst];
-            valid_edge_idx++;
-            break;
-        case TEST_SPLIT:
-            EDGE_AT(*test_graph, test_edge_idx, SRC_NODE) = test_split_map[src];
-            EDGE_AT(*test_graph, test_edge_idx, DST_NODE) = test_split_map[dst];
-            test_edge_idx++;
-            break;
-        default:
-            break;
+    char** line_starts = malloc((num_inputs + 1) * sizeof(char*));
+    line_starts[0] = data;
+    size_t line = 1;
+    for (char* p = data; p < data + sb.st_size; p++) {
+        if (*p == '\n' && line < num_inputs) {
+            line_starts[line++] = p + 1;
         }
     }
-    sb.count = 0;
 
-    // Features
-    nob_read_entire_file(PROCESSED_PATH"node-feat.csv", &sb);
-    p = sb.items;
-    end = sb.items + sb.count;
-
-    for (size_t i = 0; i < NUM_NODES && p < end; i++) {
-        graph_t* sub_graph = NULL;
-        size_t idx = 0;
-        graph_split_t split = split_map[i];
-
-        switch (split) {
-        case TRAIN_SPLIT:
-            sub_graph = *train_graph;
-            idx = train_split_map[i];
-            break;
-        case VALID_SPLIT:
-            sub_graph = *valid_graph;
-            idx = valid_split_map[i];
-            break;
-        case TEST_SPLIT:
-            sub_graph = *test_graph;
-            idx = test_split_map[i];
-            break;
-        default:
-            assert(false && "Found invalid graph");
+#pragma omp parallel for
+    for (size_t i = 0; i < num_inputs; i++) {
+        char* p = line_starts[i];
+        for (size_t j = 0; j < num_features; j++) {
+            temp[i*num_features + j] = parse_double(&p);
+            if (*p == ',') p++;
         }
-
-        for (size_t j = 0; j < NUM_FEATURES && p < end; j++) {
-            MIDX(sub_graph->x, idx, j) = strtod(p, &p);
-            if (p < end && *p == ',') p++; // Skip comma
-        }
-
-        if (p < end && *p == '\n') p++; // Skip newline
     }
-    sb.count = 0;
 
-    // Labels
-    nob_read_entire_file(PROCESSED_PATH"node-label.csv", &sb);
-    p = sb.items;
-    end = sb.items + sb.count;
+    double *train = dest + train_offset * num_features;
+    double *valid = dest + valid_offset * num_features;
+    double *test = dest + test_offset * num_features;
+    gather_features(train, temp, train_idx, train_size);
+    gather_features(valid, temp, valid_idx, valid_size);
+    gather_features(test, temp, test_idx, test_size);
 
-    for (size_t i = 0; i < NUM_NODES && p < end; i++) {
-        graph_t* sub_graph = NULL;
-        size_t idx = 0;
-        graph_split_t split = split_map[i];
+    free(temp);
+    free(line_starts);
+    munmap(data, sb.st_size);
+    close(fd);
 
-        switch (split) {
-        case TRAIN_SPLIT:
-            sub_graph = *train_graph;
-            idx = train_split_map[i];
-            break;
-        case VALID_SPLIT:
-            sub_graph = *valid_graph;
-            idx = valid_split_map[i];
-            break;
-        case TEST_SPLIT:
-            sub_graph = *test_graph;
-            idx = test_split_map[i];
-            break;
-        default:
-            assert(false && "Found invalid graph");
-        }
-
-        for (size_t j = 0; j < NUM_LABELS; j++) {
-            MIDX(sub_graph->y, idx, j) = 0;
-        }
-        size_t label = strtoull(p, &p, 10);
-        MIDX(sub_graph->y, idx, label) = 1.0;
-        if (p < end && *p == '\n') p++; // Skip newline
-    }
-    sb.count = 0;
-
-    // Node year
-    nob_read_entire_file(PROCESSED_PATH"node_year.csv", &sb);
-    p = sb.items;
-    end = sb.items + sb.count;
-
-    for (size_t i = 0; i < NUM_NODES && p < end; i++) {
-        graph_t* sub_graph = NULL;
-        size_t idx;
-        graph_split_t split = split_map[i];
-
-        switch (split) {
-        case TRAIN_SPLIT:
-            sub_graph = *train_graph;
-            idx = train_split_map[i];
-            break;
-        case VALID_SPLIT:
-            sub_graph = *valid_graph;
-            idx = valid_split_map[i];
-            break;
-        case TEST_SPLIT:
-            sub_graph = *test_graph;
-            idx = test_split_map[i];
-            break;
-        default:
-            assert(false && "Found invalid graph");
-        }
-
-        sub_graph->node_year[idx] = strtoull(p, &p, 10);
-        if (p < end && *p == '\n') p++; // Skip newline
-    }
-    sb.count = 0;
-
-
-    free(split_map);
-
-    free(train_split_idx);
-    free(valid_split_idx);
-    free(test_split_idx);
-
-    free(train_split_map);
-    free(valid_split_map);
-    free(test_split_map);
-
-    nob_sb_free(sb);
 }
 
-#else // USE_OGB_ARXIV
-
-#define NUM_NODES 4
-#define NUM_EDGES 4
-#define NUM_LABELS 2
-#define NUM_FEATURES 2
-
-#define MIDX(m, i, j) (m)->data[(i)*(m)->stride+(j)]
-
-graph_t* load_graph()
+static void load_labels(uint32_t *dest,
+                        uint32_t *train_idx, uint32_t train_offset, uint32_t train_size,
+                        uint32_t *valid_idx, uint32_t valid_offset, uint32_t valid_size,
+                        uint32_t *test_idx, uint32_t test_offset, uint32_t test_size)
 {
-    ERROR("load_graph() is not implemented in DEBUG mode");
-    return NULL;
+    size_t* temp = malloc(num_inputs * sizeof(size_t));
+
+    const char *file = "./arxiv/processed/node-label.csv";
+    int fd = open(file, O_RDONLY);
+    if (fd < 0) ERROR("Could not open %s: %s", file, strerror(errno));
+    struct stat sb;
+    fstat(fd, &sb);
+    char* data = mmap(NULL, sb.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+
+    char* p = data;
+    char* end = data + sb.st_size;
+
+    size_t i = 0;
+    while (p < end) {
+        temp[i++] = (size_t)parse_u32(&p);
+        if (*p == '\n') p++;
+    }
+
+    uint32_t *train = dest + train_offset, *valid = dest + valid_offset, *test = dest + test_offset;
+    for (size_t i = 0; i < train_size; i++) {
+        train[i] = temp[train_idx[i]];
+    }
+
+    for (size_t i = 0; i < valid_size; i++) {
+        valid[i] = temp[valid_idx[i]];
+    }
+
+    for (size_t i = 0; i < test_size; i++) {
+        test[i] = temp[test_idx[i]];
+    }
+
+    munmap(data, sb.st_size);
+    close(fd);
+    free(temp);
 }
 
-void load_split_graph(graph_t** train_graph, graph_t** valid_graph, graph_t** test_graph)
+typedef struct {
+    uint32_t *train_edges;
+    uint32_t *valid_edges;
+    uint32_t *test_edges;
+    uint32_t train_count;
+    uint32_t valid_count;
+    uint32_t test_count;
+    uint32_t raw_count;
+} EdgeTemp;
+
+static EdgeTemp* count_edges(NodeMapping* map)
 {
-    printf("Loading DEBUG graph - %d nodes, %d edges\n", NUM_NODES, NUM_EDGES);
+    const char *file = "./arxiv/processed/edge.csv";
+    int fd = open(file, O_RDONLY);
+    if (fd < 0) ERROR("Could not open %s: %s", file, strerror(errno));
+    struct stat sb;
+    fstat(fd, &sb);
+    char *data = mmap(NULL, sb.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
 
-    *train_graph = init_graph(NUM_NODES, NUM_EDGES, NUM_FEATURES, NUM_LABELS);
-    *valid_graph = NULL;
-    *test_graph = NULL;
+    size_t raw_edges = 0;
+    for (char *p = data; p < data + sb.st_size; p++) {
+        if (*p == '\n') raw_edges++;
+    }
 
-    graph_t *g = *train_graph;
+    uint32_t *train_edges = malloc(2 * raw_edges * sizeof(*train_edges));
+    uint32_t *valid_edges = malloc(2 * raw_edges * sizeof(*valid_edges));
+    uint32_t *test_edges  = malloc(2 * raw_edges * sizeof(*test_edges));
+    uint32_t train_count = 0, valid_count = 0, test_count = 0;
 
-    // COO format: [src0, src1, src2, src3, dst0, dst1, dst2, dst3]
-    // Edges: 0->1, 1->0, 2->3, 3->2
-    size_t edges[] = {
-        0, 1, 2, 3,  // sources
-        1, 0, 3, 2   // destinations
+    char *p = data, *end = data + sb.st_size;
+    while (p < end) {
+        uint32_t src = parse_u32(&p);
+        if (*p == ',') p++;
+        uint32_t dst = parse_u32(&p);
+        if (*p == '\n') p++;
+
+        NodeMapping s = map[src], d = map[dst];
+        if (s.split == d.split && s.split != INVALID_PARTITION) {
+            uint32_t *e, *count;
+            switch (s.split) {
+            case TRAIN_PARTITION: e = train_edges; count = &train_count; break;
+            case VALID_PARTITION: e = valid_edges; count = &valid_count; break;
+            case TEST_PARTITION:  e = test_edges;  count = &test_count;  break;
+            default: continue;
+            }
+
+            e[2 * (*count) + 0] = s.idx;
+            e[2 * (*count) + 1] = d.idx;
+            (*count)++;
+        }
+    }
+
+    munmap(data, sb.st_size);
+    close(fd);
+
+    EdgeTemp *temp = malloc(sizeof(*temp));
+    *temp = (EdgeTemp) {
+        .train_edges = train_edges,
+        .valid_edges = valid_edges,
+        .test_edges  = test_edges,
+        .train_count = train_count,
+        .valid_count = valid_count,
+        .test_count  = test_count,
+        .raw_count   = raw_edges
     };
 
-    // size_t edges[] = {
-    //     0, 0, 0, 0, 0, 0, 0, 2, 3, 4, 5, 6, 7, // SRC
-    //     1, 2, 3, 4, 5, 6, 7, 3, 4, 5, 6, 7, 2, // DST
-    // }
-
-    memcpy(g->edge_index, edges, 2 * NUM_EDGES * sizeof(*g->edge_index));
-
-    // Class 0 nodes: feature = [1, 0] and [0.9, 0.1]
-    MIDX(g->x, 0, 0) = 1.0;  MIDX(g->x, 0, 1) = 0.0;
-    MIDX(g->x, 1, 0) = 0.9;  MIDX(g->x, 1, 1) = 0.1;
-
-    // Class 1 nodes: feature = [0, 1] and [0.1, 0.9]
-    MIDX(g->x, 2, 0) = 0.0;  MIDX(g->x, 2, 1) = 1.0;
-    MIDX(g->x, 3, 0) = 0.1;  MIDX(g->x, 3, 1) = 0.9;
-
-    // Labels (one-hot)
-    MIDX(g->y, 0, 0) = 1.0;  MIDX(g->y, 0, 1) = 0.0;  // Class 0
-    MIDX(g->y, 1, 0) = 1.0;  MIDX(g->y, 1, 1) = 0.0;  // Class 0
-    MIDX(g->y, 2, 0) = 0.0;  MIDX(g->y, 2, 1) = 1.0;  // Class 1
-    MIDX(g->y, 3, 0) = 0.0;  MIDX(g->y, 3, 1) = 1.0;  // Class 1
+    return temp;
 }
 
-#endif // USE_OGB_ARXIV
-
-
-void destroy_graph(graph_t *g)
+static void load_edges(uint32_t *dest, EdgeTemp *temp,
+                       uint32_t train_offset, uint32_t valid_offset, uint32_t test_offset)
 {
-    free(g->edge_index);
-    matrix_destroy(g->x);
-    matrix_destroy(g->y);
-    // Optional members
-    if (g->node_year != NULL) free(g->node_year);
+    memcpy(dest + train_offset, temp->train_edges, 2 * temp->train_count * sizeof(uint32_t));
+    memcpy(dest + valid_offset, temp->valid_edges, 2 * temp->valid_count * sizeof(uint32_t));
+    memcpy(dest + test_offset, temp->test_edges, 2 * temp->test_count * sizeof(uint32_t));
 
-    free(g);
+    free(temp->train_edges);
+    free(temp->valid_edges);
+    free(temp->test_edges);
+    free(temp);
+}
+
+Dataset* load_arxiv_dataset()
+{
+    double t = omp_get_wtime();
+
+    uint32_t *train_idx, *valid_idx, *test_idx;
+    uint32_t train_size = load_split("./arxiv/processed/train.csv", &train_idx);
+    uint32_t valid_size = load_split("./arxiv/processed/valid.csv", &valid_idx);
+    uint32_t test_size = load_split("./arxiv/processed/test.csv", &test_idx);
+
+#ifndef NDEBUG
+    train_size = 700, valid_size = 400, test_size = 600;
+#endif
+
+    NodeMapping* node_map = malloc(num_inputs * sizeof(*node_map));
+    build_node_mapping(node_map, num_inputs,
+                       train_idx, train_size, valid_idx, valid_size, test_idx,  test_size);
+
+    Dataset *data = malloc(sizeof(*data));
+
+    // Count Edge
+    EdgeTemp *edge_temp = count_edges(node_map);
+    uint32_t train_edges = edge_temp->train_count;
+    uint32_t valid_edges = edge_temp->valid_count;
+    uint32_t test_edges  = edge_temp->test_count;
+    uint32_t raw_edges   = edge_temp->raw_count;
+    uint32_t num_edges = train_edges + valid_edges + test_edges;
+
+    // Add size info
+#ifndef NDEBUG
+    data->num_inputs = train_size + valid_size + test_size;
+#else
+    data->num_inputs = num_inputs;
+#endif
+    data->num_edges = num_edges;
+    data->num_features = num_features;
+    data->num_classes = num_classes;
+
+    data->train = (Slice) {
+        .node = { .offset = 0, .count = train_size},
+        .edge = { .offset = 0, .count = train_edges}
+    };
+
+    data->valid = (Slice) {
+        .node = { .offset = train_size, .count = valid_size},
+        .edge = { .offset = 2*train_edges, .count = valid_edges}
+    };
+
+    data->test = (Slice) {
+        .node = { .offset = train_size+valid_size, .count = test_size},
+        .edge = { .offset = 2*(train_edges+valid_edges), .count = test_edges}
+    };
+
+    // Features
+    data->inputs = malloc(num_inputs * num_features * sizeof(*data->inputs));
+    load_inputs(data->inputs,
+               train_idx, data->train.node.offset, data->train.node.count,
+               valid_idx, data->valid.node.offset, data->valid.node.count,
+               test_idx, data->test.node.offset, data->test.node.count);
+
+    // Labels
+    data->labels = malloc(num_inputs * sizeof(*data->labels));
+    load_labels(data->labels,
+                train_idx, data->train.node.offset, data->train.node.count,
+                valid_idx, data->valid.node.offset, data->valid.node.count,
+                test_idx, data->test.node.offset, data->test.node.count);
+
+    // Edges
+    data->edges.data = malloc(2 * num_edges * sizeof(*data->edges.data));
+    load_edges(data->edges.data, edge_temp,
+               data->train.edge.offset,
+               data->valid.edge.offset,
+               data->test.edge.offset);
+
+    free(train_idx);
+    free(valid_idx);
+    free(test_idx);
+    free(node_map);
+
+    printf("Loaded OGB-ARXIV [%u/%u/%u] in %.2fs (edges: %u -> %u, -%.0f%%)\n",
+           train_size, valid_size, test_size,
+           omp_get_wtime() - t,
+           raw_edges, train_edges + valid_edges + test_edges,
+           100 - 100.0 * (train_edges + valid_edges + test_edges) / raw_edges);
+
+    return data;
+}
+
+void destroy_dataset(Dataset *ds)
+{
+    free(ds->edges.data);
+    free(ds->inputs);
+    free(ds->labels);
+    free(ds);
 }

@@ -20,7 +20,7 @@
 #include "../nob.h"
 
 #define FLAG_IMPLEMENTATION
-#define FLAG_PUSH_DASH_DASH_BACK
+const int flag_push_dash_DASH_BACK;
 #include "../flag.h"
 
 #ifdef NDEBUG
@@ -46,13 +46,7 @@ void usage(FILE *stream)
 
 void print_config(void)
 {
-    const char *dataset =
-#ifdef USE_OGB_ARXIV
-        "ogb-arxiv";
-#else
-        "dev";
-#endif
-
+    const char *dataset = "ogb-arxiv";
     printf("Config: epochs=%zu, lr=%g, layers=%zu, hidden=%zu, data=%s, partition=%s, threads=%d\n",
            epochs, lr, layers, channels, dataset, getenv("SLURM_JOB_PARTITION"), omp_get_max_threads());
 }
@@ -74,17 +68,17 @@ void print_memory_usage()
     }
 }
 
-void inference(SageNet *net, graph_t *g)
+void inference(SageNet *net)
 {
     TIMER_FUNC();
 
     for (size_t i = 0; i < net->enc_depth; i++) {
-        sageconv(net->enc_sage[i], g);
+        sageconv(net->enc_sage[i]);
         relu(net->enc_relu[i]);
         normalize(net->enc_norm[i]);
     }
 
-    sageconv(net->cls_sage, g);
+    sageconv(net->cls_sage);
 
 #ifdef USE_PREDICTION_HEAD
     linear(net->linear);
@@ -94,33 +88,51 @@ void inference(SageNet *net, graph_t *g)
 
 }
 
-void train(SageNet *net, graph_t *g)
+void train(SageNet *net, Slice train_slice)
 {
     TIMER_FUNC();
 
-    cross_entropy_backward(net->logsoft, g->y);
+    cross_entropy_backward(net->logsoft, train_slice);
 
 #ifdef USE_PREDICTION_HEAD
-    linear_backward(net->linear);
-    linear_layer_update_weights(net->linear, LEARNING_RATE);
+    linear_backward(net->linear, train_slice);
+    linear_layer_update_weights(net->linear, LEARNING_RATE, train_slice);
 #endif
 
-    sageconv_backward(net->cls_sage, g);
-    sage_layer_update_weights(net->cls_sage, lr);
+    sageconv_backward(net->cls_sage, train_slice);
+    sage_layer_update_weights(net->cls_sage, lr, train_slice);
 
     for (size_t i = net->enc_depth-1; i < net->enc_depth; i--) {
-        normalize_backward(net->enc_norm[i]);
-        relu_backward(net->enc_relu[i]);
-        sageconv_backward(net->enc_sage[i], g);
-        sage_layer_update_weights(net->enc_sage[i], lr);
+        normalize_backward(net->enc_norm[i], train_slice);
+        relu_backward(net->enc_relu[i], train_slice);
+        sageconv_backward(net->enc_sage[i], train_slice);
+        sage_layer_update_weights(net->enc_sage[i], lr, train_slice);
     }
 
     // Reset grads
     sage_net_zero_gradients(net);
 }
 
+bool is_double_eq(double a, double b)
+{
+    const double abs_tol = 1e-9;
+    const double rel_tol = 1e-6;
+
+    // https://randomascii.wordpress.com/2012/02/25/comparing-floating-point-numbers-2012-edition/
+
+    double abs_diff = fabs(a - b);
+    double abs_max = fmax(fabs(a), fabs(b));
+
+    if (abs_diff > abs_tol && abs_diff > rel_tol * abs_max) {
+        return false;
+    }
+
+    return true;
+}
+
 int main(int argc, char** argv)
 {
+    // srand(time(NULL));
     srand(0);
     nob_minimal_log_level = NOB_WARNING;
 
@@ -138,23 +150,22 @@ int main(int argc, char** argv)
 
     print_config();
 
-    // graph_t *train_graph = load_graph();
-    graph_t *train_graph, *valid_graph, *test_graph;
-    load_split_graph(&train_graph, &valid_graph, &test_graph);
+    Dataset *data = load_arxiv_dataset();
 
-    SageNet *net = sage_net_create(layers, channels, train_graph);
+    SageNet *net = sage_net_create(layers, channels, data);
     sage_net_info(net);
 
     TIMER_BLOCK("run_time", {
             for (size_t epoch = 1; epoch <= epochs; epoch++) {
                 TIMER_BLOCK("epoch", {
-                        inference(net, train_graph);
-
-                        double loss = nll_loss(net->logsoft->output, train_graph->y);
-                        double acc = accuracy(net->logsoft->output, train_graph->y);
-                        printf("[epoch %zu] loss: %f, accuracy: %.2f%%\n", epoch, loss, 100*acc);
-
-                        train(net, train_graph);
+                        inference(net);
+                        double loss = nll_loss(net->logsoft->output, data->labels, data->train);
+                        double train_acc = accuracy(net->logsoft->output, data->labels, data->num_classes, data->train);
+                        double valid_acc = accuracy(net->logsoft->output, data->labels, data->num_classes, data->valid);
+                        double test_acc = accuracy(net->logsoft->output, data->labels, data->num_classes, data->test);
+                        train(net, data->train);
+                        printf("[Epoch %zu] Loss: %f, Train: %.2f%%, Valid: %.2f%%, Test: %.2f%%\n",
+                               epoch, loss, 100*train_acc, 100*valid_acc, 100*test_acc);
                     });
             }
         });
@@ -165,6 +176,7 @@ int main(int argc, char** argv)
     timer_export_csv(csv_name);
 
     sage_net_destroy(net);
+    destroy_dataset(data);
     return 0;
 }
 
