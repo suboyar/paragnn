@@ -12,17 +12,17 @@ void relu(ReluLayer* const l);
 void normalize(L2NormLayer* const l);
 void linear(LinearLayer* const l);
 void logsoft(LogSoftLayer* const l);
-double nll_loss(Matrix *const pred, uint32_t *labels, Slice slice);
-double accuracy(Matrix *const pred, uint32_t *labels, uint32_t num_classes, Slice slice);
+double nll_loss(Matrix *const pred, uint32_t *labels, Range nodes);
+double accuracy(Matrix *const pred, uint32_t *labels, uint32_t num_classes, Range nodes);
 
-void cross_entropy_backward(LogSoftLayer *const l, Slice slice);
-void linear_backward(LinearLayer* const l, Slice slice);
-void normalize_backward(L2NormLayer* const l, Slice slice);
-void relu_backward(ReluLayer* const l, Slice slice);
-void sageconv_backward(SageLayer* const l, Slice slice);
+void cross_entropy_backward(LogSoftLayer *const l, Range nodes);
+void linear_backward(LinearLayer* const l, Range nodes);
+void normalize_backward(L2NormLayer* const l, Range nodes);
+void relu_backward(ReluLayer* const l, Range nodes);
+void sageconv_backward(SageLayer *const l, Range nodes, Range edges);
 
-void linear_layer_update_weights(LinearLayer* const l, float lr, Slice slice);
-void sage_layer_update_weights(SageLayer* const l, float lr, Slice slice);
+void sage_layer_update_weights(SageLayer* const l, float lr);
+void linear_layer_update_weights(LinearLayer* const l, float lr);
 
 void sage_layer_zero_gradients(SageLayer* l);
 void relu_layer_zero_gradients(ReluLayer* l);

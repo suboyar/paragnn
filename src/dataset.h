@@ -34,8 +34,13 @@ typedef struct {
 } EdgeIndex;
 
 typedef struct {
-    struct {size_t offset; size_t count;} node;
-    struct {size_t offset; size_t count;} edge;
+    size_t start;
+    size_t end;
+} Range;
+
+typedef struct {
+    Range node;
+    Range edge;
 } Slice;
 
 typedef struct {

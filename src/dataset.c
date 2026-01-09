@@ -26,6 +26,8 @@ typedef struct {
     size_t idx;
 } NodeMapping;
 
+static inline size_t range_len(Range r) { return r.end - r.start; }
+
 // This is specifically design to only conver cases for node-feat.csv with no space handling
 static inline double parse_double(char** pp)
 {
@@ -146,9 +148,9 @@ static inline void gather_features(double *dest, double *src, uint32_t *split_id
 }
 
 static void load_inputs(double *dest,
-                       uint32_t *train_idx, uint32_t train_offset, uint32_t train_size,
-                       uint32_t *valid_idx, uint32_t valid_offset, uint32_t valid_size,
-                       uint32_t *test_idx, uint32_t test_offset, uint32_t test_size)
+                        uint32_t *train_idx, Range train_range,
+                        uint32_t *valid_idx, Range valid_range,
+                        uint32_t *test_idx, Range test_range)
 {
     double* temp = malloc(num_inputs * num_features * sizeof(double));
 
@@ -177,12 +179,12 @@ static void load_inputs(double *dest,
         }
     }
 
-    double *train = dest + train_offset * num_features;
-    double *valid = dest + valid_offset * num_features;
-    double *test = dest + test_offset * num_features;
-    gather_features(train, temp, train_idx, train_size);
-    gather_features(valid, temp, valid_idx, valid_size);
-    gather_features(test, temp, test_idx, test_size);
+    double *train = dest + train_range.start * num_features;
+    double *valid = dest + valid_range.start * num_features;
+    double *test = dest + test_range.start * num_features;
+    gather_features(train, temp, train_idx, range_len(train_range));
+    gather_features(valid, temp, valid_idx, range_len(valid_range));
+    gather_features(test, temp, test_idx, range_len(test_range));
 
     free(temp);
     free(line_starts);
@@ -192,9 +194,9 @@ static void load_inputs(double *dest,
 }
 
 static void load_labels(uint32_t *dest,
-                        uint32_t *train_idx, uint32_t train_offset, uint32_t train_size,
-                        uint32_t *valid_idx, uint32_t valid_offset, uint32_t valid_size,
-                        uint32_t *test_idx, uint32_t test_offset, uint32_t test_size)
+                        uint32_t *train_idx, Range train_range,
+                        uint32_t *valid_idx, Range valid_range,
+                        uint32_t *test_idx, Range test_range)
 {
     size_t* temp = malloc(num_inputs * sizeof(size_t));
 
@@ -214,16 +216,18 @@ static void load_labels(uint32_t *dest,
         if (*p == '\n') p++;
     }
 
-    uint32_t *train = dest + train_offset, *valid = dest + valid_offset, *test = dest + test_offset;
-    for (size_t i = 0; i < train_size; i++) {
+    uint32_t *train = dest + train_range.start;
+    for (size_t i = 0; i < range_len(train_range); i++) {
         train[i] = temp[train_idx[i]];
     }
 
-    for (size_t i = 0; i < valid_size; i++) {
+    uint32_t *valid = dest + valid_range.start;
+    for (size_t i = 0; i < range_len(valid_range); i++) {
         valid[i] = temp[valid_idx[i]];
     }
 
-    for (size_t i = 0; i < test_size; i++) {
+    uint32_t *test = dest + test_range.start;
+    for (size_t i = 0; i < range_len(test_range); i++) {
         test[i] = temp[test_idx[i]];
     }
 
@@ -302,11 +306,11 @@ static EdgeTemp* count_edges(NodeMapping* map)
 }
 
 static void load_edges(uint32_t *dest, EdgeTemp *temp,
-                       uint32_t train_offset, uint32_t valid_offset, uint32_t test_offset)
+                       Range train_range, Range valid_range, Range test_range)
 {
-    memcpy(dest + train_offset, temp->train_edges, 2 * temp->train_count * sizeof(uint32_t));
-    memcpy(dest + valid_offset, temp->valid_edges, 2 * temp->valid_count * sizeof(uint32_t));
-    memcpy(dest + test_offset, temp->test_edges, 2 * temp->test_count * sizeof(uint32_t));
+    memcpy(dest + 2*train_range.start, temp->train_edges, 2*range_len(train_range) * sizeof(uint32_t));
+    memcpy(dest + 2*valid_range.start, temp->valid_edges, 2*range_len(valid_range) * sizeof(uint32_t));
+    memcpy(dest + 2*test_range.start, temp->test_edges, 2*range_len(test_range) * sizeof(uint32_t));
 
     free(temp->train_edges);
     free(temp->valid_edges);
@@ -351,41 +355,42 @@ Dataset* load_arxiv_dataset()
     data->num_features = num_features;
     data->num_classes = num_classes;
 
+    size_t node_offset = 0, edge_offset = 0;
     data->train = (Slice) {
-        .node = { .offset = 0, .count = train_size},
-        .edge = { .offset = 0, .count = train_edges}
+        .node = { .start=0, .end=train_size },
+        .edge = { .start=0, .end=train_edges }
     };
 
     data->valid = (Slice) {
-        .node = { .offset = train_size, .count = valid_size},
-        .edge = { .offset = 2*train_edges, .count = valid_edges}
+        .node = { .start=data->train.node.end, .end=(data->train.node.end + valid_size) },
+        .edge = { .start=data->train.edge.end, .end=(data->train.edge.end + valid_edges) }
     };
 
     data->test = (Slice) {
-        .node = { .offset = train_size+valid_size, .count = test_size},
-        .edge = { .offset = 2*(train_edges+valid_edges), .count = test_edges}
+        .node = { .start=data->valid.node.end, .end=(data->valid.node.end + test_size) },
+        .edge = { .start=data->valid.edge.end, .end=(data->valid.edge.end + test_edges) }
     };
 
     // Features
     data->inputs = malloc(num_inputs * num_features * sizeof(*data->inputs));
     load_inputs(data->inputs,
-               train_idx, data->train.node.offset, data->train.node.count,
-               valid_idx, data->valid.node.offset, data->valid.node.count,
-               test_idx, data->test.node.offset, data->test.node.count);
+                train_idx, data->train.node,
+                valid_idx, data->valid.node,
+                test_idx, data->test.node);
 
     // Labels
     data->labels = malloc(num_inputs * sizeof(*data->labels));
     load_labels(data->labels,
-                train_idx, data->train.node.offset, data->train.node.count,
-                valid_idx, data->valid.node.offset, data->valid.node.count,
-                test_idx, data->test.node.offset, data->test.node.count);
+                train_idx, data->train.node,
+                valid_idx, data->valid.node,
+                test_idx, data->test.node);
 
     // Edges
     data->edges.data = malloc(2 * num_edges * sizeof(*data->edges.data));
     load_edges(data->edges.data, edge_temp,
-               data->train.edge.offset,
-               data->valid.edge.offset,
-               data->test.edge.offset);
+               data->train.edge,
+               data->valid.edge,
+               data->test.edge);
 
     free(train_idx);
     free(valid_idx);

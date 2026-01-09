@@ -92,21 +92,21 @@ void train(SageNet *net, Slice train_slice)
 {
     TIMER_FUNC();
 
-    cross_entropy_backward(net->logsoft, train_slice);
+    cross_entropy_backward(net->logsoft, train_slice.node);
 
 #ifdef USE_PREDICTION_HEAD
-    linear_backward(net->linear, train_slice);
-    linear_layer_update_weights(net->linear, LEARNING_RATE, train_slice);
+    linear_backward(net->linear, train_slice.node);
+    linear_layer_update_weights(net->linear, LEARNING_RATE);
 #endif
 
-    sageconv_backward(net->cls_sage, train_slice);
-    sage_layer_update_weights(net->cls_sage, lr, train_slice);
+    sageconv_backward(net->cls_sage, train_slice.node, train_slice.edge);
+    sage_layer_update_weights(net->cls_sage, lr);
 
     for (size_t i = net->enc_depth-1; i < net->enc_depth; i--) {
-        normalize_backward(net->enc_norm[i], train_slice);
-        relu_backward(net->enc_relu[i], train_slice);
-        sageconv_backward(net->enc_sage[i], train_slice);
-        sage_layer_update_weights(net->enc_sage[i], lr, train_slice);
+        normalize_backward(net->enc_norm[i], train_slice.node);
+        relu_backward(net->enc_relu[i], train_slice.node);
+        sageconv_backward(net->enc_sage[i], train_slice.node, train_slice.edge);
+        sage_layer_update_weights(net->enc_sage[i], lr);
     }
 
     // Reset grads
@@ -159,10 +159,10 @@ int main(int argc, char** argv)
             for (size_t epoch = 1; epoch <= epochs; epoch++) {
                 TIMER_BLOCK("epoch", {
                         inference(net);
-                        double loss = nll_loss(net->logsoft->output, data->labels, data->train);
-                        double train_acc = accuracy(net->logsoft->output, data->labels, data->num_classes, data->train);
-                        double valid_acc = accuracy(net->logsoft->output, data->labels, data->num_classes, data->valid);
-                        double test_acc = accuracy(net->logsoft->output, data->labels, data->num_classes, data->test);
+                        double loss = nll_loss(net->logsoft->output, data->labels, data->train.node);
+                        double train_acc = accuracy(net->logsoft->output, data->labels, data->num_classes, data->train.node);
+                        double valid_acc = accuracy(net->logsoft->output, data->labels, data->num_classes, data->valid.node);
+                        double test_acc = accuracy(net->logsoft->output, data->labels, data->num_classes, data->test.node);
                         train(net, data->train);
                         printf("[Epoch %zu] Loss: %f, Train: %.2f%%, Valid: %.2f%%, Test: %.2f%%\n",
                                epoch, loss, 100*train_acc, 100*valid_acc, 100*test_acc);

@@ -16,6 +16,8 @@
 
 #include "../nob.h"
 
+static inline size_t range_len(Range r) { return r.end - r.start; }
+
 // Forward propagation
 void aggregate(SageLayer *const l)
 {
@@ -36,7 +38,6 @@ void aggregate(SageLayer *const l)
     double* t_pool = calloc(sizeof(double), nthreads);
     if (!t_pool) ERROR("Could not calloc t_pool");
 
-    // printf("aggregate(): in_dim==l->agg->stride: %s\n", (in_dim==l->agg->stride) ? "True" : "False");
     memset(l->agg->data, 0, num_inputs*in_dim*sizeof(*l->agg->data));
     memset(l->mean_scale, 0, num_inputs * sizeof(*l->mean_scale));
 
@@ -235,34 +236,28 @@ void logsoft(LogSoftLayer *const l)
     nob_log(NOB_INFO, "log_softmax: ok");
 }
 
-double nll_loss(Matrix *const log_probs, uint32_t *labels, Slice slice)
+double nll_loss(Matrix *const log_probs, uint32_t *labels, Range nodes)
 {
     TIMER_FUNC();
 
-    size_t offset = slice.node.offset;
-    size_t count = slice.node.count;
-
     double loss = 0.0;
 #pragma omp parallel for reduction(+:loss)
-	for (size_t i = offset; i < count+offset; i++) {
+	for (size_t i = nodes.start; i < nodes.end; i++) {
         uint32_t target = labels[i];
         double log_prob = MIDX(log_probs, i, target);
         loss -= log_prob;
     }
 
-    return loss/count;
+    return loss/range_len(nodes);
 }
 
-double accuracy(Matrix *const log_probs, uint32_t *labels, uint32_t num_classes, Slice slice)
+double accuracy(Matrix *const log_probs, uint32_t *labels, uint32_t num_classes, Range nodes)
 {
     TIMER_FUNC();
 
-    size_t offset = slice.node.offset;
-    size_t count = slice.node.count;
-
     uint64_t correct = 0.0;
 #pragma omp parallel for reduction(+:correct)
-    for (size_t i = offset; i < count+offset; i++) {
+    for (size_t i = nodes.start; i < nodes.end; i++) {
         uint32_t target = labels[i];
         uint32_t pred_class = 0;
         for (size_t j = 1; j < num_classes; j++) {
@@ -274,23 +269,21 @@ double accuracy(Matrix *const log_probs, uint32_t *labels, uint32_t num_classes,
         if (pred_class == target) correct++;
     }
 
-    return (double)correct/count;
+    return (double)correct/range_len(nodes);
 }
 
 // Computes gradient flow from both NLLLoss and LogSoftmax.
 // NOTE: we assume mean reduction from NLLLoss
-void cross_entropy_backward(LogSoftLayer *const l, Slice train)
+void cross_entropy_backward(LogSoftLayer *const l, Range nodes)
 {
     TIMER_FUNC();
 
-    uint32_t offset = train.node.offset;
-    uint32_t count = train.node.count;
     uint32_t num_classes = l->data->num_classes;
     uint32_t *labels = l->data->labels;
 
-    double scale = 1.0 / count;
+    double scale = 1.0 / range_len(nodes);
 #pragma omp parallel for
-    for (size_t i = offset; i < count+offset; i++) {
+    for (size_t i = nodes.start; i < nodes.end; i++) {
         uint32_t target = labels[i];
         for (size_t j = 0; j < num_classes; j++) {
             double softmax_val = exp(MIDX(l->output, i, j));
@@ -304,13 +297,9 @@ void cross_entropy_backward(LogSoftLayer *const l, Slice train)
     nob_log(NOB_INFO, "cross_entropy_backward: ok");
 }
 
-void linear_backward(LinearLayer *const l, Slice train)
+void linear_backward(LinearLayer *const l, Range nodes)
 {
     TIMER_FUNC();
-
-    uint32_t offset = train.node.offset;
-    uint32_t count = train.node.count;
-    uint32_t num_features = l->data->num_features;
 
     // Downstream:
     // Column-major: grad_input = W^T @ grad_output
@@ -343,10 +332,12 @@ void linear_backward(LinearLayer *const l, Slice train)
         });
 
     if (l->grad_bias != NULL) {
+        uint32_t num_features = l->data->num_features;
+
         // Sum gradients across batch dimension
         double t0 = omp_get_wtime();
 #pragma omp parallel for
-        for (size_t i = offset; i < count+offset; i++) {
+        for (size_t i = nodes.start; i < nodes.end; i++) {
             for (size_t j = 0; j < num_features; j++) {
                 // Accumulate the bias used by all batch samples
 #pragma omp atomic
@@ -360,19 +351,17 @@ void linear_backward(LinearLayer *const l, Slice train)
     nob_log(NOB_INFO, "linear_backward: ok");
 }
 
-void normalize_backward(L2NormLayer *const l, Slice train)
+void normalize_backward(L2NormLayer *const l, Range nodes)
 {
     TIMER_FUNC();
 
-    uint32_t offset = train.node.offset;
-    uint32_t count = train.node.count;
     uint32_t num_features = l->data->num_features;
 
 #pragma omp parallel
     {
         Matrix* grad_local = matrix_create(num_features, num_features);
 #pragma omp for
-        for (size_t i = offset; i < count+offset; i++) {
+        for (size_t i = nodes.start; i < nodes.end; i++) {
             for (size_t j = 0; j < num_features; j++) {
                 for (size_t k = 0; k < num_features; k++) {
                     MIDX(grad_local, j, k) = - MIDX(l->output, i, j) * MIDX(l->output, i, k);
@@ -400,17 +389,15 @@ void normalize_backward(L2NormLayer *const l, Slice train)
     nob_log(NOB_INFO, "normalize_backward: ok");
 }
 
-void relu_backward(ReluLayer *const l, Slice train)
+void relu_backward(ReluLayer *const l, Range nodes)
 {
     TIMER_FUNC();
 
-    uint32_t offset = train.node.offset;
-    uint32_t count = train.node.count;
     uint32_t num_features = l->data->num_features;
 
     // TODO: grad_input = grad_output * fmaxf(0.0f, copysignf(1.0f, output));
 #pragma omp parallel for
-    for (size_t i = offset; i < count+offset; i++) {
+    for (size_t i = nodes.start; i < nodes.end; i++) {
         for (size_t j = 0; j < num_features; j++) {
             MIDX(l->grad_input, i, j) = MIDX(l->grad_output, i, j);
             if (MIDX(l->output, i, j) <= 0.0) {
@@ -422,60 +409,62 @@ void relu_backward(ReluLayer *const l, Slice train)
     nob_log(NOB_INFO, "relu_backward: ok");
 }
 
-void sageconv_backward(SageLayer *const l, Slice train)
+void sageconv_backward(SageLayer *const l, Range nodes, Range edges)
 {
     TIMER_FUNC();
 
-    uint32_t offset = train.node.offset;
-    uint32_t count = train.node.count;
-    uint32_t edge_count = train.edge.count;
-    uint32_t edge_offset = train.edge.offset;
-    EdgeIndex edges = l->data->edges;
+    size_t ldinput = l->input->stride;
+    size_t ldagg = l->agg->stride;
+    size_t ldWroot = l->Wroot->stride;
+    size_t ldd_output = l->grad_output->stride;
+    size_t ldd_Wroot = l->grad_Wroot->stride;
+    size_t ldd_Wagg = l->grad_Wagg->stride;
+    size_t ldd_input = l->grad_input->stride;
+
+    double *input = l->input->data + nodes.start * ldinput;
+    double *agg = l->agg->data + nodes.start * ldagg;
+    double *d_output = l->grad_output->data + nodes.start * ldd_output;
+    double *d_input = l->grad_input->data + nodes.start * ldd_input;
+
+    double *Wroot = l->Wroot->data;
+    double *d_Wroot = l->grad_Wroot->data;
+    double *d_Wagg = l->grad_Wagg->data;
 
     TIMER_BLOCK(l->timer_dWroot, {
-            double *input = l->input->data + offset * l->input->stride;
-            double *grad_output = l->grad_output->data + offset * l->grad_output->stride;
-            double *grad_Wroot = l->grad_Wroot->data;
-            dgemm(l->in_dim, l->out_dim, count,
+            dgemm(l->in_dim, l->out_dim, range_len(nodes),
                   LinalgTrans, LinalgNoTrans,
                   1.0,
-                  input, l->input->stride,
-                  grad_output, l->grad_output->stride,
+                  input, ldinput,
+                  d_output, ldd_output,
                   0.0,
-                  grad_Wroot, l->grad_Wroot->stride);
+                  d_Wroot, ldd_Wroot);
         });
 
     TIMER_BLOCK(l->timer_dWagg, {
-            double *agg = l->agg->data + offset * l->agg->stride;
-            double *grad_output = l->grad_output->data + offset * l->grad_output->stride;
-            double *grad_Wagg = l->grad_Wagg->data;
-            dgemm(l->in_dim, l->out_dim, count,
+            dgemm(l->in_dim, l->out_dim, range_len(nodes),
                   LinalgTrans, LinalgNoTrans,
                   1.0,
-                  agg, l->agg->stride,
-                  grad_output, l->grad_output->stride,
+                  agg, ldagg,
+                  d_output, ldd_output,
                   0.0,
-                  grad_Wagg, l->grad_Wagg->stride);
+                  d_Wagg, ldd_Wagg);
                 });
 
     TIMER_BLOCK(l->timer_dinput, {
-            double *grad_output = l->grad_output->data + offset * l->grad_output->stride;
-            double *Wroot = l->Wroot->data;
-            double *grad_input = l->grad_input->data + offset * l->grad_input->stride;
-            dgemm(count, l->in_dim, l->out_dim,
+            dgemm(range_len(nodes), l->in_dim, l->out_dim,
                   LinalgNoTrans, LinalgTrans,
                   1.0,
-                  grad_output, l->grad_output->stride,
-                  Wroot, l->Wroot->stride,
+                  d_output, ldd_output,
+                  Wroot, ldWroot,
                   0.0,
-                  grad_input, l->grad_input->stride);
+                  d_input, ldd_input);
         });
 
     double t0 = omp_get_wtime();
 #pragma omp parallel for
-    for (size_t edge = edge_offset; edge < edge_count+edge_offset; edge++) {
-        uint32_t src = EDGE_SRC(&edges, edge);
-        uint32_t dst = EDGE_DST(&edges, edge);
+    for (size_t edge = edges.start; edge < edges.end; edge++) {
+        uint32_t src = EDGE_SRC(&l->data->edges, edge);
+        uint32_t dst = EDGE_DST(&l->data->edges, edge);
 
         // With source_to_target flow, src gets gradient from dst's computation
         // (outgoing gradient) grad_input[src] += grad_output[dst] @ Wagg^T
@@ -494,39 +483,27 @@ void sageconv_backward(SageLayer *const l, Slice train)
 }
 
 // Update weights
-void sage_layer_update_weights(SageLayer* const l, float lr, Slice train)
+void sage_layer_update_weights(SageLayer* const l, float lr)
 {
-    (void)train;
-    // uint32_t offset = train.node.offset;
-    // uint32_t count = train.node.count;
-    // uint32_t num_features = l->data->num_features;
-
-    double scale = (double)-lr;
-
-    daxpy(l->Wroot->M*l->Wroot->N, scale,
+    daxpy(l->Wroot->M*l->Wroot->N, -lr,
           l->grad_Wroot->data, 1,
           l->Wroot->data, 1);
 
-    daxpy(l->Wagg->M*l->Wagg->N, scale,
+    daxpy(l->Wagg->M*l->Wagg->N, -lr,
           l->grad_Wagg->data, 1,
           l->Wagg->data, 1);
 
     nob_log(NOB_INFO, "update_sageconv_weights: ok");
 }
 
-void linear_layer_update_weights(LinearLayer* const l, float lr, Slice train)
+void linear_layer_update_weights(LinearLayer* const l, float lr)
 {
-    (void)train;
-    // uint32_t count = train.node.count
-
-    double scale = (double)-lr;
-
-    daxpy(l->W->M*l->W->N, scale,
+    daxpy(l->W->M*l->W->N, -lr,
           l->grad_W->data, 1,
           l->W->data, 1);
 
     if (l->grad_bias != NULL) {
-        daxpy(l->bias->N, scale,
+        daxpy(l->bias->N, -lr,
               l->grad_bias->data, 1,
               l->bias->data, 1);
     }
