@@ -10,7 +10,7 @@
 #include "core.h"
 #include "gnn.h"
 #include "matrix.h"
-#include "graph.h"
+#include "dataset.h"
 #include "timer.h"
 #include "linalg/linalg.h"
 

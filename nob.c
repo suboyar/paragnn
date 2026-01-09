@@ -59,7 +59,7 @@ Target targets[] = {
         .srcs = STRINGS(
             SRC_FOLDER"main.c",
             SRC_FOLDER"gnn.c",
-            SRC_FOLDER"graph.c",
+            SRC_FOLDER"dataset.c",
             SRC_FOLDER"layers.c",
             SRC_FOLDER"matrix.c",
             SRC_FOLDER"linalg/axpy.c",

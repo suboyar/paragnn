@@ -14,7 +14,7 @@
 #include "matrix.h"
 #include "layers.h"
 #include "gnn.h"
-#include "graph.h"
+#include "dataset.h"
 
 #define NOB_IMPLEMENTATION
 #include "../nob.h"

@@ -5,7 +5,7 @@
 
 #include "matrix.h"
 #include "layers.h"
-#include "graph.h"
+#include "dataset.h"
 
 void sageconv(SageLayer* const l);
 void relu(ReluLayer* const l);

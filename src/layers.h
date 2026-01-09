@@ -4,7 +4,7 @@
 #include <stdio.h>
 
 #include "matrix.h"
-#include "graph.h"
+#include "dataset.h"
 
 typedef struct {
     Dataset *data;

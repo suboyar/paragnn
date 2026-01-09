@@ -8,7 +8,7 @@
 
 #include <omp.h>
 
-#include "graph.h"
+#include "dataset.h"
 
 static const uint32_t num_inputs = 169343;
 static const uint32_t num_features = 128;
