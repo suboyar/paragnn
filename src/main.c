@@ -8,6 +8,7 @@
 #include <time.h>
 
 #include <omp.h>
+#include <cblas.h>
 
 #include "core.h"
 #include "timer.h"
@@ -47,8 +48,19 @@ void usage(FILE *stream)
 void print_config(void)
 {
     const char *dataset = "ogb-arxiv";
-    printf("Config: epochs=%zu, lr=%g, layers=%zu, hidden=%zu, data=%s, partition=%s, threads=%d\n",
-           epochs, lr, layers, channels, dataset, getenv("SLURM_JOB_PARTITION"), omp_get_max_threads());
+    const char *partition = getenv("SLURM_JOB_PARTITION");
+    const int omp_threads = omp_get_max_threads();
+
+    printf("Config: epochs=%zu, lr=%g, layers=%zu, hidden=%zu, data=%s\n",
+           epochs, lr, layers, channels, dataset);
+#if defined(USE_CBLAS)
+    printf("Runtime: threads(OMP=%d, BLAS=%d), partition=%s\n",
+           omp_threads, openblas_get_num_threads(), partition);
+    printf("OpenBLAS: %s\n", openblas_get_config());
+#else
+    printf("Runtime: threads(OMP=%d, BLAS=off), partition=%s\n",
+           omp_threads, partition);
+#endif
 }
 
 // TODO: Check out getrusage from <sys/resource.h>
@@ -148,6 +160,7 @@ int main(int argc, char** argv)
         exit(1);
     }
 
+    openblas_set_num_threads(omp_get_max_threads());
     print_config();
 
     Dataset *data = load_arxiv_dataset();
