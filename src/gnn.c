@@ -58,8 +58,7 @@ void aggregate(SageLayer *const l, Range nodes, Range edges)
                 // The source_to_target flow is the default of torch_geometric.nn.conv.message_passing,
                 // and as far as I can tell non of the entries of OGB leaderboard that uses SageCONV
                 // changes this to target_to_source. But, many seems to transform ogb-arxiv (directed graph)
-
-                // to have symmetric edges, making it a undirected graph. GraphSAGE paper also uses undirected
+                // to have symmetric edges, making it an undirected graph. GraphSAGE paper also uses undirected
                 // citation graph dataset for their experiments.
 
                 if (i == dst) { // paper src cites i (source_to_target)

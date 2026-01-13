@@ -104,7 +104,8 @@ inline static void dgemm_beta(size_t M, size_t N, double beta, size_t ldc, doubl
 // When doing doing matmul only B needs to be traversed column-wise,
 // but since matrix A's shape is of MxN and B's shape is MxK, this forces us
 // to traverse A in column-wise order too. Which is not ideal for cache utilization,
-// especially when A and B are of a tall-and-skinny matrix.
+// especially when A and B are of a tall-and-skinny matrix. This seems to be called
+// Tall & Skinny Matrix Transposed times Tall & Skinny Matrix (TSMTTSM) in litterateur.
 //
 
 void naive_v1(size_t M, size_t N, size_t K,
