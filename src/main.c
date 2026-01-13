@@ -164,28 +164,69 @@ int main(int argc, char** argv)
     print_config();
 
     Dataset *data = load_arxiv_dataset();
-
     SageNet *net = sage_net_create(layers, channels, data);
     sage_net_info(net);
 
-    TIMER_BLOCK("run_time", {
-            for (size_t epoch = 1; epoch <= epochs; epoch++) {
-                TIMER_BLOCK("epoch", {
-                        inference(net, data->full);
-                        double loss = nll_loss(net->logsoft->output, data->labels, data->train.node);
-                        double train_acc = accuracy(net->logsoft->output, data->labels, data->num_classes, data->train.node);
-                        double valid_acc = accuracy(net->logsoft->output, data->labels, data->num_classes, data->valid.node);
-                        double test_acc = accuracy(net->logsoft->output, data->labels, data->num_classes, data->test.node);
-                        train(net, data->train);
-                        printf("[Epoch %zu] Loss: %f, Train: %.2f%%, Valid: %.2f%%, Test: %.2f%%\n",
-                               epoch, loss, 100*train_acc, 100*valid_acc, 100*test_acc);
-                    });
-            }
-        });
+    size_t runs = 10;
+#ifdef FULL_INFERENCE
+    Slice inference_slice = data->full;
+    double test_accs[runs];
+#else
+    Slice inference_slice = data->train;
+#endif // FULL_INFERENCE
+
+    for (size_t run = 1; run <= runs; run++) {
+#ifdef FULL_INFERENCE
+        double best_valid_acc = 0.0;
+        double test_at_best_valid = 0.0;
+#endif // FULL_INFERENCE
+
+        TIMER_BLOCK("run", {
+                for (size_t epoch = 1; epoch <= epochs; epoch++) {
+                    TIMER_BLOCK("epoch", {
+                            inference(net, inference_slice);
+                            double loss = nll_loss(net->logsoft->output, data->labels, data->train.node);
+                            double train_acc = accuracy(net->logsoft->output, data->labels, data->num_classes, data->train.node);
+#ifdef FULL_INFERENCE
+                            double valid_acc = accuracy(net->logsoft->output, data->labels, data->num_classes, data->valid.node);
+                            double test_acc = accuracy(net->logsoft->output, data->labels, data->num_classes, data->test.node);
+#endif // FULL_INFERENCE
+                            train(net, data->train);
+
+                            printf("(Run %zu) Epoch: %zu/%zu, Loss: %f, Train: %.2f%%",
+                                   run, epoch, epochs, loss, 100*train_acc);
+#ifdef FULL_INFERENCE
+                            printf(", Valid: %.2f%%, Test: %.2f%%", 100*valid_acc, 100*test_acc);
+
+                            if (valid_acc > best_valid_acc) {
+                                best_valid_acc = valid_acc;
+                                test_at_best_valid = test_acc;
+                            }
+#endif // FULL_INFERENCE
+                            printf("\n");
+                        });
+                }
+            });
+
+#ifdef FULL_INFERENCE
+        test_accs[run - 1] = test_at_best_valid;
+        printf("Run %zu: Test accuracy at best valid = %.2f%%\n\n", run, 100*test_at_best_valid);
+#endif // FULL_INFERENCE
+        sage_net_reset(net);
+    }
+
+#ifdef FULL_INFERENCE
+    double mean = 0.0;
+    for (size_t i = 0; i < runs; i++) mean += test_accs[i];
+    mean /= runs;
+    double var = 0.0;
+    for (size_t i = 0; i < runs; i++) var += (test_accs[i] - mean) * (test_accs[i] - mean);
+    double std = sqrt(var / runs);
+    printf("Test accuracy: %.2f%% ± %.2f%%\n", 100*mean, 100*std);
+#endif // FULL_INFERENCE
 
     timer_print();
-    printf("Total run time: %f\n", timer_get_time("run_time", TIMER_TOTAL_TIME));
-
+    printf("Total run time: %f\n", timer_get_time("run", TIMER_TOTAL_TIME));
     timer_export_csv(csv_name);
 
     sage_net_destroy(net);
@@ -193,5 +234,4 @@ int main(int argc, char** argv)
     return 0;
 }
 
-// TODO: Use CRS format for edges
 // TODO: Fast exp: https://jrfonseca.blogspot.com/2008/09/fast-sse2-pow-tables-or-polynomials.html

@@ -91,6 +91,8 @@ LinearLayer* linear_layer_create(size_t batch_size, size_t in_dim, size_t out_di
 LogSoftLayer* logsoft_layer_create(size_t batch_size, size_t dim, Dataset *data);
 SageNet* sage_net_create(size_t num_layers, size_t hidden_dim, Dataset *data);
 
+void sage_net_reset();
+
 void sage_layer_destroy(SageLayer* l);
 void relu_layer_destroy(ReluLayer* l);
 void l2norm_layer_destroy(L2NormLayer* l);

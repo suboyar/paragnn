@@ -55,8 +55,8 @@ ReluLayer* relu_layer_create(size_t batch_size, size_t dim, Dataset *data)
     };
 
     return layer;
-}
 
+}
 L2NormLayer* l2norm_layer_create(size_t batch_size, size_t dim, Dataset *data)
 {
     L2NormLayer *layer = malloc(sizeof(*layer));
@@ -217,8 +217,72 @@ SageNet* sage_net_create(size_t num_layers, size_t hidden_dim, Dataset *data)
     return net;
 }
 
+void sage_layer_reset(const SageLayer *l)
+{
+    matrix_zero(l->output);
+    matrix_zero(l->agg);
+    matrix_zero(l->Wagg);
+    matrix_zero(l->Wroot);
+    matrix_zero(l->grad_input);
+    matrix_zero(l->grad_Wagg);
+    matrix_zero(l->grad_Wroot);
+    memset(l->mean_scale, 0, l->data->num_inputs*sizeof(*l->mean_scale));
+
+    matrix_fill_xavier_uniform(l->Wroot, l->in_dim, l->out_dim);
+    matrix_fill_xavier_uniform(l->Wagg, l->in_dim, l->out_dim);
+}
+
+void relu_layer_reset(const ReluLayer *l)
+{
+    matrix_zero(l->output);
+    matrix_zero(l->grad_input);
+}
+
+void l2norm_layer_reset(const L2NormLayer *l)
+{
+    matrix_zero(l->output);
+    matrix_zero(l->grad_input);
+    matrix_zero(l->recip_mag);
+}
+
+void linear_layer_reset(const LinearLayer *l)
+{
+    matrix_zero(l->output);
+    matrix_zero(l->W);
+    matrix_zero(l->bias);
+    matrix_zero(l->grad_input);
+    matrix_zero(l->grad_W);
+    matrix_zero(l->grad_bias);
+
+    matrix_fill_xavier_uniform(l->W, l->in_dim, l->out_dim);
+    matrix_fill_xavier_uniform(l->bias, 1, l->out_dim);
+}
+
+void logsoft_layer_reset(const LogSoftLayer *l)
+{
+    matrix_zero(l->output);
+    matrix_zero(l->grad_input);
+}
+
+void sage_net_reset(const SageNet *net)
+{
+    for (size_t i = 0; i < net->enc_depth; i++) {
+        sage_layer_reset(net->enc_sage[i]);
+        relu_layer_reset(net->enc_relu[i]);
+        l2norm_layer_reset(net->enc_norm[i]);
+    }
+
+    sage_layer_reset(net->cls_sage);
+
+#ifdef USE_PREDICTION_HEAD
+    linear_layer_reset(net->linear);
+#endif
+
+    logsoft_layer_reset(net->logsoft);
+}
+
 // We don't free matrices that are references from other layers, i.e input and grad_output
-void sage_layer_destroy(SageLayer* l)
+void sage_layer_destroy(SageLayer *l)
 {
     if (!l) return;
 
@@ -234,7 +298,7 @@ void sage_layer_destroy(SageLayer* l)
     free(l);
 }
 
-void relu_layer_destroy(ReluLayer* l)
+void relu_layer_destroy(ReluLayer *l)
 {
     if (!l) return;
 
@@ -244,7 +308,7 @@ void relu_layer_destroy(ReluLayer* l)
     free(l);
 }
 
-void l2norm_layer_destroy(L2NormLayer* l)
+void l2norm_layer_destroy(L2NormLayer *l)
 {
     if (!l) return;
 
