@@ -327,7 +327,7 @@ Dataset* load_arxiv_dataset()
     uint32_t valid_size = load_split("./arxiv/processed/valid.csv", &valid_idx);
     uint32_t test_size = load_split("./arxiv/processed/test.csv", &test_idx);
 
-#ifndef NDEBUG
+#if defined(REDUCED_GRAPH)
     train_size = 700, valid_size = 400, test_size = 600;
 #endif
 
@@ -346,7 +346,7 @@ Dataset* load_arxiv_dataset()
     uint32_t num_edges = train_edges + valid_edges + test_edges;
 
     // Add size info
-#ifndef NDEBUG
+#if defined(REDUCED_GRAPH)
     data->num_inputs = train_size + valid_size + test_size;
 #else
     data->num_inputs = num_inputs;
