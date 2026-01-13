@@ -13,7 +13,21 @@
 #ifndef TIMER_INDENT_SPACE
 #define TIMER_INDENT_SPACE 2
 #endif
+#ifndef TIMER_MAX_LINE_WIDTH
 #define TIMER_MAX_LINE_WIDTH 100
+#endif
+#ifndef TIMER_MAX_NAME_LEN
+#define TIMER_MAX_NAME_LEN 128
+#endif
+
+#ifndef TIMER_MAX_STACK_DEPTH
+#define TIMER_MAX_STACK_DEPTH 64
+#endif
+
+// 1024 contexts should be enough (famous last words)
+#ifndef TIMER_HASHTABLE_SIZE
+#define TIMER_HASHTABLE_SIZE 1024
+#endif
 
 #define FNV_OFFSET 14695981039346656037UL
 #define FNV_PRIME 1099511628211UL
@@ -38,21 +52,18 @@ typedef struct {
     size_t      capacity;
 } TimerRegistry;
 
-#define MAX_STACK_DEPTH 64
 typedef struct {
-    TimerEntry* entries[MAX_STACK_DEPTH];
+    TimerEntry* entries[TIMER_MAX_STACK_DEPTH];
     int         depth;
 } TimerStack;
 
 static _Thread_local TimerStack timer_stack = { .depth = 0 };
 
-// 1024 contexts should be enough (famous last words)
-#define HASHTABLE_SIZE 1024
-static TimerEntry entries[HASHTABLE_SIZE];
+static TimerEntry entries[TIMER_HASHTABLE_SIZE];
 static TimerRegistry reg = {
     .entries = entries,
     .count = 0,
-    .capacity = HASHTABLE_SIZE,
+    .capacity = TIMER_HASHTABLE_SIZE,
 };
 
 static inline TimerEntry* stack_top(void)
@@ -64,7 +75,7 @@ static inline TimerEntry* stack_top(void)
 
 static inline void stack_push(TimerEntry* entry)
 {
-    if (timer_stack.depth >= MAX_STACK_DEPTH) {
+    if (timer_stack.depth >= TIMER_MAX_STACK_DEPTH) {
         nob_log(NOB_ERROR, "Timer stack overflow");
         abort();
     }
@@ -329,7 +340,7 @@ void timer_export_csv(const char *fname)
     if (!f) ERROR("Could not open file %s for csv export: %s", fname, strerror(errno));
 
     // +1 for / (slashes)
-    char path[(128+1)*MAX_STACK_DEPTH]; // TODO do #define MAX_LEN_NAME 128
+    char path[(TIMER_MAX_NAME_LEN+1)*TIMER_MAX_STACK_DEPTH];
 
     if (f == stdout) fprintf(f, "\n--- CSV_OUTPUT_BEGIN ---\n");
     fprintf(f, "name,parent,avg(s),total(s),min(s),max(s),calls\n");
