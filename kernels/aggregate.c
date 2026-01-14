@@ -73,7 +73,6 @@ void coo_v1(size_t node_count, size_t edge_count, size_t in_dim, void *edge_inde
         size_t degree = 0;
         double *y = Y + i * ldy;
 
-        // Find neighbors of count sample size
         for (size_t j = 0; j < edge_count; j++) {
             uint32_t src = EDGE_SRC(edges, j);
             uint32_t dst = EDGE_DST(edges, j);
@@ -156,65 +155,6 @@ void ccs_v2(size_t node_count, size_t edge_count, size_t in_dim, void *edge_inde
 {
     (void)edge_count;
     CCS *edges = (CCS*)edge_index;
-    const size_t in_dim_unroll = (in_dim / 4) * 4;
-
-#pragma omp parallel for
-    for (size_t i = 0; i < node_count; i++) {
-        uint32_t degree = edges->col_ptr[i+1] - edges->col_ptr[i];
-
-        if (degree == 0) continue;
-
-        double *y = Y + i * ldy;
-        double scale = 1.0 / degree;
-        for (size_t j = edges->col_ptr[i]; j < edges->col_ptr[i+1]; j++) {
-            double *x = X + edges->row_idx[j] * ldx;
-            for (size_t k = 0; k < in_dim_unroll; k+=4) {
-                y[k+0] += x[k+0] * scale;
-                y[k+1] += x[k+1] * scale;
-                y[k+2] += x[k+2] * scale;
-                y[k+3] += x[k+3] * scale;
-            }
-
-            for (size_t k = in_dim_unroll; k < in_dim; k++) {
-                y[k] += x[k] * scale;
-            }
-        }
-    }
-}
-
-void ccs_v3(size_t node_count, size_t edge_count, size_t in_dim, void *edge_index,
-            double *restrict X, size_t ldx, double *restrict Y, size_t ldy)
-{
-    (void)edge_count;
-    CCS *edges = (CCS*)edge_index;
-
-#pragma omp parallel for
-    for (size_t i = 0; i < node_count; i++) {
-        uint32_t degree = edges->col_ptr[i+1] - edges->col_ptr[i];
-
-        if (degree == 0) continue;
-
-        double *y = Y + i * ldy;
-        for (size_t j = edges->col_ptr[i]; j < edges->col_ptr[i+1]; j++) {
-            double *x = X + edges->row_idx[j] * ldx;
-#pragma omp simd
-            for (size_t k = 0; k < in_dim; k++) {
-                y[k] += x[k];
-            }
-        }
-        double scale = 1.0 / degree;
-#pragma omp simd
-        for (size_t k = 0; k < in_dim; k++) {
-            y[k] *= scale;
-        }
-    }
-}
-
-void ccs_v4(size_t node_count, size_t edge_count, size_t in_dim, void *edge_index,
-            double *restrict X, size_t ldx, double *restrict Y, size_t ldy)
-{
-    (void)edge_count;
-    CCS *edges = (CCS*)edge_index;
     const size_t K_block = 64;
 
 #pragma omp parallel for
@@ -246,47 +186,85 @@ void ccs_v4(size_t node_count, size_t edge_count, size_t in_dim, void *edge_inde
     }
 }
 
-void ccs_v5(size_t node_count, size_t edge_count, size_t in_dim, void *edge_index,
+void ccs_v3(size_t node_count, size_t edge_count, size_t in_dim, void *edge_index,
             double *restrict X, size_t ldx, double *restrict Y, size_t ldy)
 {
-
     (void)edge_count;
     CCS *edges = (CCS*)edge_index;
-    edges->val = malloc(edge_count*in_dim*sizeof(*edges->val));
-    if (!edges->val) {ERROR("Could not allocate memory for edges->val");}
-#pragma omp parallel for
-    for (size_t i = 0; i < edge_count; i++) {
-        uint32_t node = edges->row_idx[i];
-        double *x = X + node * ldx;
-        double *val = edges->val + i * in_dim;
-#pragma omp simd
-        for (size_t j = 0; j < in_dim; j++) {
-            val[j] = x[j];
-        }
-    }
 
 #pragma omp parallel for
     for (size_t i = 0; i < node_count; i++) {
-        uint32_t degree = edges->col_ptr[i+1] - edges->col_ptr[i];
-
+        uint32_t start = edges->col_ptr[i];
+        uint32_t end = edges->col_ptr[i+1];
+        uint32_t degree = end - start;
         if (degree == 0) continue;
 
         double *y = Y + i * ldy;
-        for (size_t j = edges->col_ptr[i]; j < edges->col_ptr[i+1]; j++) {
-            double *x = edges->val + j * in_dim;
+        double scale = 1.0 / degree;
+
+        // Process 4 edges at a time
+        size_t j = start;
+        for (; j + 3 < end; j += 4) {
+            double *x0 = X + edges->row_idx[j+0] * ldx;
+            double *x1 = X + edges->row_idx[j+1] * ldx;
+            double *x2 = X + edges->row_idx[j+2] * ldx;
+            double *x3 = X + edges->row_idx[j+3] * ldx;
+
 #pragma omp simd
             for (size_t k = 0; k < in_dim; k++) {
-                y[k] += x[k];
+                y[k] += (x0[k] + x1[k] + x2[k] + x3[k]) * scale;
             }
         }
-        double scale = 1.0 / degree;
+
+        // Remainder
+        for (; j < end; j++) {
+            double *x = X + edges->row_idx[j] * ldx;
 #pragma omp simd
-        for (size_t k = 0; k < in_dim; k++) {
-            y[k] *= scale;
+            for (size_t k = 0; k < in_dim; k++) {
+                y[k] += x[k] * scale;
+            }
         }
     }
+}
 
-    free(edges->val);
+void ccs_v4(size_t node_count, size_t edge_count, size_t in_dim, void *edge_index,
+            double *restrict X, size_t ldx, double *restrict Y, size_t ldy)
+{
+    (void)edge_count;
+    CCS *edges = (CCS*)edge_index;
+
+#pragma omp parallel for schedule(dynamic, 64)
+    for (size_t i = 0; i < node_count; i++) {
+        uint32_t start = edges->col_ptr[i];
+        uint32_t end = edges->col_ptr[i+1];
+        uint32_t degree = end - start;
+        if (degree == 0) continue;
+
+        double *y = Y + i * ldy;
+        double scale = 1.0 / degree;
+
+        size_t j = start;
+        for (; j + 3 < end; j += 4) {
+            double *x0 = X + edges->row_idx[j+0] * ldx;
+            double *x1 = X + edges->row_idx[j+1] * ldx;
+            double *x2 = X + edges->row_idx[j+2] * ldx;
+            double *x3 = X + edges->row_idx[j+3] * ldx;
+
+#pragma omp simd
+            for (size_t k = 0; k < in_dim; k++) {
+                y[k] += (x0[k] + x1[k] + x2[k] + x3[k]) * scale;
+            }
+        }
+
+        // Remainder
+        for (; j < end; j++) {
+            double *x = X + edges->row_idx[j] * ldx;
+#pragma omp simd
+            for (size_t k = 0; k < in_dim; k++) {
+                y[k] += x[k] * scale;
+            }
+        }
+    }
 }
 
 void coo2crs(size_t node_count, size_t edge_count, COO *coo_edges, CRS *crs_edges)
@@ -451,7 +429,7 @@ void run_benchmark(size_t node_count, size_t edge_count, size_t in_dim,
     double intensity = flops_per_sec / bandwidth;
     if (interactive) printf("\r\033[K%s: %s\n", kernel.name, kernel.desc);
     // else printf("%s: %s\n", kernel.name, kernel.desc);
-    printf("    %.4fs, %.2f MFlops/s, %.2f MBytes/s, %.2f flop/byte, "
+    printf("    %.5fs, %.2f MFlops/s, %.2f MBytes/s, %.2f flop/byte, "
            "%.2f MB(L3-local), %.2f MB(L3-remote)\n",
            min_time, flops_per_sec/1e6, bandwidth/1e6, intensity,
            (double)l3_local/1e6, (double)l3_remote/1e6);
@@ -477,7 +455,7 @@ bool kernel_enabled(const char *name)
     (void)name;
     return true;
 #if 0
-    if (kernel_filter.count == 0) return true;  // no filter = run all
+    if (kernel_filter.count == 0) return true;
 
     for (size_t i = 0; i < kernel_filter.count; i++) {
         const char *filter = kernel_filter.items[i];
@@ -500,7 +478,6 @@ bool kernel_enabled(const char *name)
     return false;
 #endif
 }
-
 
 int main()
 {
@@ -554,17 +531,12 @@ int main()
         NEW_KERNEL(coo_v1, &coo_edges, "TODO: desc.", (edge_count + indegree_count) * in_dim + indegree_count),
         NEW_KERNEL(crs_v1, &crs_edges, "TODO: desc.", (edge_count + indegree_count) * in_dim + indegree_count),
         NEW_KERNEL(ccs_v1, &ccs_edges, "TODO: desc.", 2ULL * edge_count * in_dim + indegree_count),
-        NEW_KERNEL(ccs_v1, &ccs_edges_sorted, "TODO: desc. (sorted)", 2ULL * edge_count * in_dim + indegree_count),
         NEW_KERNEL(ccs_v2, &ccs_edges, "TODO: desc.", 2ULL * edge_count * in_dim + indegree_count),
-        NEW_KERNEL(ccs_v2, &ccs_edges_sorted, "TODO: desc. (sorted)", 2ULL * edge_count * in_dim + indegree_count),
         NEW_KERNEL(ccs_v3, &ccs_edges, "TODO: desc.", (edge_count + indegree_count) * in_dim + indegree_count),
-        NEW_KERNEL(ccs_v3, &ccs_edges_sorted, "TODO: desc. (sorted)", (edge_count + indegree_count) * in_dim + indegree_count),
         NEW_KERNEL(ccs_v4, &ccs_edges, "TODO: desc.", (edge_count + indegree_count) * in_dim + indegree_count),
-        NEW_KERNEL(ccs_v4, &ccs_edges_sorted, "TODO: desc. (sorted)", (edge_count + indegree_count) * in_dim + indegree_count),
-        NEW_KERNEL(ccs_v5, &ccs_edges, "TODO: desc.", (edge_count + indegree_count) * in_dim + indegree_count),
-        NEW_KERNEL(ccs_v5, &ccs_edges_sorted, "TODO: desc. (sorted)", (edge_count + indegree_count) * in_dim + indegree_count),
     };
 
+#ifndef SKIP_VALIDATE
     // Validate kernels
     bool any_invalid = false;
     printf("Validate kernels\n");
@@ -578,6 +550,7 @@ int main()
         dzero(node_count*data->num_features, agg);
     }
     if (any_invalid) abort();
+#endif
 
     for (size_t i = 0; i < ARRAY_LEN(kernels); i++) {
         if (!kernel_enabled(kernels[i].name)) continue;
