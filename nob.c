@@ -81,6 +81,16 @@ Target targets[] = {
             ),
         .libs = STRINGS("-lm", "-lopenblas"),
     },
+    {
+        .name = "aggregate",
+        .srcs = STRINGS(
+            SRC_FOLDER"timer.c",
+            SRC_FOLDER"dataset.c",
+            KERNEL_FOLDER"cache_counter.c",
+            KERNEL_FOLDER"aggregate.c",
+            ),
+        .libs = STRINGS("-lm"),
+    },
 };
 
 typedef struct {
