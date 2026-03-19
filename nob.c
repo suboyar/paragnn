@@ -101,6 +101,7 @@ typedef struct {
     bool   omp_off;
     bool   extract_ogb;
     bool   download_ogb;
+    bool   asm_output;
     bool   help;
     char*  target;
     char*  out_dir;
@@ -207,7 +208,7 @@ void list_targets(void)
     }
 }
 
-const char* get_obj_path(const char* out_dir, const char* src_path)
+const char* get_artifact_path(const char* out_dir, const char* src_path)
 {
     const char* base = nob_path_name(src_path);
     Nob_String_View sv = nob_sv_from_cstr(base);
@@ -218,7 +219,8 @@ const char* get_obj_path(const char* out_dir, const char* src_path)
         len -= 2;
     }
 
-    return nob_temp_sprintf("%s%.*s.o", out_dir, (int)len, sv.data);
+    const char *ext = flags.asm_output ? ".s" : ".o";
+    return nob_temp_sprintf("%s%.*s%s", out_dir, (int)len, sv.data, ext);
 }
 
 typedef enum {
@@ -357,12 +359,12 @@ int build_target(Target* t)
     const char* exec_path = nob_temp_sprintf("%s%s", out_dir, t->name);
 
     // Compile all source files
-    const char** obj_paths = nob_temp_alloc(t->srcs.count * sizeof(char*));
+    const char** dst_paths = nob_temp_alloc(t->srcs.count * sizeof(char*));
 
     for (size_t i = 0; i < t->srcs.count; i++) {
         const char* src = t->srcs.items[i];
-        const char* obj = get_obj_path(out_dir, src);
-        obj_paths[i] = obj;
+        const char* dst = get_artifact_path(out_dir, src);
+        dst_paths[i] = dst;
 
         nob_cc(&cmd);
         append_common_flags(COMPILING);
@@ -385,8 +387,14 @@ int build_target(Target* t)
             nob_cmd_append(&cmd, nob_temp_sprintf("-D%s", flags.macros.items[j]));
         }
 
-        nob_cc_output(&cmd, obj);
-        nob_cmd_append(&cmd, "-c", src);
+        nob_cc_output(&cmd, dst);
+
+        if (flags.asm_output) {
+            nob_cmd_append(&cmd, "-S", src);
+            nob_cmd_append(&cmd, "-fverbose-asm");
+        } else {
+            nob_cmd_append(&cmd, "-c", src);
+        }
 
         if (!nob_cmd_run(&cmd, .async = &procs)) {
             nob_log(NOB_ERROR, "Failed to compile %s", src);
@@ -396,6 +404,11 @@ int build_target(Target* t)
 
     if (!nob_procs_flush(&procs)) return 1;
 
+    if (flags.asm_output) {
+        nob_log(NOB_INFO, "Assembly files written to %s", out_dir);
+        return 0;
+    }
+
     // Link
     nob_cc(&cmd);
     append_common_flags(LINKING);
@@ -404,7 +417,7 @@ int build_target(Target* t)
     nob_cc_output(&cmd, exec_path);
 
     for (size_t i = 0; i < t->srcs.count; i++) {
-        nob_cc_inputs(&cmd, obj_paths[i]);
+        nob_cc_inputs(&cmd, dst_paths[i]);
     }
 
     for (size_t i = 0; i < t->libs.count; i++) {
@@ -583,6 +596,7 @@ int main(int argc, char** argv)
     flag_str_var(&flags.target,          "target",       "paragnn", "Build target (see list below)");
     flag_bool_var(&flags.download_ogb,   "download-ogb", false,     "Download OGB arxiv dataset");
     flag_bool_var(&flags.extract_ogb,    "extract-ogb",  false,     "Re-extract OGB raw files");
+    flag_bool_var(&flags.asm_output,     "S",            false,     "Produce assembly instead of object files");
     flag_bool_var(&flags.run,            "run",          false,     "Run after building");
     flag_bool_var(&flags.slurm,          "slurm",        false,     "Submit job to Slurm");
     flag_list_mut_var(&flags.partitions, "p",                       "Partition(s) to submit to (or 'list', 'all', 'aarch64', 'x86_64')");
