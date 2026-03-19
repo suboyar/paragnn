@@ -512,7 +512,7 @@ void relu_layer_zero_gradients(ReluLayer* l)
     matrix_zero(l->grad_input);
 }
 
-void l2norm_layer_zero_gradients(L2NormLayer* l)
+void normalize_layer_zero_gradients(L2NormLayer* l)
 {
     matrix_zero(l->grad_output);
     matrix_zero(l->grad_input);
@@ -529,21 +529,4 @@ void linear_layer_zero_gradients(LinearLayer* l)
 void logsoft_layer_zero_gradients(LogSoftLayer* l)
 {
     matrix_zero(l->grad_input);
-}
-
-// Network-wide gradient reset
-void sage_net_zero_gradients(SageNet* net)
-{
-    TIMER_FUNC();
-    for (size_t i = 0; i < net->enc_depth; i++) {
-        sage_layer_zero_gradients(net->enc_sage[i]);
-        relu_layer_zero_gradients(net->enc_relu[i]);
-        l2norm_layer_zero_gradients(net->enc_norm[i]);
-    }
-
-    sage_layer_zero_gradients(net->cls_sage);
-#ifdef USE_PREDICTION_HEAD
-    linear_layer_zero_gradients(net->linear);
-#endif
-    logsoft_layer_zero_gradients(net->logsoft);
 }

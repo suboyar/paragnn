@@ -48,6 +48,7 @@ Matrix* matrix_create(size_t M, size_t N)
         ERROR("Could not allocate data for the matrix");
     }
 
+    // TODO: take the biggest function (that takes the longest time) and do first touch within that.
     m->M = M;
     m->N = N;
     m->stride = N;

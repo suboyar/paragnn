@@ -6,6 +6,47 @@
 #include "matrix.h"
 #include "dataset.h"
 
+typedef enum {
+    LAYER_SAGE,
+    LAYER_RELU,
+    LAYER_L2NORM,
+    LAYER_LOGSOFT,
+    LAYER_LINEAR,
+} LayerType;
+
+typedef struct {
+    LayerType type;
+    size_t in_dim;
+    size_t out_dim;  // ignored for relu, l2norm, logsoft
+} LayerConf;
+
+#define SAGE(in, out)   (LayerConf){ LAYER_SAGE,    (in), (out) }
+#define RELU(dim)       (LayerConf){ LAYER_RELU,    (dim), 0    }
+#define L2NORM(dim)     (LayerConf){ LAYER_L2NORM,  (dim), 0    }
+#define LINEAR(in, out) (LayerConf){ LAYER_LINEAR,  (in), (out) }
+#define LOGSOFT(dim)    (LayerConf){ LAYER_LOGSOFT,  (dim), 0    }
+
+#define SAGE_NET_CREATE(conf, d) sage_net_create((conf), sizeof(conf)/sizeof(conf[0]), (d))
+
+typedef struct Layer Layer;
+struct Layer {
+    LayerType type;
+    void *impl;              // Points to SageLayer, ReluLayer, etc.
+
+    Matrix **input_ptr;
+    Matrix **output_ptr;
+    Matrix **grad_input_ptr;
+    Matrix **grad_output_ptr;
+
+    // vtable
+    void (*forward)(Layer *self, Slice slice);
+    void (*backward)(Layer *self, Slice slice);
+    void (*update)(Layer *self, double lr);   // NULL for layers with no weights
+    void (*zero_grad)(Layer *self);           // NULL for layers with no weights
+    void (*reset)(Layer *self);
+    void (*destroy)(Layer *self);
+};
+
 typedef struct {
     Dataset *data;
     size_t in_dim;
@@ -68,20 +109,8 @@ typedef struct {
 } LogSoftLayer;
 
 typedef struct {
-    // Encoder layers
-    SageLayer    **enc_sage;
-    ReluLayer    **enc_relu;
-    L2NormLayer  **enc_norm;
-    size_t         enc_depth;
-    // Final layer
-    SageLayer     *cls_sage;
-#ifdef USE_PREDICTION_HEAD
-    // Prediction head
-    LinearLayer   *linear;
-#endif
-    // Output layer
-    LogSoftLayer  *logsoft;
-    size_t         num_layers;
+    Layer *layers;
+    size_t num_layers;
 } SageNet;
 
 SageLayer* sage_layer_create(size_t batch_size, size_t in_dim, size_t out_dim, Dataset *data);
@@ -89,7 +118,7 @@ ReluLayer* relu_layer_create(size_t batch_size, size_t dim, Dataset *data);
 L2NormLayer* l2norm_layer_create(size_t batch_size, size_t dim, Dataset *data);
 LinearLayer* linear_layer_create(size_t batch_size, size_t in_dim, size_t out_dim, Dataset *data);
 LogSoftLayer* logsoft_layer_create(size_t batch_size, size_t dim, Dataset *data);
-SageNet* sage_net_create(size_t num_layers, size_t hidden_dim, Dataset *data);
+SageNet* sage_net_create(LayerConf *conf, size_t count, Dataset *data);
 
 void sage_net_reset();
 
