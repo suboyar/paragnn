@@ -43,7 +43,7 @@ void __timer_scope_end(TimerScope* scope);
 void timer_record(const char* name, double elapsed, TimerEntry* entry);
 void timer_record_parallel(const char* name, double* elapsed, int nthreads);
 double timer_get_time(const char* name, enum TimerMetric metric);
-void timer_print();
+void timer_print(void);
 void timer_export_csv(const char *fname);
 
 #endif // TIMER_H

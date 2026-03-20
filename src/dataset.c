@@ -10,23 +10,15 @@
 
 #include "dataset.h"
 
-static const uint32_t num_inputs = 169343;
+static const uint32_t num_nodes = 169343;
 static const uint32_t num_features = 128;
 static const uint32_t num_classes = 40;
 
-typedef enum {
-    TRAIN_PARTITION,
-    VALID_PARTITION,
-    TEST_PARTITION,
-    INVALID_PARTITION
-} Partition;
-
-typedef struct {
-    Partition split;
-    size_t idx;
-} NodeMapping;
-
-static inline size_t range_len(Range r) { return r.end - r.start; }
+static const char *split_name[] = {
+    [SPLIT_TRAIN] = "train",
+    [SPLIT_VALID] = "valid",
+    [SPLIT_TEST]  = "test",
+};
 
 // This is specifically design to only conver cases for node-feat.csv with no space handling
 static inline double parse_double(char** pp)
@@ -119,87 +111,56 @@ static uint32_t load_split(const char *path, uint32_t **split)
     return size;
 }
 
-static void build_node_mapping(NodeMapping* map,  uint32_t num_inputs,
-                               uint32_t* train_idx, uint32_t train_size,
-                               uint32_t* valid_idx, uint32_t valid_size,
-                               uint32_t* test_idx, uint32_t test_size)
+static void build_node_mapping(uint32_t* map,  uint32_t num_nodes, uint32_t* split_idx, uint32_t split_size)
 {
-    // Initialize all as invalid
-    for (size_t i = 0; i < num_inputs; i++)
-        map[i] = (NodeMapping){INVALID_PARTITION, SIZE_MAX};
-
-    for (size_t i = 0; i < train_size; i++)
-        map[train_idx[i]] = (NodeMapping){TRAIN_PARTITION, i};
-    for (size_t i = 0; i < valid_size; i++)
-        map[valid_idx[i]] = (NodeMapping){VALID_PARTITION, i};
-    for (size_t i = 0; i < test_size; i++)
-        map[test_idx[i]] = (NodeMapping){TEST_PARTITION, i};
-}
-
-static inline void gather_features(double *dest, double *src, uint32_t *split_idx, size_t split_size)
-{
-#pragma omp parallel for
-    for (size_t i = 0; i < split_size; i++) {
-        size_t orig = split_idx[i];
-        memcpy(&dest[i * num_features], &src[orig * num_features],
-               num_features * sizeof(double));
+    if (num_nodes >= UINT32_MAX)
+    {
+        ERROR("num_nodes too large for UINT32_MAX sentinel");
     }
 
+    memset(map, 0xFF, num_nodes * sizeof(*map));
+
+    for (uint32_t i = 0; i < split_size; i++)
+    {
+        map[split_idx[i]] = i;
+    }
 }
 
-static void load_inputs(double *dest,
-                        uint32_t *train_idx, Range train_range,
-                        uint32_t *valid_idx, Range valid_range,
-                        uint32_t *test_idx, Range test_range)
+static void load_inputs(double *dest, uint32_t num_nodes)
 {
-    double* temp = malloc(num_inputs * num_features * sizeof(double));
-
     const char *file = "./arxiv/processed/node-feat.csv";
     int fd = open(file, O_RDONLY);
     if (fd < 0) ERROR("Could not open %s: %s", file, strerror(errno));
     struct stat sb;
     fstat(fd, &sb);
-    char* data = mmap(NULL, sb.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    char* data = mmap(NULL, sb.st_size, PROT_READ, MAP_PRIVATE | MAP_POPULATE, fd, 0);
 
-    char** line_starts = malloc((num_inputs + 1) * sizeof(char*));
+    char** line_starts = malloc((num_nodes + 1) * sizeof(char*));
     line_starts[0] = data;
     size_t line = 1;
     for (char* p = data; p < data + sb.st_size; p++) {
-        if (*p == '\n' && line < num_inputs) {
+        if (*p == '\n' && line < num_nodes) {
             line_starts[line++] = p + 1;
         }
     }
 
 #pragma omp parallel for
-    for (size_t i = 0; i < num_inputs; i++) {
+    for (size_t i = 0; i < num_nodes; i++) {
         char* p = line_starts[i];
         for (size_t j = 0; j < num_features; j++) {
-            temp[i*num_features + j] = parse_double(&p);
+            dest[i*num_features + j] = parse_double(&p);
             if (*p == ',') p++;
         }
     }
 
-    double *train = dest + train_range.start * num_features;
-    double *valid = dest + valid_range.start * num_features;
-    double *test = dest + test_range.start * num_features;
-    gather_features(train, temp, train_idx, range_len(train_range));
-    gather_features(valid, temp, valid_idx, range_len(valid_range));
-    gather_features(test, temp, test_idx, range_len(test_range));
-
-    free(temp);
     free(line_starts);
     munmap(data, sb.st_size);
     close(fd);
 
 }
 
-static void load_labels(uint32_t *dest,
-                        uint32_t *train_idx, Range train_range,
-                        uint32_t *valid_idx, Range valid_range,
-                        uint32_t *test_idx, Range test_range)
+static void load_labels(uint32_t *dest)
 {
-    size_t* temp = malloc(num_inputs * sizeof(size_t));
-
     const char *file = "./arxiv/processed/node-label.csv";
     int fd = open(file, O_RDONLY);
     if (fd < 0) ERROR("Could not open %s: %s", file, strerror(errno));
@@ -212,41 +173,20 @@ static void load_labels(uint32_t *dest,
 
     size_t i = 0;
     while (p < end) {
-        temp[i++] = (size_t)parse_u32(&p);
+        dest[i++] = parse_u32(&p);
         if (*p == '\n') p++;
-    }
-
-    uint32_t *train = dest + train_range.start;
-    for (size_t i = 0; i < range_len(train_range); i++) {
-        train[i] = temp[train_idx[i]];
-    }
-
-    uint32_t *valid = dest + valid_range.start;
-    for (size_t i = 0; i < range_len(valid_range); i++) {
-        valid[i] = temp[valid_idx[i]];
-    }
-
-    uint32_t *test = dest + test_range.start;
-    for (size_t i = 0; i < range_len(test_range); i++) {
-        test[i] = temp[test_idx[i]];
     }
 
     munmap(data, sb.st_size);
     close(fd);
-    free(temp);
 }
 
 typedef struct {
-    uint32_t *train_edges;
-    uint32_t *valid_edges;
-    uint32_t *test_edges;
-    uint32_t train_count;
-    uint32_t valid_count;
-    uint32_t test_count;
-    uint32_t raw_count;
-} EdgeTemp;
+    uint32_t *data;   // pairs: [src0, dst0, src1, dst1, ...]
+    uint32_t count;
+} RawEdges;
 
-static EdgeTemp* count_edges(NodeMapping* map)
+static RawEdges load_edges(void)
 {
     const char *file = "./arxiv/processed/edge.csv";
     int fd = open(file, O_RDONLY);
@@ -255,165 +195,147 @@ static EdgeTemp* count_edges(NodeMapping* map)
     fstat(fd, &sb);
     char *data = mmap(NULL, sb.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
 
-    size_t raw_edges = 0;
+    uint32_t count = 0;
     for (char *p = data; p < data + sb.st_size; p++) {
-        if (*p == '\n') raw_edges++;
+        if (*p == '\n') count++;
     }
 
-    uint32_t *train_edges = malloc(2 * raw_edges * sizeof(*train_edges));
-    uint32_t *valid_edges = malloc(2 * raw_edges * sizeof(*valid_edges));
-    uint32_t *test_edges  = malloc(2 * raw_edges * sizeof(*test_edges));
-    uint32_t train_count = 0, valid_count = 0, test_count = 0;
+    uint32_t *edges = malloc(2 * count * sizeof(*edges));
 
     char *p = data, *end = data + sb.st_size;
+    size_t i = 0;
     while (p < end) {
-        uint32_t src = parse_u32(&p);
+        edges[2*i]     = parse_u32(&p);
         if (*p == ',') p++;
-        uint32_t dst = parse_u32(&p);
+        edges[2*i + 1] = parse_u32(&p);
         if (*p == '\n') p++;
-
-        NodeMapping s = map[src], d = map[dst];
-        if (s.split == d.split && s.split != INVALID_PARTITION) {
-            uint32_t *e, *count;
-            switch (s.split) {
-            case TRAIN_PARTITION: e = train_edges; count = &train_count; break;
-            case VALID_PARTITION: e = valid_edges; count = &valid_count; break;
-            case TEST_PARTITION:  e = test_edges;  count = &test_count;  break;
-            default: continue;
-            }
-
-            e[2 * (*count) + 0] = s.idx;
-            e[2 * (*count) + 1] = d.idx;
-            (*count)++;
-        }
+        i++;
     }
 
     munmap(data, sb.st_size);
     close(fd);
 
-    EdgeTemp *temp = malloc(sizeof(*temp));
-    *temp = (EdgeTemp) {
-        .train_edges = train_edges,
-        .valid_edges = valid_edges,
-        .test_edges  = test_edges,
-        .train_count = train_count,
-        .valid_count = valid_count,
-        .test_count  = test_count,
-        .raw_count   = raw_edges
-    };
-
-    return temp;
+    return (RawEdges){ .data = edges, .count = count };
 }
 
-static void load_edges(uint32_t *dest, EdgeTemp *temp,
-                       Range train_range, Range valid_range, Range test_range)
-{
-    memcpy(dest + 2*train_range.start, temp->train_edges, 2*range_len(train_range) * sizeof(uint32_t));
-    memcpy(dest + 2*valid_range.start, temp->valid_edges, 2*range_len(valid_range) * sizeof(uint32_t));
-    memcpy(dest + 2*test_range.start, temp->test_edges, 2*range_len(test_range) * sizeof(uint32_t));
-
-    free(temp->train_edges);
-    free(temp->valid_edges);
-    free(temp->test_edges);
-    free(temp);
-}
-
-Dataset* load_arxiv_dataset()
+Dataset* load_arxiv_dataset(void)
 {
     double t = omp_get_wtime();
 
-    uint32_t *train_idx, *valid_idx, *test_idx;
-    uint32_t train_size = load_split("./arxiv/processed/train.csv", &train_idx);
-    uint32_t valid_size = load_split("./arxiv/processed/valid.csv", &valid_idx);
-    uint32_t test_size = load_split("./arxiv/processed/test.csv", &test_idx);
-
-#if defined(REDUCED_GRAPH)
-    train_size = 700, valid_size = 400, test_size = 600;
-#endif
-
-    NodeMapping* node_map = malloc(num_inputs * sizeof(*node_map));
-    build_node_mapping(node_map, num_inputs,
-                       train_idx, train_size, valid_idx, valid_size, test_idx,  test_size);
-
-    Dataset *data = malloc(sizeof(*data));
-
-    // Count Edge
-    EdgeTemp *edge_temp = count_edges(node_map);
-    uint32_t train_edges = edge_temp->train_count;
-    uint32_t valid_edges = edge_temp->valid_count;
-    uint32_t test_edges  = edge_temp->test_count;
-    uint32_t raw_edges   = edge_temp->raw_count;
-    uint32_t num_edges = train_edges + valid_edges + test_edges;
-
-    // Add size info
-#if defined(REDUCED_GRAPH)
-    data->num_inputs = train_size + valid_size + test_size;
-#else
-    data->num_inputs = num_inputs;
-#endif
-    data->num_edges = num_edges;
-    data->num_features = num_features;
-    data->num_classes = num_classes;
-
-    data->train = (Slice) {
-        .node = { .start=0, .end=train_size },
-        .edge = { .start=0, .end=train_edges }
-    };
-
-    data->valid = (Slice) {
-        .node = { .start=data->train.node.end, .end=(data->train.node.end + valid_size) },
-        .edge = { .start=data->train.edge.end, .end=(data->train.edge.end + valid_edges) }
-    };
-
-    data->test = (Slice) {
-        .node = { .start=data->valid.node.end, .end=(data->valid.node.end + test_size) },
-        .edge = { .start=data->valid.edge.end, .end=(data->valid.edge.end + test_edges) }
-    };
-
-    data->full = (Slice) {
-        .node = { .start=data->train.node.start, .end=data->test.node.end },
-        .edge = { .start=data->train.edge.start, .end=data->test.edge.end }
-    };
-
-    // Features
-    data->inputs = malloc(num_inputs * num_features * sizeof(*data->inputs));
-    load_inputs(data->inputs,
-                train_idx, data->train.node,
-                valid_idx, data->valid.node,
-                test_idx, data->test.node);
-
-    // Labels
-    data->labels = malloc(num_inputs * sizeof(*data->labels));
-    load_labels(data->labels,
-                train_idx, data->train.node,
-                valid_idx, data->valid.node,
-                test_idx, data->test.node);
+    Dataset *ds = malloc(sizeof(*ds));
 
     // Edges
-    data->edges.data = malloc(2 * num_edges * sizeof(*data->edges.data));
-    load_edges(data->edges.data, edge_temp,
-               data->train.edge,
-               data->valid.edge,
-               data->test.edge);
+    double t_e = omp_get_wtime();
+    RawEdges raw_edges = load_edges();
+    ds->edges.data = raw_edges.data;
+    t_e = omp_get_wtime() - t_e;
 
-    free(train_idx);
-    free(valid_idx);
-    free(test_idx);
-    free(node_map);
+    // Features
+    double t_f = omp_get_wtime();
+    ds->nodes = malloc(num_nodes * num_features * sizeof(*ds->nodes));
+    ds->num_nodes = num_nodes;
+    load_inputs(ds->nodes, num_nodes);
+    t_f = omp_get_wtime() - t_f;
 
-    printf("Loaded OGB-ARXIV [%u/%u/%u] in %.2fs (edges: %u -> %u, -%.0f%%)\n",
-           train_size, valid_size, test_size,
-           omp_get_wtime() - t,
-           raw_edges, train_edges + valid_edges + test_edges,
-           100 - 100.0 * (train_edges + valid_edges + test_edges) / raw_edges);
+    // Labels
+    double t_l = omp_get_wtime();
+    ds->labels = malloc(num_nodes * sizeof(*ds->labels));
+    load_labels(ds->labels);
+    t_l = omp_get_wtime() - t_l;
 
-    return data;
+    // Add size info
+    ds->num_edges = raw_edges.count;
+    ds->num_features = num_features;
+    ds->num_classes = num_classes;
+
+    printf("Loaded OGB-ARXIV in %.2fs\n", omp_get_wtime() - t);
+    printf("    loading edges: %.2fs\n", t_e);
+    printf("    loading features: %.2fs\n", t_f);
+    printf("    loading labels: %.2fs\n", t_l);
+    return ds;
 }
 
-void destroy_dataset(Dataset *ds)
+#define INVALID_IDX UINT32_MAX
+
+Dataset *split_dataset(Dataset *src, Split split)
+{
+    double t = omp_get_wtime();
+    uint32_t *split_idx, split_size;
+
+    static const char *split_paths[] = {
+        [SPLIT_TRAIN] = "./arxiv/processed/train.csv",
+        [SPLIT_VALID] = "./arxiv/processed/valid.csv",
+        [SPLIT_TEST]  = "./arxiv/processed/test.csv",
+    };
+
+    if (split < 0 || split > SPLIT_TEST)
+    {
+        ERROR("Unknown split: %d", split);
+    }
+
+    split_size = load_split(split_paths[split], &split_idx);
+
+#if defined(REDUCED_GRAPH)
+    static const uint32_t reduced_sizes[] = {
+        [SPLIT_TRAIN] = 700,
+        [SPLIT_VALID] = 400,
+        [SPLIT_TEST]  = 600,
+    };
+    split_size = reduced_sizes[split];
+#endif
+
+    Dataset *ds = malloc(sizeof(*ds));
+    ds->num_features = num_features;
+    ds->num_classes  = num_classes;
+
+    // Gather features
+    ds->nodes = malloc(split_size * num_features * sizeof(*ds->nodes));
+#pragma omp parallel for
+    for (size_t i = 0; i < split_size; i++) {
+        memcpy(&ds->nodes[i * num_features],
+               &src->nodes[split_idx[i] * num_features],
+               num_features * sizeof(*ds->nodes));
+    }
+
+    // Gather labels
+    ds->labels = malloc(split_size * sizeof(*ds->labels));
+    for (size_t i = 0; i < split_size; i++) {
+        ds->labels[i] = src->labels[split_idx[i]];
+    }
+
+    uint32_t *node_map = malloc(num_nodes * sizeof(*node_map));
+    build_node_mapping(node_map, num_nodes, split_idx, split_size);
+
+    // Filter and remap edges
+    ds->edges.data = malloc(2 * src->num_edges * sizeof(*ds->edges.data)); // Worst case: every edge survives
+    uint32_t edge_count = 0;
+    for (uint32_t i = 0; i < src->num_edges; i++) {
+        uint32_t s = node_map[src->edges.data[2*i]];
+        uint32_t d = node_map[src->edges.data[2*i + 1]];
+        if (s != INVALID_IDX && d != INVALID_IDX) {
+            ds->edges.data[2*edge_count]     = s;
+            ds->edges.data[2*edge_count + 1] = d;
+            edge_count++;
+        }
+    }
+    // Shrink to actual size
+    ds->edges.data = realloc(ds->edges.data, 2 * edge_count * sizeof(*ds->edges.data));
+
+    ds->num_nodes = split_size;
+    ds->num_edges  = edge_count;
+
+    free(node_map);
+    free(split_idx);
+
+
+    printf("Split OGB-ARXIV [%s] in %.2fs\n", split_name[split], omp_get_wtime() - t);
+    return ds;
+}
+
+void free_dataset(Dataset *ds)
 {
     free(ds->edges.data);
-    free(ds->inputs);
+    free(ds->nodes);
     free(ds->labels);
     free(ds);
 }

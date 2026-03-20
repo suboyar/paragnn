@@ -10,7 +10,7 @@
 #include "timer.h"
 #include "../nob.h"
 
-static long get_cache_line_size()
+static long get_cache_line_size(void)
 {
     long size;
 

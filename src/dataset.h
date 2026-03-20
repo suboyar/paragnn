@@ -33,32 +33,24 @@ typedef struct {
 #endif
 } EdgeIndex;
 
-typedef struct {
-    size_t start;
-    size_t end;
-} Range;
-
-typedef struct {
-    Range node;
-    Range edge;
-} Slice;
+typedef enum {
+    SPLIT_TRAIN,
+    SPLIT_VALID,
+    SPLIT_TEST,
+} Split;
 
 typedef struct {
     uint32_t num_edges;
-    uint32_t num_inputs;
+    uint32_t num_nodes;
     uint32_t num_features;
     uint32_t num_classes;
-    double *inputs; // Node features with shape [num_nodes, num_node_features]
+    double *nodes; // Node features with shape [num_nodes, num_node_features]
     uint32_t *labels; // Labels to each node [num_nodes]
     EdgeIndex edges;
-
-    Slice train;
-    Slice valid;
-    Slice test;
-    Slice full;
 } Dataset;
 
-Dataset* load_arxiv_dataset();
-void destroy_dataset(Dataset *ds);
+Dataset* load_arxiv_dataset(void);
+Dataset *split_dataset(Dataset *src, Split split);
+void free_dataset(Dataset *ds);
 
 #endif // GRAPH_H_

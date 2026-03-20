@@ -64,7 +64,7 @@ void print_config(void)
 }
 
 // TODO: Check out getrusage from <sys/resource.h>
-void print_memory_usage()
+void print_memory_usage(void)
 {
     FILE* file = fopen("/proc/self/status", "r");
     char line[128];
@@ -80,28 +80,28 @@ void print_memory_usage()
     }
 }
 
-void inference(SageNet *net, Slice slice)
+void inference(SageNet *net, Dataset *ds)
 {
     TIMER_FUNC();
 
     for (size_t i = 0; i < net->num_layers; i++) {
-        net->layers[i].forward(&net->layers[i], slice);
+        net->layers[i].forward(&net->layers[i], ds);
     }
 }
 
-void train(SageNet *net, Slice slice)
+void train(SageNet *net, Dataset *ds)
 {
     TIMER_FUNC();
     for (size_t i = net->num_layers; i-- > 0; ) {
-        net->layers[i].backward(&net->layers[i], slice);
+        net->layers[i].backward(&net->layers[i], ds);
         if (net->layers[i].update)
-            net->layers[i].update(&net->layers[i], lr);
+            net->layers[i].update(&net->layers[i], lr, ds);
     }
 
     // Reset grads
     for (size_t i = 0; i < net->num_layers; i++) {
         if (net->layers[i].zero_grad)
-            net->layers[i].zero_grad(&net->layers[i]);
+            net->layers[i].zero_grad(&net->layers[i], ds);
     }
 }
 
@@ -143,9 +143,15 @@ int main(int argc, char** argv)
     openblas_set_num_threads(omp_get_max_threads());
     print_config();
 
-    Dataset *data = load_arxiv_dataset();
-    size_t num_features = data->num_features;
-    size_t num_classes = data->num_classes;
+    Dataset *ds = load_arxiv_dataset();
+    Dataset *ds_train = split_dataset(ds, SPLIT_TRAIN);
+    Dataset *ds_valid = split_dataset(ds, SPLIT_VALID);
+    Dataset *ds_test = split_dataset(ds, SPLIT_TEST);
+    free_dataset(ds);
+    (void)ds;
+
+    size_t num_features = ds_train->num_features;
+    size_t num_classes = ds_train->num_classes;
     size_t num_entries = (layers - 1) * 3 + 2;
     LayerConf arch[num_entries];
     size_t n = 0;
@@ -166,75 +172,38 @@ int main(int argc, char** argv)
     arch[n++] = SAGE(channels, num_classes);
     arch[n++] = LOGSOFT(num_classes);
 
-    SageNet *net = SAGE_NET_CREATE(arch, data);
+    SageNet *net = SAGE_NET_CREATE(arch, ds_train);
     sage_net_info(net);
 
     size_t runs = 1;
-#ifdef FULL_INFERENCE
-    Slice inference_slice = data->full;
-    double test_accs[runs];
-#else
-    Slice inference_slice = data->train;
-#endif // FULL_INFERENCE
-
     Matrix *output = *net->layers[net->num_layers - 1].output_ptr;
 
     for (size_t run = 1; run <= runs; run++) {
-#ifdef FULL_INFERENCE
-        double best_valid_acc = 0.0;
-        double test_at_best_valid = 0.0;
-#endif
 
         TIMER_BLOCK("run", {
             for (size_t epoch = 1; epoch <= epochs; epoch++) {
                 TIMER_BLOCK("epoch", {
-                    inference(net, inference_slice);
-                    double loss = nll_loss(output, data->labels, data->train.node);
-                    double train_acc = accuracy(output, data->labels, data->num_classes, data->train.node);
-#ifdef FULL_INFERENCE
-                    double valid_acc = accuracy(output, data->labels, data->num_classes, data->valid.node);
-                    double test_acc = accuracy(output, data->labels, data->num_classes, data->test.node);
-#endif
-                    train(net, data->train);
+                        inference(net, ds_train);
+                        double loss = nll_loss(output, ds_train->labels);
+                        double train_acc = accuracy(output, ds_train->labels, ds_train->num_classes);
+                        train(net, ds_train);
 
-                    printf("(Run %zu) Epoch: %zu/%zu, Loss: %f, Train: %.2f%%",
-                           run, epoch, epochs, loss, 100*train_acc);
-#ifdef FULL_INFERENCE
-                    printf(", Valid: %.2f%%, Test: %.2f%%", 100*valid_acc, 100*test_acc);
-
-                    if (valid_acc > best_valid_acc) {
-                        best_valid_acc = valid_acc;
-                        test_at_best_valid = test_acc;
-                    }
-#endif
-                    printf("\n");
+                        printf("(Run %zu) Epoch: %zu/%zu, Loss: %f, Train: %.2f%%\n",
+                               run, epoch, epochs, loss, 100*train_acc);
                 });
             }
         });
-
-#ifdef FULL_INFERENCE
-        test_accs[run - 1] = test_at_best_valid;
-        printf("Run %zu: Test accuracy at best valid = %.2f%%\n\n", run, 100*test_at_best_valid);
-#endif
-        sage_net_reset(net);
+        sage_net_reset(net, ds_train);
     }
-
-#ifdef FULL_INFERENCE
-    double mean = 0.0;
-    for (size_t i = 0; i < runs; i++) mean += test_accs[i];
-    mean /= runs;
-    double var = 0.0;
-    for (size_t i = 0; i < runs; i++) var += (test_accs[i] - mean) * (test_accs[i] - mean);
-    double std = sqrt(var / runs);
-    printf("Test accuracy: %.2f%% ± %.2f%%\n", 100*mean, 100*std);
-#endif
 
     timer_print();
     printf("Total run time: %f\n", timer_get_time("run", TIMER_TOTAL_TIME));
     timer_export_csv(csv_name);
 
-    sage_net_destroy(net);
-    destroy_dataset(data);
+    sage_net_destroy(net, ds_test);
+    free_dataset(ds_test);
+    free_dataset(ds_valid);
+    free_dataset(ds_train);
     return 0;
 }
 
