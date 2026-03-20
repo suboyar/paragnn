@@ -103,6 +103,7 @@ typedef struct {
     bool   extract_ogb;
     bool   download_ogb;
     bool   asm_output;
+    bool   asan;
     bool   help;
     char*  target;
     char*  out_dir;
@@ -243,6 +244,11 @@ void append_common_flags(BuildPhase phase)
         nob_cmd_append(&cmd, "-O3", "-march=native", "-DNDEBUG", "-ffast-math");
     } else {
         nob_cmd_append(&cmd, "-O0");
+    }
+
+    if (flags.asan)
+    {
+        nob_cmd_append(&cmd, "-fsanitize=address", "-fno-omit-frame-pointer");
     }
 
     if (phase == COMPILING && flags.omp_off) {
@@ -595,18 +601,22 @@ int main(int argc, char** argv)
 #endif
 
     flag_str_var(&flags.target,          "target",       "paragnn", "Build target (see list below)");
-    flag_bool_var(&flags.download_ogb,   "download-ogb", false,     "Download OGB arxiv dataset");
-    flag_bool_var(&flags.extract_ogb,    "extract-ogb",  false,     "Re-extract OGB raw files");
+    flag_bool_var(&flags.release,        "release",      false,     "Build in release mode");
+    flag_bool_var(&flags.debug,          "debug",        false,     "Build in debug mode (default)");
+    flag_bool_var(&flags.asan,           "asan",         false,     "Enable AddressSanitizer");
+    flag_bool_var(&flags.omp_off,        "omp-off",      false,     "Don't compile with -fopenmp");
     flag_bool_var(&flags.asm_output,     "S",            false,     "Produce assembly instead of object files");
+    flag_str_var(&flags.out_dir,         "o",            NULL,      "Output directory");
+    flag_list_mut_var(&flags.macros,     "D",                       "Define macro (e.g., -D SIMD_ENABLED)");
+
     flag_bool_var(&flags.run,            "run",          false,     "Run after building");
     flag_bool_var(&flags.slurm,          "slurm",        false,     "Submit job to Slurm");
     flag_list_mut_var(&flags.partitions, "p",                       "Partition(s) to submit to (or 'list', 'all', 'aarch64', 'x86_64')");
-    flag_bool_var(&flags.debug,          "debug",        false,     "Build in debug mode (default)");
-    flag_bool_var(&flags.omp_off,        "omp-off",      false,     "Don't compile with -fopenmp");
-    flag_bool_var(&flags.release,        "release",      false,     "Build in release mode");
-    flag_str_var(&flags.out_dir,         "o",            NULL,      "Output directory");
+
+    flag_bool_var(&flags.download_ogb,   "download-ogb", false,     "Download OGB arxiv dataset");
+    flag_bool_var(&flags.extract_ogb,    "extract-ogb",  false,     "Re-extract OGB raw files");
+
     flag_bool_var(&flags.clean,          "clean",        false,     "Clean build artifacts");
-    flag_list_mut_var(&flags.macros,     "D",                       "Define macro (e.g., -D SIMD_ENABLED)");
     flag_bool_var(&flags.help,           "help",         false,     "Print this help message");
 
     if (!flag_parse(argc, argv)) {
