@@ -84,24 +84,90 @@ void inference(SageNet *net, Dataset *ds)
 {
     TIMER_FUNC();
 
-    for (size_t i = 0; i < net->num_layers; i++) {
-        net->layers[i].forward(&net->layers[i], ds);
+    for (size_t i = 0; i < net->num_layers; i++)
+    {
+        Layer layer = net->layers[i];
+        void *ctx = layer.ctx;
+        switch(layer.type)
+        {
+        case LAYER_SAGE:
+            sageconv((SageLayer*)ctx, ds);
+            break;
+        case LAYER_RELU:
+            relu((ReluLayer*)ctx, ds);
+            break;
+        case LAYER_L2NORM:
+            normalize((L2NormLayer*)ctx, ds);
+            break;
+        case LAYER_LOGSOFT:
+            logsoft((LogSoftLayer*)ctx, ds);
+            break;
+        case LAYER_LINEAR:
+            linear((LinearLayer*)ctx, ds);
+            break;
+        default:
+            ERROR("Unknown layer type %d", layer.type);
+        }
     }
 }
 
 void train(SageNet *net, Dataset *ds)
 {
     TIMER_FUNC();
-    for (size_t i = net->num_layers; i-- > 0; ) {
-        net->layers[i].backward(&net->layers[i], ds);
-        if (net->layers[i].update)
-            net->layers[i].update(&net->layers[i], lr, ds);
-    }
 
-    // Reset grads
-    for (size_t i = 0; i < net->num_layers; i++) {
-        if (net->layers[i].zero_grad)
-            net->layers[i].zero_grad(&net->layers[i], ds);
+    for (size_t i = net->num_layers; i-- > 0; ) {
+        Layer layer = net->layers[i];
+        void *ctx = layer.ctx;
+        switch(layer.type)
+        {
+        case LAYER_SAGE:
+            sageconv_backward((SageLayer*)ctx, ds);
+            sage_layer_update_weights((SageLayer*)ctx, (float)lr, ds);
+            break;
+        case LAYER_RELU:
+            relu_backward((ReluLayer*)ctx, ds);
+            break;
+        case LAYER_L2NORM:
+            normalize_backward((L2NormLayer*)ctx, ds);
+            break;
+        case LAYER_LOGSOFT:
+            cross_entropy_backward((LogSoftLayer*)ctx, ds);
+            break;
+        case LAYER_LINEAR:
+            linear_backward((LinearLayer*)ctx, ds);
+            linear_layer_zero_gradients((LinearLayer*)ctx, ds);
+            break;
+        default:
+            ERROR("Unknown layer type %d", layer.type);
+        }
+    }
+}
+
+void zero_grad(SageNet *net, Dataset *ds)
+{
+    for (size_t i = net->num_layers; i-- > 0; ) {
+        Layer layer = net->layers[i];
+        void *ctx = layer.ctx;
+        switch (layer.type)
+        {
+        case LAYER_SAGE:
+            sage_layer_zero_gradients((SageLayer*)ctx, ds);
+            break;
+        case LAYER_RELU:
+            relu_layer_zero_gradients((ReluLayer*)ctx, ds);
+            break;
+        case LAYER_L2NORM:
+            normalize_layer_zero_gradients((L2NormLayer*)ctx, ds);
+            break;
+        case LAYER_LINEAR:
+            linear_layer_zero_gradients((LinearLayer*)ctx, ds);
+            break;
+        case LAYER_LOGSOFT:
+            logsoft_layer_zero_gradients((LogSoftLayer*)ctx, ds);
+            break;
+        default:
+            ERROR("Unknown layer type %d", layer.type);
+        }
     }
 }
 
@@ -143,11 +209,11 @@ int main(int argc, char** argv)
     openblas_set_num_threads(omp_get_max_threads());
     print_config();
 
-    Dataset *ds = load_arxiv_dataset();
-    Dataset *ds_train = split_dataset(ds, SPLIT_TRAIN);
-    Dataset *ds_valid = split_dataset(ds, SPLIT_VALID);
-    Dataset *ds_test = split_dataset(ds, SPLIT_TEST);
-    free_dataset(ds);
+    Dataset *ds = dataset_load_arxiv();
+    Dataset *ds_train = dataset_split(ds, SPLIT_TRAIN);
+    Dataset *ds_valid = dataset_split(ds, SPLIT_VALID);
+    Dataset *ds_test = dataset_split(ds, SPLIT_TEST);
+    dataset_free(ds);
     (void)ds;
 
     size_t num_features = ds_train->num_features;
@@ -162,7 +228,8 @@ int main(int argc, char** argv)
     arch[n++] = L2NORM(channels);
 
     // Intermediate layers
-    for (size_t i = 1; i < layers - 1; i++) {
+    for (size_t i = 1; i < layers - 1; i++)
+    {
         arch[n++] = SAGE(channels, channels);
         arch[n++] = RELU(channels);
         arch[n++] = L2NORM(channels);
@@ -175,35 +242,28 @@ int main(int argc, char** argv)
     SageNet *net = SAGE_NET_CREATE(arch, ds_train);
     sage_net_info(net);
 
-    size_t runs = 1;
     Matrix *output = *net->layers[net->num_layers - 1].output_ptr;
 
-    for (size_t run = 1; run <= runs; run++) {
+    for (size_t epoch = 1; epoch <= epochs; epoch++)
+    {
+        TIMER_BLOCK("epoch", {
+                inference(net, ds_train);
+                double loss = nll_loss(output, ds_train->labels);
+                double train_acc = accuracy(output, ds_train->labels, ds_train->num_classes);
+                train(net, ds_train);
 
-        TIMER_BLOCK("run", {
-            for (size_t epoch = 1; epoch <= epochs; epoch++) {
-                TIMER_BLOCK("epoch", {
-                        inference(net, ds_train);
-                        double loss = nll_loss(output, ds_train->labels);
-                        double train_acc = accuracy(output, ds_train->labels, ds_train->num_classes);
-                        train(net, ds_train);
-
-                        printf("(Run %zu) Epoch: %zu/%zu, Loss: %f, Train: %.2f%%\n",
-                               run, epoch, epochs, loss, 100*train_acc);
-                });
-            }
-        });
-        sage_net_reset(net, ds_train);
+                printf("Epoch: %zu/%zu, Loss: %f, Train: %.2f%%\n",
+                       epoch, epochs, loss, 100*train_acc);
+            });
     }
 
     timer_print();
-    printf("Total run time: %f\n", timer_get_time("run", TIMER_TOTAL_TIME));
     timer_export_csv(csv_name);
 
-    sage_net_destroy(net, ds_test);
-    free_dataset(ds_test);
-    free_dataset(ds_valid);
-    free_dataset(ds_train);
+    sage_net_free(net, ds_test);
+    dataset_free(ds_test);
+    dataset_free(ds_valid);
+    dataset_free(ds_train);
     return 0;
 }
 

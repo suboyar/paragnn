@@ -49,8 +49,8 @@ typedef struct {
     EdgeIndex edges;
 } Dataset;
 
-Dataset* load_arxiv_dataset(void);
-Dataset *split_dataset(Dataset *src, Split split);
-void free_dataset(Dataset *ds);
+Dataset* dataset_load_arxiv(void);
+Dataset *dataset_split(Dataset *src, Split split);
+void dataset_free(Dataset *ds);
 
 #endif // GRAPH_H_

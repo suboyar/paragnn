@@ -109,51 +109,6 @@ LogSoftLayer* logsoft_layer_create(uint32_t batch_size, size_t dim)
     return layer;
 }
 
-// Dispatchers
-#define DISPATCH(name, Type, func)                              \
-    static void name(Layer *self, Dataset *ds) {                \
-        func((Type *)self->impl, ds);                           \
-    }
-
-#define DISPATCH_UPDATE(name, Type, func)                       \
-    static void name(Layer *self, double lr, Dataset *ds) {     \
-        func((Type *)self->impl, (float)lr, ds);                \
-    }
-
-// GraphSage
-DISPATCH(sage_forward_dispatch,  SageLayer, sageconv)
-DISPATCH(sage_backward_dispatch, SageLayer, sageconv_backward)
-DISPATCH(sage_zero_grad_dispatch, SageLayer, sage_layer_zero_gradients)
-DISPATCH(sage_destroy_dispatch,  SageLayer, sage_layer_destroy)
-DISPATCH(sage_reset_dispatch,    SageLayer, sage_layer_reset)
-DISPATCH_UPDATE(sage_update_dispatch, SageLayer, sage_layer_update_weights)
-
-// ReLU
-DISPATCH(relu_forward_dispatch,  ReluLayer, relu)
-DISPATCH(relu_backward_dispatch, ReluLayer, relu_backward)
-DISPATCH(relu_destroy_dispatch,  ReluLayer, relu_layer_destroy)
-DISPATCH(relu_reset_dispatch,    ReluLayer, relu_layer_reset)
-
-// L2 Normalization
-DISPATCH(l2norm_forward_dispatch,  L2NormLayer, normalize)
-DISPATCH(l2norm_backward_dispatch, L2NormLayer, normalize_backward)
-DISPATCH(l2norm_destroy_dispatch,  L2NormLayer, l2norm_layer_destroy)
-DISPATCH(l2norm_reset_dispatch,    L2NormLayer, l2norm_layer_reset)
-
-// Linear projection
-DISPATCH(linear_forward_dispatch,  LinearLayer, linear)
-DISPATCH(linear_backward_dispatch, LinearLayer, linear_backward)
-DISPATCH(linear_zero_grad_dispatch, LinearLayer, linear_layer_zero_gradients)
-DISPATCH(linear_destroy_dispatch,  LinearLayer, linear_layer_destroy)
-DISPATCH(linear_reset_dispatch,    LinearLayer, linear_layer_reset)
-DISPATCH_UPDATE(linear_update_dispatch, LinearLayer, linear_layer_update_weights)
-
-// LogSoftmax
-DISPATCH(logsoft_forward_dispatch,  LogSoftLayer, logsoft)
-DISPATCH(logsoft_backward_dispatch, LogSoftLayer, cross_entropy_backward)
-DISPATCH(logsoft_destroy_dispatch,  LogSoftLayer, logsoft_layer_destroy)
-DISPATCH(logsoft_reset_dispatch,    LogSoftLayer, logsoft_layer_reset)
-
 SageNet* sage_net_create(LayerConf *conf, size_t count, Dataset *ds)
 {
     SageNet *net = malloc(sizeof(*net));
@@ -165,104 +120,74 @@ SageNet* sage_net_create(LayerConf *conf, size_t count, Dataset *ds)
 
     for (size_t i = 0; i < count; i++)
     {
-        void *impl = NULL;
+        void *ctx = NULL;
         switch (conf[i].type)
         {
         case LAYER_SAGE:
-            impl = sage_layer_create(ds->num_nodes, conf[i].in_dim, conf[i].out_dim);
+            ctx = sage_layer_create(ds->num_nodes, conf[i].in_dim, conf[i].out_dim);
 
 #ifdef VERBOSE_TIMERS
-            ((SageLayer*)impl)->timer_dWroot = nob_temp_sprintf("L%zu_dWr:%zu->%zu", i, conf[i].in_dim, conf[i].out_dim);
-            ((SageLayer*)impl)->timer_dWagg  = nob_temp_sprintf("L%zu_dWa:%zu->%zu", i, conf[i].in_dim, conf[i].out_dim);
-            ((SageLayer*)impl)->timer_dinput = nob_temp_sprintf("L%zu_dIn:%zu", i, conf[i].in_dim);
-            ((SageLayer*)impl)->timer_dneigh = nob_temp_sprintf("L%zu_dNe:%zu", i, conf[i].in_dim);
+            ((SageLayer*)ctx)->timer_dWroot = nob_temp_sprintf("L%zu_dWr:%zu->%zu", i, conf[i].in_dim, conf[i].out_dim);
+            ((SageLayer*)ctx)->timer_dWagg  = nob_temp_sprintf("L%zu_dWa:%zu->%zu", i, conf[i].in_dim, conf[i].out_dim);
+            ((SageLayer*)ctx)->timer_dinput = nob_temp_sprintf("L%zu_dIn:%zu", i, conf[i].in_dim);
+            ((SageLayer*)ctx)->timer_dneigh = nob_temp_sprintf("L%zu_dNe:%zu", i, conf[i].in_dim);
 #else
-            ((SageLayer*)impl)->timer_dWroot = "dWroot";
-            ((SageLayer*)impl)->timer_dWagg  = "dWagg";
-            ((SageLayer*)impl)->timer_dinput = "dinput";
-            ((SageLayer*)impl)->timer_dneigh = "dneigh";
+            ((SageLayer*)ctx)->timer_dWroot = "dWroot";
+            ((SageLayer*)ctx)->timer_dWagg  = "dWagg";
+            ((SageLayer*)ctx)->timer_dinput = "dinput";
+            ((SageLayer*)ctx)->timer_dneigh = "dneigh";
 #endif
             net->layers[i] = (Layer){
 				.type            = LAYER_SAGE,
-                .impl            = impl,
-                .input_ptr       = &((SageLayer*)impl)->input,
-                .grad_output_ptr = &((SageLayer*)impl)->grad_output,
-                .output_ptr      = &((SageLayer*)impl)->output,
-                .grad_input_ptr  = &((SageLayer*)impl)->grad_input,
-                .forward         = sage_forward_dispatch,
-                .backward        = sage_backward_dispatch,
-                .update          = sage_update_dispatch,
-                .zero_grad       = sage_zero_grad_dispatch,
-                .reset           = sage_reset_dispatch,
-                .destroy         = sage_destroy_dispatch,
+                .ctx             = ctx,
+                .input_ptr       = &((SageLayer*)ctx)->input,
+                .grad_output_ptr = &((SageLayer*)ctx)->grad_output,
+                .output_ptr      = &((SageLayer*)ctx)->output,
+                .grad_input_ptr  = &((SageLayer*)ctx)->grad_input,
             };
             break;
         case LAYER_RELU:
-            impl = (void*)relu_layer_create(ds->num_nodes, conf[i].in_dim);
+            ctx = (void*)relu_layer_create(ds->num_nodes, conf[i].in_dim);
             net->layers[i] = (Layer){
 				.type            = LAYER_RELU,
-                .impl            = impl,
-                .input_ptr       = &((ReluLayer*)impl)->input,
-                .grad_output_ptr = &((ReluLayer*)impl)->grad_output,
-                .output_ptr      = &((ReluLayer*)impl)->output,
-                .grad_input_ptr  = &((ReluLayer*)impl)->grad_input,
-                .forward         = relu_forward_dispatch,
-                .backward        = relu_backward_dispatch,
-                .update          = NULL,
-                .zero_grad       = NULL,
-                .reset           = relu_reset_dispatch,
-                .destroy         = relu_destroy_dispatch,
+                .ctx             = ctx,
+                .input_ptr       = &((ReluLayer*)ctx)->input,
+                .grad_output_ptr = &((ReluLayer*)ctx)->grad_output,
+                .output_ptr      = &((ReluLayer*)ctx)->output,
+                .grad_input_ptr  = &((ReluLayer*)ctx)->grad_input,
             };
             break;
         case LAYER_L2NORM:
-            impl = (void*)l2norm_layer_create(ds->num_nodes, conf[i].in_dim);
+            ctx = (void*)l2norm_layer_create(ds->num_nodes, conf[i].in_dim);
             net->layers[i] = (Layer){
 				.type            = LAYER_L2NORM,
-                .impl            = impl,
-                .input_ptr       = &((L2NormLayer*)impl)->input,
-                .grad_output_ptr = &((L2NormLayer*)impl)->grad_output,
-                .output_ptr      = &((L2NormLayer*)impl)->output,
-                .grad_input_ptr  = &((L2NormLayer*)impl)->grad_input,
-                .forward         = l2norm_forward_dispatch,
-                .backward        = l2norm_backward_dispatch,
-                .update          = NULL,
-                .zero_grad       = NULL,
-                .reset           = l2norm_reset_dispatch,
-                .destroy         = l2norm_destroy_dispatch,
+                .ctx             = ctx,
+                .input_ptr       = &((L2NormLayer*)ctx)->input,
+                .grad_output_ptr = &((L2NormLayer*)ctx)->grad_output,
+                .output_ptr      = &((L2NormLayer*)ctx)->output,
+                .grad_input_ptr  = &((L2NormLayer*)ctx)->grad_input,
             };
             break;
         case LAYER_LINEAR:
-            impl = (void*)linear_layer_create(ds->num_nodes, conf[i].in_dim, conf[i].out_dim);
+            ctx = (void*)linear_layer_create(ds->num_nodes, conf[i].in_dim, conf[i].out_dim);
             net->layers[i] = (Layer){
 				.type            = LAYER_LINEAR,
-                .impl            = impl,
-                .input_ptr       = &((LinearLayer*)impl)->input,
-                .grad_output_ptr = &((LinearLayer*)impl)->grad_output,
-                .output_ptr      = &((LinearLayer*)impl)->output,
-                .grad_input_ptr  = &((LinearLayer*)impl)->grad_input,
-                .forward         = linear_forward_dispatch,
-                .backward        = linear_backward_dispatch,
-                .update          = linear_update_dispatch,
-                .zero_grad       = linear_zero_grad_dispatch,
-                .reset           = linear_reset_dispatch,
-                .destroy         = linear_destroy_dispatch,
+                .ctx             = ctx,
+                .input_ptr       = &((LinearLayer*)ctx)->input,
+                .grad_output_ptr = &((LinearLayer*)ctx)->grad_output,
+                .output_ptr      = &((LinearLayer*)ctx)->output,
+                .grad_input_ptr  = &((LinearLayer*)ctx)->grad_input,
             };
             break;
         case LAYER_LOGSOFT:
-            impl = (void*)logsoft_layer_create(ds->num_nodes, conf[i].in_dim);
+            ctx = (void*)logsoft_layer_create(ds->num_nodes, conf[i].in_dim);
             net->layers[i] = (Layer){
 				.type            = LAYER_LOGSOFT,
-                .impl            = impl,
-                .input_ptr       = &((LogSoftLayer*)impl)->input,
+                .ctx             = ctx,
+                .input_ptr       = &((LogSoftLayer*)ctx)->input,
                 .grad_output_ptr = NULL,
-                .output_ptr      = &((LogSoftLayer*)impl)->output,
-                .grad_input_ptr  = &((LogSoftLayer*)impl)->grad_input,
-                .forward         = logsoft_forward_dispatch,
-                .backward        = logsoft_backward_dispatch,
-                .update          = NULL,
-                .zero_grad       = NULL,
-                .reset           = logsoft_reset_dispatch,
-                .destroy         = logsoft_destroy_dispatch,
+                .output_ptr      = &((LogSoftLayer*)ctx)->output,
+                .grad_input_ptr  = &((LogSoftLayer*)ctx)->grad_input,
             };
             break;
         default:
@@ -339,16 +264,16 @@ void logsoft_layer_reset(const LogSoftLayer *l, Dataset *ds)
     matrix_zero(l->grad_input);
 }
 
-void sage_net_reset(const SageNet *net, Dataset *ds)
-{
-    for (size_t i = 0; i < net->num_layers; i++)
-	{
-        net->layers[i].reset(&net->layers[i], ds);
-    }
-}
+// void sage_net_reset(const SageNet *net, Dataset *ds)
+// {
+//     for (size_t i = 0; i < net->num_layers; i++)
+// 	{
+//         net->layers[i].reset(&net->layers[i], ds);
+//     }
+// }
 
 // We don't free matrices that are references from other layers, i.e input and grad_output
-void sage_layer_destroy(SageLayer *l, Dataset *ds)
+void sage_layer_free(SageLayer *l, Dataset *ds)
 {
     if (!l) return;
 
@@ -364,7 +289,7 @@ void sage_layer_destroy(SageLayer *l, Dataset *ds)
     free(l);
 }
 
-void relu_layer_destroy(ReluLayer *l, Dataset *ds)
+void relu_layer_free(ReluLayer *l, Dataset *ds)
 {
     if (!l) return;
 
@@ -374,7 +299,7 @@ void relu_layer_destroy(ReluLayer *l, Dataset *ds)
     free(l);
 }
 
-void l2norm_layer_destroy(L2NormLayer *l, Dataset *ds)
+void l2norm_layer_free(L2NormLayer *l, Dataset *ds)
 {
     if (!l) return;
 
@@ -385,7 +310,7 @@ void l2norm_layer_destroy(L2NormLayer *l, Dataset *ds)
     free(l);
 }
 
-void linear_layer_destroy(LinearLayer *l, Dataset *ds)
+void linear_layer_free(LinearLayer *l, Dataset *ds)
 {
     if (!l) return;
 
@@ -399,7 +324,7 @@ void linear_layer_destroy(LinearLayer *l, Dataset *ds)
     free(l);
 }
 
-void logsoft_layer_destroy(LogSoftLayer *l, Dataset *ds)
+void logsoft_layer_free(LogSoftLayer *l, Dataset *ds)
 {
     if (!l) return;
 
@@ -409,19 +334,35 @@ void logsoft_layer_destroy(LogSoftLayer *l, Dataset *ds)
     free(l);
 }
 
-void sage_net_destroy(SageNet *net, Dataset *ds)
+void sage_net_free(SageNet *net, Dataset *ds)
 {
     if (!net) return;
 
-    // Free the input matrix (owned by the network, not any layer)
-    if (net->num_layers > 0 && net->layers[0].input_ptr)
-	{
-        matrix_destroy(*net->layers[0].input_ptr);
-	}
-
     for (size_t i = 0; i < net->num_layers; i++)
 	{
-        if (net->layers[i].destroy) net->layers[i].destroy(&net->layers[i], ds);
+        Layer layer = net->layers[i];
+        LayerType type = layer.type;
+        void *ctx = layer.ctx;
+        switch(type)
+        {
+        case LAYER_SAGE:
+            sage_layer_free((SageLayer*)ctx, ds);
+            break;
+        case LAYER_RELU:
+            relu_layer_free((ReluLayer*)ctx, ds);
+            break;
+        case LAYER_L2NORM:
+            l2norm_layer_free((L2NormLayer*)ctx, ds);
+            break;
+        case LAYER_LOGSOFT:
+            logsoft_layer_free((LogSoftLayer*)ctx, ds);
+            break;
+        case LAYER_LINEAR:
+            linear_layer_free((LinearLayer*)ctx, ds);
+            break;
+        default:
+            ERROR("Unknown layer type %d", type);
+        }
     }
 
     free(net->layers);
@@ -439,7 +380,7 @@ void sage_net_info(const SageNet *net)
         {
         case LAYER_SAGE:
             printf("  (%zu) SageConv(%zu, %zu)\n", i,
-                   ((SageLayer *)l->impl)->in_dim, ((SageLayer *)l->impl)->out_dim);
+                   ((SageLayer *)l->ctx)->in_dim, ((SageLayer *)l->ctx)->out_dim);
             break;
         case LAYER_RELU:
             printf("  (%zu) ReLU()\n", i);
@@ -449,7 +390,7 @@ void sage_net_info(const SageNet *net)
             break;
         case LAYER_LINEAR:
             printf("  (%zu) Linear(%zu, %zu)\n", i,
-                   ((LinearLayer *)l->impl)->in_dim, ((LinearLayer *)l->impl)->out_dim);
+                   ((LinearLayer *)l->ctx)->in_dim, ((LinearLayer *)l->ctx)->out_dim);
             break;
         case LAYER_LOGSOFT:
             printf("  (%zu) LogSoftmax(dim=1)\n", i);

@@ -218,7 +218,7 @@ static RawEdges load_edges(void)
     return (RawEdges){ .data = edges, .count = count };
 }
 
-Dataset* load_arxiv_dataset(void)
+Dataset* dataset_load_arxiv(void)
 {
     double t = omp_get_wtime();
 
@@ -257,7 +257,7 @@ Dataset* load_arxiv_dataset(void)
 
 #define INVALID_IDX UINT32_MAX
 
-Dataset *split_dataset(Dataset *src, Split split)
+Dataset *dataset_split(Dataset *src, Split split)
 {
     double t = omp_get_wtime();
     uint32_t *split_idx, split_size;
@@ -332,7 +332,7 @@ Dataset *split_dataset(Dataset *src, Split split)
     return ds;
 }
 
-void free_dataset(Dataset *ds)
+void dataset_free(Dataset *ds)
 {
     free(ds->edges.data);
     free(ds->nodes);
