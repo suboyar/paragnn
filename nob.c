@@ -23,12 +23,13 @@
 
 #define nob_cc_flags(cmd) nob_cmd_append(cmd, "-std=c17", "-D_POSIX_C_SOURCE=200809L")
 #define nob_cc_error_flags(cmd) \
-    nob_cmd_append(cmd,         \
-        "-Wall",                \
-        "-Wextra",              \
-        "-Wfloat-conversion",   \
-        "-Werror=implicit-function-declaration", \
-        "-Werror=incompatible-pointer-types") // Maybe re-add -Wno-unknown-pragmas?
+    nob_cmd_append(cmd,                                                 \
+                   "-Wall",                                             \
+                   "-Wextra",                                           \
+                   "-Wfloat-conversion",                                \
+                   "-Werror=implicit-function-declaration",             \
+                   "-Werror=strict-prototypes",                         \
+                   "-Werror=incompatible-pointer-types") // Maybe re-add -Wno-unknown-pragmas?
 
 #define STRINGS(...) { \
     .items = (const char*[]){__VA_ARGS__}, \
