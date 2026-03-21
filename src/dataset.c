@@ -20,6 +20,14 @@ static const char *split_name[] = {
     [SPLIT_TEST]  = "test",
 };
 
+EdgeFormat parse_edge_format(const char* str)
+{
+    if (strncmp(str, "coo", 3) == 0) return EDGE_COO;
+    if (strncmp(str, "csr", 3) == 0)return EDGE_CSR;
+    if (strncmp(str, "csc", 3) == 0) return EDGE_CSC;
+    ERROR("Not a valid edge format: %s", str);
+}
+
 // This is specifically design to only conver cases for node-feat.csv with no space handling
 static inline double parse_double(char** pp)
 {
@@ -182,7 +190,8 @@ static void load_labels(uint32_t *dest)
 }
 
 typedef struct {
-    uint32_t *data;   // pairs: [src0, dst0, src1, dst1, ...]
+    uint32_t *u;
+    uint32_t *v;
     uint32_t count;
 } RawEdges;
 
@@ -200,14 +209,15 @@ static RawEdges load_edges(void)
         if (*p == '\n') count++;
     }
 
-    uint32_t *edges = malloc(2 * count * sizeof(*edges));
+    uint32_t *u = malloc(count * sizeof(*u));
+    uint32_t *v = malloc(count * sizeof(*v));
 
     char *p = data, *end = data + sb.st_size;
     size_t i = 0;
     while (p < end) {
-        edges[2*i]     = parse_u32(&p);
+        u[i] = parse_u32(&p);
         if (*p == ',') p++;
-        edges[2*i + 1] = parse_u32(&p);
+        v[i] = parse_u32(&p);
         if (*p == '\n') p++;
         i++;
     }
@@ -215,19 +225,103 @@ static RawEdges load_edges(void)
     munmap(data, sb.st_size);
     close(fd);
 
-    return (RawEdges){ .data = edges, .count = count };
+    return (RawEdges){ .u = u, .v = v, .count = count };
 }
 
-Dataset* dataset_load_arxiv(void)
+static int cmp_u64(const void *a, const void *b) {
+    uint64_t x = *(const uint64_t *)a;
+    uint64_t y = *(const uint64_t *)b;
+    return (x > y) - (x < y);
+}
+
+static void symmetrize_edges(RawEdges *raw)
+{
+    uint64_t *packed = malloc(2 * raw->count * sizeof(*packed));
+    uint32_t n = 0;
+
+    for (uint32_t i = 0; i < raw->count; i++)
+    {
+        uint32_t u = raw->u[i];
+        uint32_t v = raw->v[i];
+
+        uint64_t fwd = ((uint64_t)u << 32) | v;
+        packed[n++] = fwd;
+
+        if (u != v)             // skip self-loops
+        {
+            uint64_t rev = ((uint64_t)v << 32) | u;
+            packed[n++] = rev;
+        }
+    }
+
+    qsort(packed, n, sizeof(uint64_t), cmp_u64);
+
+
+    uint32_t unique = 0;
+    for (uint32_t i = 0; i < n; i++)
+    {
+        if (unique == 0 || packed[i] != packed[unique - 1])
+            packed[unique++] = packed[i];
+    }
+
+    raw->u = realloc(raw->u, unique * sizeof(*raw->u));
+    raw->v = realloc(raw->v, unique * sizeof(*raw->v));
+    raw->count = unique;
+    for (uint32_t i = 0; i < unique; i++)
+    {
+        raw->u[i] = (uint32_t)(packed[i] >> 32);
+        raw->v[i] = (uint32_t)(packed[i]);
+    }
+
+    free(packed);
+}
+
+Dataset* dataset_load_arxiv(EdgeFormat format, bool to_symmetric)
 {
     double t = omp_get_wtime();
 
     Dataset *ds = malloc(sizeof(*ds));
 
+    // Add size info
+    ds->num_features = num_features;
+    ds->num_classes = num_classes;
+
     // Edges
     double t_e = omp_get_wtime();
     RawEdges raw_edges = load_edges();
-    ds->edges.data = raw_edges.data;
+    if (to_symmetric)
+    {
+        symmetrize_edges(&raw_edges);
+    }
+
+    ds->num_edges = raw_edges.count;
+    ds->edges.format = format;
+    switch(format)
+    {
+    case EDGE_COO:
+        ds->edges.src = malloc(ds->num_edges*sizeof(ds->edges.src));
+        ds->edges.dst = malloc(ds->num_edges*sizeof(ds->edges.dst));
+        if (!ds->edges.src || !ds->edges.dst) ERROR("Could not allocate COO edges");
+
+        for (size_t i = 0; i < raw_edges.count; i++)
+        {
+            ds->edges.src[i] = raw_edges.u[i];
+            ds->edges.dst[i] = raw_edges.v[i];
+        }
+        break;
+    case EDGE_CSR:
+        TODO("Implement CSR convertion");
+        break;
+    case EDGE_CSC:
+        TODO("Implement CSC convertion");
+        break;
+    default:
+        ERROR("Unknown edge format type %d", format);
+    }
+    free(raw_edges.u);
+    free(raw_edges.v);
+
+
     t_e = omp_get_wtime() - t_e;
 
     // Features
@@ -243,11 +337,6 @@ Dataset* dataset_load_arxiv(void)
     load_labels(ds->labels);
     t_l = omp_get_wtime() - t_l;
 
-    // Add size info
-    ds->num_edges = raw_edges.count;
-    ds->num_features = num_features;
-    ds->num_classes = num_classes;
-
     printf("Loaded OGB-ARXIV in %.2fs\n", omp_get_wtime() - t);
     printf("    loading edges: %.2fs\n", t_e);
     printf("    loading features: %.2fs\n", t_f);
@@ -257,7 +346,7 @@ Dataset* dataset_load_arxiv(void)
 
 #define INVALID_IDX UINT32_MAX
 
-Dataset *dataset_split(Dataset *src, Split split)
+Dataset *dataset_split(Dataset *base, Split split)
 {
     double t = omp_get_wtime();
     uint32_t *split_idx, split_size;
@@ -293,33 +382,36 @@ Dataset *dataset_split(Dataset *src, Split split)
 #pragma omp parallel for
     for (size_t i = 0; i < split_size; i++) {
         memcpy(&ds->nodes[i * num_features],
-               &src->nodes[split_idx[i] * num_features],
+               &base->nodes[split_idx[i] * num_features],
                num_features * sizeof(*ds->nodes));
     }
 
     // Gather labels
     ds->labels = malloc(split_size * sizeof(*ds->labels));
     for (size_t i = 0; i < split_size; i++) {
-        ds->labels[i] = src->labels[split_idx[i]];
+        ds->labels[i] = base->labels[split_idx[i]];
     }
 
     uint32_t *node_map = malloc(num_nodes * sizeof(*node_map));
     build_node_mapping(node_map, num_nodes, split_idx, split_size);
 
     // Filter and remap edges
-    ds->edges.data = malloc(2 * src->num_edges * sizeof(*ds->edges.data)); // Worst case: every edge survives
+    // Worst case: every edge survives
+    ds->edges.src = malloc(base->num_edges * sizeof(*ds->edges.src));
+    ds->edges.dst = malloc(base->num_edges * sizeof(*ds->edges.dst));
     uint32_t edge_count = 0;
-    for (uint32_t i = 0; i < src->num_edges; i++) {
-        uint32_t s = node_map[src->edges.data[2*i]];
-        uint32_t d = node_map[src->edges.data[2*i + 1]];
-        if (s != INVALID_IDX && d != INVALID_IDX) {
-            ds->edges.data[2*edge_count]     = s;
-            ds->edges.data[2*edge_count + 1] = d;
+    for (uint32_t i = 0; i < base->num_edges; i++) {
+        uint32_t src = node_map[base->edges.src[i]];
+        uint32_t dst = node_map[base->edges.dst[i]];
+        if (src != INVALID_IDX && dst != INVALID_IDX) {
+            ds->edges.src[edge_count] = src;
+            ds->edges.dst[edge_count] = dst;
             edge_count++;
         }
     }
     // Shrink to actual size
-    ds->edges.data = realloc(ds->edges.data, 2 * edge_count * sizeof(*ds->edges.data));
+    ds->edges.src = realloc(ds->edges.src, edge_count * sizeof(*ds->edges.src));
+    ds->edges.dst = realloc(ds->edges.dst, edge_count * sizeof(*ds->edges.dst));
 
     ds->num_nodes = split_size;
     ds->num_edges  = edge_count;
@@ -334,7 +426,8 @@ Dataset *dataset_split(Dataset *src, Split split)
 
 void dataset_free(Dataset *ds)
 {
-    free(ds->edges.data);
+    free(ds->edges.src);
+    free(ds->edges.dst);
     free(ds->nodes);
     free(ds->labels);
     free(ds);

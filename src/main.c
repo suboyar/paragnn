@@ -35,6 +35,7 @@ static size_t layers = 2;
 static size_t channels = 4;
 static float lr = 0.01f;
 #endif // NDEBUG
+static char *edge_format_str = "cco";
 
 static char *csv_name = NULL;
 
@@ -199,6 +200,9 @@ int main(int argc, char** argv)
     flag_size_var(&layers, "layers", 4, "Number of layers in the SageNet model");
     flag_size_var(&channels, "channels", 256, "Number of hidden channels per layer");
     flag_float_var(&lr, "lr", 0.01f, "Learning rate for training");
+    flag_str_var(&edge_format_str, "edges", "coo", "Edge storage format (coo, csr, csc)");
+
+    EdgeFormat edge_format = parse_edge_format(edge_format_str);
 
     if (!flag_parse(argc, argv)) {
         usage(stderr);
@@ -209,7 +213,9 @@ int main(int argc, char** argv)
     openblas_set_num_threads(omp_get_max_threads());
     print_config();
 
-    Dataset *ds = dataset_load_arxiv();
+    bool to_symmetric = true;
+    Dataset *ds = dataset_load_arxiv(edge_format, to_symmetric);
+
     Dataset *ds_train = dataset_split(ds, SPLIT_TRAIN);
     Dataset *ds_valid = dataset_split(ds, SPLIT_VALID);
     Dataset *ds_test = dataset_split(ds, SPLIT_TEST);

@@ -5,51 +5,48 @@
 
 #include "matrix.h"
 
-#ifndef SRC_NODE
-#define SRC_NODE 0
-#endif
-#ifndef DST_NODE
-#define DST_NODE 1
-#endif
-
-#ifdef USE_CSR_EDGE
-    #define EDGE_ROW_START(e, i)  ((e)->row_ptr[i])
-    #define EDGE_ROW_END(e, i)    ((e)->row_ptr[(i) + 1])
-    #define EDGE_COL(e, k)        ((e)->col_idx[k])
-#else
-    #define EDGE_SRC(e, k)        ((e)->data[2 * (k) + 0])
-    #define EDGE_DST(e, k)        ((e)->data[2 * (k) + 1])
-#endif
-
-typedef struct {
-    uint32_t num_nodes;
-    uint32_t num_edges;
-#ifdef USE_CSR_EDGE
-    uint32_t *row_ptr;
-    uint32_t *col_idx;
-    double *val;
-#else
-    uint32_t *data; // COO format stored as [src0, dst0, src1, dst1, ...]
-#endif
-} EdgeIndex;
-
 typedef enum {
     SPLIT_TRAIN,
     SPLIT_VALID,
     SPLIT_TEST,
 } Split;
 
+typedef enum {
+    EDGE_COO,
+    EDGE_CSR,
+    EDGE_CSC,
+} EdgeFormat;
+
 typedef struct {
-    uint32_t num_edges;
+    EdgeFormat format;
+    union {
+        struct {
+            uint32_t *src;
+            uint32_t *dst;
+        };
+        struct {
+            uint32_t *row_ptr;  // [num_nodes + 1]
+            uint32_t *col_idx;  // [num_edges]
+        };
+        struct {
+            uint32_t *col_ptr;  // [num_nodes + 1]
+            uint32_t *row_idx;  // [num_edges]
+        };
+    };
+} Edges;
+
+typedef struct {
     uint32_t num_nodes;
     uint32_t num_features;
     uint32_t num_classes;
-    double *nodes; // Node features with shape [num_nodes, num_node_features]
-    uint32_t *labels; // Labels to each node [num_nodes]
-    EdgeIndex edges;
+    uint32_t num_edges;
+    double   *nodes;            // Node features with shape [num_nodes, num_node_features]
+    uint32_t *labels;           // Labels to each node [num_nodes]
+    Edges edges;
 } Dataset;
 
-Dataset* dataset_load_arxiv(void);
+EdgeFormat parse_edge_format(const char* str);
+Dataset* dataset_load_arxiv(EdgeFormat format, bool to_symmetric);
 Dataset *dataset_split(Dataset *src, Split split);
 void dataset_free(Dataset *ds);
 
