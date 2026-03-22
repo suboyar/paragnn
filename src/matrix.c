@@ -61,7 +61,7 @@ Matrix* matrix_create(size_t M, size_t N)
     return m;
 }
 
-void matrix_destroy(Matrix *m)
+void matrix_free(Matrix *m)
 {
     free(m->data);
     free(m);

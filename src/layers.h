@@ -114,6 +114,13 @@ L2NormLayer* l2norm_layer_create(uint32_t num_nodes, size_t dim);
 LinearLayer* linear_layer_create(uint32_t num_nodes, size_t in_dim, size_t out_dim);
 LogSoftLayer* logsoft_layer_create(uint32_t num_nodes, uint32_t num_classes, size_t dim);
 
+void sage_net_bind(SageNet *net, Dataset *ds, bool no_grad);
+void sage_layer_bind(SageLayer *layer, uint32_t num_nodes, uint32_t num_edges, Edges edges, bool no_grad);
+void relu_layer_bind(ReluLayer *layer, uint32_t num_nodes, bool no_grad);
+void l2norm_layer_bind(L2NormLayer *layer, uint32_t num_nodes, bool no_grad);
+void linear_layer_bind(LinearLayer *layer, uint32_t num_nodes, bool no_grad);
+void logsoft_layer_bind(LogSoftLayer *layer, uint32_t num_nodes, bool no_grad);
+
 void sage_net_reset(const SageNet *net, Dataset *ds);
 void sage_layer_reset(const SageLayer *l, Dataset *ds);
 void relu_layer_reset(const ReluLayer *l);

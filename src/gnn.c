@@ -372,7 +372,7 @@ void normalize_backward(L2NormLayer *const l)
             }
         }
 
-        matrix_destroy(grad_local);
+        matrix_free(grad_local);
     }
 
     nob_log(NOB_INFO, "normalize_backward: ok");

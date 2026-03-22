@@ -29,7 +29,7 @@ typedef struct {
 } Matrix;
 
 Matrix* matrix_create(size_t M, size_t N);
-void matrix_destroy(Matrix *m);
+void matrix_free(Matrix *m);
 void matrix_zero(Matrix *m);
 void matrix_fill_random(Matrix *m, double low, double high);
 void matrix_fill_xavier_uniform(Matrix *m, size_t in, size_t out);

@@ -25,19 +25,13 @@
 const int flag_push_dash_DASH_BACK;
 #include "../flag.h"
 
-#ifdef NDEBUG
+static bool quick = false;
+static bool early_stop = false;
 static size_t epochs = 1000;
 static size_t layers = 4;
 static size_t channels = 256;
-static float lr = 0.01f;
-#else
-static size_t epochs = 50;
-static size_t layers = 2;
-static size_t channels = 4;
-static float lr = 0.01f;
-#endif // NDEBUG
+static double lr = 0.01;
 static char *edge_format_str = "cco";
-
 static char *csv_name = NULL;
 
 void usage(FILE *stream)
@@ -194,20 +188,27 @@ int main(int argc, char** argv)
     // srand(time(NULL));
     srand(0);
     nob_minimal_log_level = NOB_WARNING;
-
+    flag_bool_var(&quick, "quick", false, "Use small model config for fast iteration");
+    flag_bool_var(&early_stop, "early-stop", false, "Stop training when loss stops decreasing");
     flag_str_var(&csv_name, "csv", NULL, "Output path for timing CSV (use 'stdout' for console)");
     flag_size_var(&epochs, "epochs", 1000, "Number of training epochs");
     flag_size_var(&layers, "layers", 4, "Number of layers in the SageNet model");
     flag_size_var(&channels, "channels", 256, "Number of hidden channels per layer");
-    flag_float_var(&lr, "lr", 0.01f, "Learning rate for training");
+    flag_double_var(&lr, "lr", 0.01f, "Learning rate for training");
     flag_str_var(&edge_format_str, "edges", "coo", "Edge storage format (coo, csr, csc)");
-
-    EdgeFormat edge_format = parse_edge_format(edge_format_str);
 
     if (!flag_parse(argc, argv)) {
         usage(stderr);
         flag_print_error(stderr);
         exit(1);
+    }
+
+    EdgeFormat edge_format = parse_edge_format(edge_format_str);
+    if (quick)
+    {
+        epochs   = 50;
+        layers   = 2;
+        channels = 4;
     }
 
     openblas_set_num_threads(omp_get_max_threads());
@@ -253,18 +254,38 @@ int main(int argc, char** argv)
     OptimKind optim_kind = OPTIM_ADAM;
     Optim *optim = optim_create(optim_kind, net, lr);
 
+    double old_loss = DBL_MAX;
     for (size_t epoch = 1; epoch <= epochs; epoch++)
     {
         TIMER_BLOCK("epoch", {
                 inference(net);
                 double loss = nll_loss(output, ds_train->labels);
+                if (early_stop && old_loss < loss)
+                {
+                    printf("Early stopping at epoch %zu/%zu: loss increased (%.6f -> %.6f)\n",
+                           epoch, epochs, old_loss, loss);
+                    break;
+                }
+                old_loss = loss;
                 double train_acc = accuracy(output, ds_train->labels, ds_train->num_classes);
                 train(net, ds_train, optim, optim_kind);
-
                 printf("Epoch: %zu/%zu, Loss: %f, Train: %.2f%%\n",
                        epoch, epochs, loss, 100*train_acc);
             });
     }
+
+    bool no_grad = true;
+    sage_net_bind(net, ds_valid, no_grad);
+    inference(net);
+    Matrix *val_out = *net->layers[net->num_layers - 1].output_ptr;
+    double val_acc = accuracy(val_out, ds_valid->labels, ds_valid->num_classes);
+
+    sage_net_bind(net, ds_test, no_grad);
+    inference(net);
+    Matrix *test_out = *net->layers[net->num_layers - 1].output_ptr;
+    double test_acc = accuracy(test_out, ds_test->labels, ds_test->num_classes);
+
+    printf("Valid: %.2f%%, Test: %.2f%%\n", 100*val_acc, 100*test_acc);
 
     timer_print();
     timer_export_csv(csv_name);
