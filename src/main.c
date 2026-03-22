@@ -16,6 +16,7 @@
 #include "layers.h"
 #include "gnn.h"
 #include "dataset.h"
+#include "optim.h"
 
 #define NOB_IMPLEMENTATION
 #include "../nob.h"
@@ -81,30 +82,29 @@ void print_memory_usage(void)
     }
 }
 
-void inference(SageNet *net, Dataset *ds)
+void inference(SageNet *net)
 {
     TIMER_FUNC();
 
     for (size_t i = 0; i < net->num_layers; i++)
     {
         Layer layer = net->layers[i];
-        void *ctx = layer.ctx;
         switch(layer.type)
         {
         case LAYER_SAGE:
-            sageconv((SageLayer*)ctx, ds);
+            sageconv((SageLayer*)layer.ctx);
             break;
         case LAYER_RELU:
-            relu((ReluLayer*)ctx, ds);
+            relu((ReluLayer*)layer.ctx);
             break;
         case LAYER_L2NORM:
-            normalize((L2NormLayer*)ctx, ds);
+            normalize((L2NormLayer*)layer.ctx);
             break;
         case LAYER_LOGSOFT:
-            logsoft((LogSoftLayer*)ctx, ds);
+            logsoft((LogSoftLayer*)layer.ctx);
             break;
         case LAYER_LINEAR:
-            linear((LinearLayer*)ctx, ds);
+            linear((LinearLayer*)layer.ctx);
             break;
         default:
             ERROR("Unknown layer type %d", layer.type);
@@ -112,59 +112,59 @@ void inference(SageNet *net, Dataset *ds)
     }
 }
 
-void train(SageNet *net, Dataset *ds)
+void train(SageNet *net, Dataset *ds, Optim *optim, OptimKind kind)
 {
     TIMER_FUNC();
 
     for (size_t i = net->num_layers; i-- > 0; ) {
         Layer layer = net->layers[i];
-        void *ctx = layer.ctx;
         switch(layer.type)
         {
         case LAYER_SAGE:
-            sageconv_backward((SageLayer*)ctx, ds);
-            sage_layer_update_weights((SageLayer*)ctx, (float)lr, ds);
+            sageconv_backward((SageLayer*)layer.ctx);
+            // sage_layer_update_weights((SageLayer*)layer.ctx, (float)lr);
             break;
         case LAYER_RELU:
-            relu_backward((ReluLayer*)ctx, ds);
+            relu_backward((ReluLayer*)layer.ctx);
             break;
         case LAYER_L2NORM:
-            normalize_backward((L2NormLayer*)ctx, ds);
+            normalize_backward((L2NormLayer*)layer.ctx);
             break;
         case LAYER_LOGSOFT:
-            cross_entropy_backward((LogSoftLayer*)ctx, ds);
+            cross_entropy_backward((LogSoftLayer*)layer.ctx, ds->labels);
             break;
         case LAYER_LINEAR:
-            linear_backward((LinearLayer*)ctx, ds);
-            linear_layer_zero_gradients((LinearLayer*)ctx, ds);
+            linear_backward((LinearLayer*)layer.ctx);
+            // linear_layer_update_weights((LinearLayer*)layer.ctx, (float)lr);
             break;
         default:
             ERROR("Unknown layer type %d", layer.type);
         }
     }
+
+    optim_update(optim, kind, net);
 }
 
-void zero_grad(SageNet *net, Dataset *ds)
+void zero_grad(SageNet *net)
 {
     for (size_t i = net->num_layers; i-- > 0; ) {
         Layer layer = net->layers[i];
-        void *ctx = layer.ctx;
         switch (layer.type)
         {
         case LAYER_SAGE:
-            sage_layer_zero_gradients((SageLayer*)ctx, ds);
+            sage_layer_zero_gradients((SageLayer*)layer.ctx);
             break;
         case LAYER_RELU:
-            relu_layer_zero_gradients((ReluLayer*)ctx, ds);
+            relu_layer_zero_gradients((ReluLayer*)layer.ctx);
             break;
         case LAYER_L2NORM:
-            normalize_layer_zero_gradients((L2NormLayer*)ctx, ds);
+            normalize_layer_zero_gradients((L2NormLayer*)layer.ctx);
             break;
         case LAYER_LINEAR:
-            linear_layer_zero_gradients((LinearLayer*)ctx, ds);
+            linear_layer_zero_gradients((LinearLayer*)layer.ctx);
             break;
         case LAYER_LOGSOFT:
-            logsoft_layer_zero_gradients((LogSoftLayer*)ctx, ds);
+            logsoft_layer_zero_gradients((LogSoftLayer*)layer.ctx);
             break;
         default:
             ERROR("Unknown layer type %d", layer.type);
@@ -250,13 +250,16 @@ int main(int argc, char** argv)
 
     Matrix *output = *net->layers[net->num_layers - 1].output_ptr;
 
+    OptimKind optim_kind = OPTIM_ADAM;
+    Optim *optim = optim_create(optim_kind, net, lr);
+
     for (size_t epoch = 1; epoch <= epochs; epoch++)
     {
         TIMER_BLOCK("epoch", {
-                inference(net, ds_train);
+                inference(net);
                 double loss = nll_loss(output, ds_train->labels);
                 double train_acc = accuracy(output, ds_train->labels, ds_train->num_classes);
-                train(net, ds_train);
+                train(net, ds_train, optim, optim_kind);
 
                 printf("Epoch: %zu/%zu, Loss: %f, Train: %.2f%%\n",
                        epoch, epochs, loss, 100*train_acc);
@@ -266,7 +269,8 @@ int main(int argc, char** argv)
     timer_print();
     timer_export_csv(csv_name);
 
-    sage_net_free(net, ds_test);
+    optim_free(&optim, optim_kind);
+    sage_net_free(net);
     dataset_free(ds_test);
     dataset_free(ds_valid);
     dataset_free(ds_train);

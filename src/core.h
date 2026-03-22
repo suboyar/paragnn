@@ -10,6 +10,7 @@
 #define MAX(a,b) (((a) > (b)) ? (a) : (b))
 #endif // MAX
 
+#ifndef ERROR
 #define ERROR(fmt, ...) do {                                            \
         fflush(stdout);                                                 \
         _Pragma("omp critical")                                         \
@@ -18,6 +19,18 @@
             abort();                                                    \
         }                                                               \
     } while(0)
+#endif
+
+#ifndef TODO
+#define TODO(fmt, ...) do {                                                 \
+        fflush(stdout);                                                 \
+        _Pragma("omp critical")                                         \
+        {                                                               \
+            fprintf(stderr, "%s:%d: TODO: " fmt "\n", __FILE__, __LINE__, ##__VA_ARGS__); \
+            abort();                                                    \
+        }                                                               \
+    } while(0)
+#endif
 
 #ifndef NDEBUG
     #if defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || defined(_M_X64)

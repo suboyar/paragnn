@@ -63,6 +63,7 @@ Target targets[] = {
             SRC_FOLDER"dataset.c",
             SRC_FOLDER"layers.c",
             SRC_FOLDER"matrix.c",
+            SRC_FOLDER"optim.c",
             SRC_FOLDER"linalg/axpy.c",
             SRC_FOLDER"linalg/copy.c",
             SRC_FOLDER"linalg/scal.c",

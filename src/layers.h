@@ -43,6 +43,9 @@ typedef struct {
 } SageNet;
 
 typedef struct {
+    uint32_t num_nodes;
+    uint32_t num_edges;
+    Edges edges;
     size_t in_dim;
     size_t out_dim;
     Matrix *input;            // Points to previous layer's output
@@ -61,6 +64,7 @@ typedef struct {
 } SageLayer;
 
 typedef struct {
+    uint32_t num_nodes;
     size_t dim;
     Matrix *input;            // Points to previous layer's output
     Matrix *output;
@@ -69,6 +73,7 @@ typedef struct {
 } ReluLayer;
 
 typedef struct {
+    uint32_t num_nodes;
     size_t dim;
     Matrix *input;            // Points to previous layer's output
     Matrix *output;
@@ -78,6 +83,7 @@ typedef struct {
 } L2NormLayer;
 
 typedef struct {
+    uint32_t num_nodes;
     size_t in_dim;
     size_t out_dim;
     Matrix *input;            // Points to previous layer's output
@@ -91,6 +97,8 @@ typedef struct {
 } LinearLayer;
 
 typedef struct {
+    uint32_t num_nodes;
+    uint32_t num_classes;
     size_t dim;
     Matrix *input;            // Points to previous layer's output
     Matrix *output;
@@ -100,25 +108,25 @@ typedef struct {
 
 #define SAGE_NET_CREATE(conf, d) sage_net_create((conf), sizeof(conf)/sizeof(conf[0]), (d))
 SageNet* sage_net_create(LayerConf *conf, size_t count, Dataset *ds);
-SageLayer* sage_layer_create(uint32_t num_nodes, size_t in_dim, size_t out_dim);
+SageLayer* sage_layer_create(uint32_t num_nodes, uint32_t num_edges, Edges edges, size_t in_dim, size_t out_dim);
 ReluLayer* relu_layer_create(uint32_t num_nodes, size_t dim);
 L2NormLayer* l2norm_layer_create(uint32_t num_nodes, size_t dim);
 LinearLayer* linear_layer_create(uint32_t num_nodes, size_t in_dim, size_t out_dim);
-LogSoftLayer* logsoft_layer_create(uint32_t num_nodes, size_t dim);
+LogSoftLayer* logsoft_layer_create(uint32_t num_nodes, uint32_t num_classes, size_t dim);
 
 void sage_net_reset(const SageNet *net, Dataset *ds);
 void sage_layer_reset(const SageLayer *l, Dataset *ds);
-void relu_layer_reset(const ReluLayer *l, Dataset *ds);
-void l2norm_layer_reset(const L2NormLayer *l, Dataset *ds);
-void linear_layer_reset(const LinearLayer *l, Dataset *ds);
-void logsoft_layer_reset(const LogSoftLayer *l, Dataset *ds);
+void relu_layer_reset(const ReluLayer *l);
+void l2norm_layer_reset(const L2NormLayer *l);
+void linear_layer_reset(const LinearLayer *l);
+void logsoft_layer_reset(const LogSoftLayer *l);
 
-void sage_net_free(SageNet *n, Dataset *ds);
-void sage_layer_free(SageLayer* l, Dataset *ds);
-void relu_layer_free(ReluLayer* l, Dataset *ds);
-void l2norm_layer_free(L2NormLayer* l, Dataset *ds);
-void linear_layer_free(LinearLayer *l, Dataset *ds);
-void logsoft_layer_free(LogSoftLayer *l, Dataset *ds);
+void sage_net_free(SageNet *net);
+void sage_layer_free(SageLayer* l);
+void relu_layer_free(ReluLayer* l);
+void l2norm_layer_free(L2NormLayer* l);
+void linear_layer_free(LinearLayer *l);
+void logsoft_layer_free(LogSoftLayer *l);
 
 void sage_net_info(const SageNet *net);
 
