@@ -9,7 +9,6 @@
 
 #include "core.h"
 #include "gnn.h"
-#include "matrix.h"
 #include "dataset.h"
 #include "timer.h"
 #include "linalg/linalg.h"
@@ -23,8 +22,8 @@ void aggregate(SageLayer *const l)
 
     uint32_t in_dim = l->in_dim;
 
-    double* X = l->input->data;
-    size_t ldX = l->input->stride;
+    double* X = l->input;
+    size_t ldX = l->in_dim;
 
     int nthreads = omp_get_max_threads();
     double* t_gather = calloc(nthreads, sizeof(double));
@@ -32,8 +31,8 @@ void aggregate(SageLayer *const l)
     double* t_pool = calloc(nthreads, sizeof(double));
     if (!t_pool) ERROR("Could not calloc t_pool");
 
-    memset(l->agg->data, 0, l->num_nodes * in_dim * sizeof(*l->agg->data));
-    memset(l->mean_scale, 0, l->num_nodes * sizeof(*l->mean_scale));
+    memset(l->agg, 0, l->num_nodes * in_dim * sizeof(Real));
+    memset(l->mean_scale, 0, l->num_nodes * sizeof(Real));
 
 #pragma omp parallel
     {
@@ -43,7 +42,7 @@ void aggregate(SageLayer *const l)
 #pragma omp for
         for (size_t i = 0; i < l->num_nodes; i++) {
             size_t neigh_count = 0;
-            double *Y = l->agg->data + i * l->agg->stride;
+            double *Y = l->agg + i * l->in_dim;
 
             // NOTE: Collects neighbors from only incoming direction.
 
@@ -100,14 +99,24 @@ void aggregate(SageLayer *const l)
 void sageconv(SageLayer *const l)
 {
     TIMER_FUNC();
+
+    size_t M = l->num_nodes;
+    size_t N = l->out_dim;
+    size_t K = l->in_dim;
+
+    // output = input @ Wroot
+    // input:  num_nodes x in_dim
+    // Wroot:  in_dim x out_dim
+    // output: num_nodes x out_dim
     TIMER_BLOCK("Wroot", {
-            matrix_dgemm(LinalgNoTrans,
-                         LinalgNoTrans,
-                         1.0,
-                         l->input,
-                         l->Wroot,
-                         0.0,
-                         l->output);
+            dgemm(M, N, K,
+                  LinalgNoTrans,
+                  LinalgNoTrans,
+                  1.0,
+                  l->input, l->in_dim,
+                  l->Wroot, l->out_dim,
+                  0.0,
+                  l->output, l->out_dim);
         });
 
 // #if defined(BASELINE) || defined(AGGREGATE_BASELINE)
@@ -116,14 +125,20 @@ void sageconv(SageLayer *const l)
 //     aggregate_ccs(l, nodes, edges);
 // #endif
     aggregate(l);
+
+    // output += agg @ Wagg
+    // agg: num_nodes x in_dim
+    // Wagg: in_dim x out_dim
+    // output: num_nodes x out_dim
     TIMER_BLOCK("Wagg", {
-            matrix_dgemm(LinalgNoTrans,
-                         LinalgNoTrans,
-                         1.0,
-                         l->agg,
-                         l->Wagg,
-                         1.0,
-                         l->output);
+            dgemm(M, N, K,
+                  LinalgNoTrans,
+                  LinalgNoTrans,
+                  1.0,
+                  l->agg, l->in_dim,
+                  l->Wagg, l->out_dim,
+                  1.0,
+                  l->output, l->out_dim);
         });
 
     nob_log(NOB_INFO, "sageconv: ok");
@@ -138,7 +153,7 @@ void relu(ReluLayer *const l)
     for (size_t i = 0; i < l->num_nodes; i++) {
 #pragma omp simd
         for (size_t j = 0; j < l->dim; j++) {
-            MIDX(l->output, i, j) = fmax(0.0, MIDX(l->input, i, j));
+            l->output[i*l->dim+j] = fmax(0.0, l->input[i*l->dim+j]);
         }
     }
 }
@@ -153,7 +168,7 @@ void normalize(L2NormLayer *const l)
     for (size_t i = 0; i < l->num_nodes; i++) {
         double sum_sq = 0.0;
         for (size_t j = 0; j < l->dim; j++) {
-            double val = MIDX(l->input, i, j);
+            double val = l->input[i*l->dim+j];
             sum_sq += val * val;
         }
 
@@ -161,10 +176,10 @@ void normalize(L2NormLayer *const l)
         double recip_mag = 1.0 / fmax(norm, eps);
 
         for (size_t j = 0; j < l->dim; j++) {
-            MIDX(l->output, i, j) = MIDX(l->input, i, j) * recip_mag;
+            l->output[i*l->dim+j] = l->input[i*l->dim+j] * recip_mag;
         }
 
-        MIDX(l->recip_mag, i, 0) = recip_mag;
+        l->recip_mag[i] = recip_mag;
     }
 
     nob_log(NOB_INFO, "normalize: ok");
@@ -174,22 +189,29 @@ void linear(LinearLayer *const l)
 {
     TIMER_FUNC();
 
-    matrix_dgemm(LinalgNoTrans,
-                 LinalgNoTrans,
-                 1.0,
-                 l->input,
-                 l->W,
-                 0.0,
-                 l->output);
+    size_t M = l->num_nodes;
+    size_t N = l->out_dim;
+    size_t K = l->in_dim;
 
-    if (l->bias) {
+    // output = input @ Wroot
+    // input:  num_nodes x in_dim
+    // W:  in_dim x out_dim
+    // output: num_nodes x out_dim
+    dgemm(M, N, K,
+          LinalgNoTrans,
+          LinalgNoTrans,
+          1.0,
+          l->input, l->in_dim,
+          l->W, l->out_dim,
+          0.0,
+          l->output, l->out_dim);
+
 #pragma omp parallel for
         for (size_t i = 0; i < l->num_nodes; i++) {
             for (size_t j = 0; j < l->out_dim; j++) {
-                MIDX(l->output, i, j) += MIDX(l->bias, 0, j);
+                l->output[i*l->out_dim+j] += l->bias[j];
             }
         }
-    }
 
     nob_log(NOB_INFO, "linear: ok");
 }
@@ -204,64 +226,65 @@ void logsoft(LogSoftLayer *const l)
 #pragma omp parallel for
     for (size_t i = 0; i < l->num_nodes; i++)
     {
-        double max = MIDX(l->input, i, 0);
+        double max = l->input[i*l->dim];
 
         for (size_t j = 1; j < l->num_classes; j++)
         {
-            max = fmax(max, MIDX(l->input, i, j));
+            max = fmax(max, l->input[i*l->dim+j]);
         }
 
         double logsumexp = 0.0;
         for (size_t j = 0; j < l->num_classes; j++)
         {
-            logsumexp += exp(MIDX(l->input, i, j) - max);
+            logsumexp += exp(l->input[i*l->dim+j] - max);
         }
 
         logsumexp = log(logsumexp);
 
         for (size_t j = 0; j < l->num_classes; j++)
         {
-            MIDX(l->output, i, j) = MIDX(l->input, i, j) - max - logsumexp;
+            l->output[i*l->dim+j] = l->input[i*l->dim+j] - max - logsumexp;
         }
     }
 
     nob_log(NOB_INFO, "log_softmax: ok");
 }
 
-double nll_loss(Matrix *const log_probs, uint32_t *labels)
+float nll_loss(LogSoftLayer *l, const uint32_t *labels)
 {
     TIMER_FUNC();
 
-    double loss = 0.0;
+    float loss = 0.0;
 #pragma omp parallel for reduction(+:loss)
-	for (size_t i = 0; i < log_probs->batch; i++) {
-        uint32_t target = labels[i];
-        double log_prob = MIDX(log_probs, i, target);
-        loss -= log_prob;
+    for (size_t i = 0; i < l->num_nodes; i++)
+    {
+        loss -= (float)l->output[i * l->num_classes + labels[i]];
     }
 
-    return loss/log_probs->batch;
+    return loss / l->num_nodes;
 }
 
-double accuracy(Matrix *const log_probs, uint32_t *labels, uint32_t num_classes)
+float accuracy(const LogSoftLayer *l, const uint32_t *labels)
 {
     TIMER_FUNC();
 
-    uint64_t correct = 0.0;
+    uint64_t correct = 0;
 #pragma omp parallel for reduction(+:correct)
-    for (size_t i = 0; i < log_probs->batch; i++) {
-        uint32_t target = labels[i];
+    for (size_t i = 0; i < l->num_nodes; i++)
+    {
+        const Real *row = &l->output[i * l->num_classes];
         uint32_t pred_class = 0;
-        for (size_t j = 1; j < num_classes; j++) {
-            if (MIDX(log_probs, i, j) > MIDX(log_probs, i, pred_class)) {
+        for (size_t j = 1; j < l->num_classes; j++)
+        {
+            if (row[j] > row[pred_class])
                 pred_class = j;
-            }
         }
 
-        if (pred_class == target) correct++;
+        if (pred_class == labels[i])
+            correct++;
     }
 
-    return (double)correct/log_probs->batch;
+    return (float)correct / l->num_nodes;
 }
 
 // Computes gradient flow from both NLLLoss and LogSoftmax.
@@ -277,11 +300,11 @@ void cross_entropy_backward(LogSoftLayer *const l, uint32_t *labels)
     for (size_t i = 0; i < l->num_nodes; i++) {
         uint32_t target = labels[i];
         for (size_t j = 0; j < num_classes; j++) {
-            double softmax_val = exp(MIDX(l->output, i, j));
+            double softmax_val = exp(l->output[i*l->dim+j]);
             if (j == target)
-                MIDX(l->grad_input, i, j) = (softmax_val - 1) * scale;
+                l->grad_input[i*l->dim+j] = (softmax_val - 1) * scale;
             else
-                MIDX(l->grad_input, i, j) = softmax_val * scale;
+                l->grad_input[i*l->dim+j] = softmax_val * scale;
         }
     }
 
@@ -292,50 +315,50 @@ void linear_backward(LinearLayer *const l)
 {
     TIMER_FUNC();
 
-    // Downstream:
-    // Column-major: grad_input = W^T @ grad_output
-    // Row-major:    grad_input = grad_output @ W^T
-    // Note: Row-major storage causes W to be implicitly transposed
-    // printf("linear_grad_input\n");
+    // grad_input = grad_output @ W^T
+    // grad_output: num_nodes * out_dim
+    // W:           in_dim * out_dim
+    // grad_input:  num_nodes * in_dim
     TIMER_BLOCK("grad_input", {
-            matrix_dgemm(LinalgNoTrans,
-                         LinalgTrans,
-                         1.0,
-                         l->grad_output,
-                         l->W,
-                         0.0,
-                         l->grad_input);
+            dgemm(l->num_nodes, l->in_dim, l->out_dim,
+                  LinalgNoTrans, LinalgTrans,
+                  1.0,
+                  l->grad_output, l->out_dim,
+                  l->W,           l->out_dim,
+                  0.0,
+                  l->grad_input,  l->in_dim);
         });
 
-    // Cost of weights:
-    // Column-major: grad_W = grad_output @ input^T
-    // Row-major:    grad_W = input^T @ grad_output
-    // Note: Similar reasoning - Row-major storage causes input to be implicitly transposed
-    // printf("linear_grad_W");
+    // grad_W = input^T @ grad_output
+    // input:       num_nodes * in_dim
+    // grad_output: num_nodes * out_dim
+    // grad_W:      in_dim * out_dim
     TIMER_BLOCK("grad_W", {
-            matrix_dgemm(LinalgTrans,
-                         LinalgNoTrans,
-                         1.0,
-                         l->input,
-                         l->grad_output,
-                         0.0,
-                         l->grad_W);
+            dgemm(l->in_dim, l->out_dim, l->num_nodes,
+                  LinalgTrans, LinalgNoTrans,
+                  1.0,
+                  l->input,       l->in_dim,
+                  l->grad_output, l->out_dim,
+                  0.0,
+                  l->grad_W,      l->out_dim);
         });
 
-    if (l->grad_bias != NULL) {
-        // Sum gradients across batch dimension
-        double t0 = omp_get_wtime();
-#pragma omp parallel for
-        for (size_t i = 0; i < l->num_nodes; i++) {
-            for (size_t j = 0; j < l->out_dim; j++) {
-                // Accumulate the bias used by all batch samples
-#pragma omp atomic
-                MIDX(l->grad_bias, 0, j) += MIDX(l->grad_output, i, j);
-            }
-        }
+    double t0 = omp_get_wtime();
 
-        timer_record("grad_bias", omp_get_wtime() - t0, NULL);
+    // Zero first, then accumulate
+    for (size_t j = 0; j < l->out_dim; j++)
+        l->grad_bias[j] = 0.0;
+
+#pragma omp parallel for
+    for (size_t j = 0; j < l->out_dim; j++) {
+        Real sum = 0.0;
+        for (size_t i = 0; i < l->num_nodes; i++) {
+            sum += l->grad_output[i * l->out_dim + j];
+        }
+        l->grad_bias[j] = sum;
     }
+
+    timer_record("grad_bias", omp_get_wtime() - t0, NULL);
 
     nob_log(NOB_INFO, "linear_backward: ok");
 }
@@ -344,35 +367,24 @@ void normalize_backward(L2NormLayer *const l)
 {
     TIMER_FUNC();
 
-    uint32_t dim = l->dim;
+    size_t dim = l->dim;
 
-#pragma omp parallel
+#pragma omp parallel for
+    for (size_t i = 0; i < l->num_nodes; i++)
     {
-        Matrix* grad_local = matrix_create(dim, dim);
-#pragma omp for
-        for (size_t i = 0; i < l->num_nodes; i++) {
-            for (size_t j = 0; j < dim; j++) {
-                for (size_t k = 0; k < dim; k++) {
-                    MIDX(grad_local, j, k) = - MIDX(l->output, i, j) * MIDX(l->output, i, k); // line: 358
+        Real *out_i      = &l->output[i * dim];
+        Real *grad_out_i = &l->grad_output[i * dim];
+        Real *grad_in_i  = &l->grad_input[i * dim];
+        Real rm           = l->recip_mag[i];
 
-                    if (j == k) {     // Kronecker delta
-                        MIDX(grad_local, j, k) = 1 + MIDX(grad_local, j, k);
-                    }
+        // dot(y, grad_output) for this node
+        Real dot = 0.0;
+        for (size_t j = 0; j < dim; j++)
+            dot += out_i[j] * grad_out_i[j];
 
-                    MIDX(grad_local, j, k) *= MIDX(l->recip_mag, i, 0);
-                }
-            }
-
-            for (size_t j = 0; j < dim; j++) {
-                double sum = 0.0;
-                for (size_t k = 0; k < dim; k++) {
-                    sum += MIDX(l->grad_output, i, k) * MIDX(grad_local, k, j);
-                }
-                MIDX(l->grad_input, i, j) = sum;
-            }
-        }
-
-        matrix_free(grad_local);
+        // grad_input = recip_mag * (grad_output - output * dot)
+        for (size_t j = 0; j < dim; j++)
+            grad_in_i[j] = rm * (grad_out_i[j] - out_i[j] * dot);
     }
 
     nob_log(NOB_INFO, "normalize_backward: ok");
@@ -382,17 +394,13 @@ void relu_backward(ReluLayer *const l)
 {
     TIMER_FUNC();
 
-    uint32_t dim = l->dim;
+    size_t n = l->num_nodes * l->dim;
 
     // TODO: grad_input = grad_output * fmaxf(0.0f, copysignf(1.0f, output));
 #pragma omp parallel for
-    for (size_t i = 0; i < l->num_nodes; i++) {
-        for (size_t j = 0; j < dim; j++) {
-            MIDX(l->grad_input, i, j) = MIDX(l->grad_output, i, j);
-            if (MIDX(l->output, i, j) <= 0.0) {
-                MIDX(l->grad_input, i, j) = 0;
-            }
-        }
+    for (size_t i = 0; i < n; i++)
+    {
+        l->grad_input[i] = (l->output[i] > 0.0) ? l->grad_output[i] : 0.0;
     }
 
     nob_log(NOB_INFO, "relu_backward: ok");
@@ -402,64 +410,69 @@ void sageconv_backward(SageLayer *const l)
 {
     TIMER_FUNC();
 
-    size_t ldd_output = l->grad_output->stride;
-    double *d_output = l->grad_output->data;
-
-    double *input = l->input->data;
-    size_t ldinput = l->input->stride;
-    double *d_Wroot = l->grad_Wroot->data;
-    size_t ldd_Wroot = l->grad_Wroot->stride;
+    // grad_Wroot = input^T @ grad_output
+    // input:       num_nodes x in_dim
+    // grad_output: num_nodes x out_dim
+    // grad_Wroot:  in_dim x out_dim
     TIMER_BLOCK(l->timer_dWroot, {
-            dgemm(l->in_dim, l->out_dim, l->num_nodes,
-                  LinalgTrans, LinalgNoTrans,
-                  1.0,
-                  input, ldinput,
-                  d_output, ldd_output,
-                  0.0,
-                  d_Wroot, ldd_Wroot);
-        });
+        dgemm(l->in_dim, l->out_dim, l->num_nodes,
+              LinalgTrans, LinalgNoTrans,
+              1.0,
+              l->input,      l->in_dim,
+              l->grad_output, l->out_dim,
+              0.0,
+              l->grad_Wroot, l->out_dim);
+    });
 
-    double *agg = l->agg->data;
-    size_t ldagg = l->agg->stride;
-    double *d_Wagg = l->grad_Wagg->data;
-    size_t ldd_Wagg = l->grad_Wagg->stride;
+    // grad_Wagg = agg^T @ grad_output
+    // agg:         num_nodes x in_dim
+    // grad_output: num_nodes x out_dim
+    // grad_Wagg:   in_dim x out_dim
     TIMER_BLOCK(l->timer_dWagg, {
-            dgemm(l->in_dim, l->out_dim, l->num_nodes,
-                  LinalgTrans, LinalgNoTrans,
-                  1.0,
-                  agg, ldagg,
-                  d_output, ldd_output,
-                  0.0,
-                  d_Wagg, ldd_Wagg);
-                });
+        dgemm(l->in_dim, l->out_dim, l->num_nodes,
+              LinalgTrans, LinalgNoTrans,
+              1.0,
+              l->agg,        l->in_dim,
+              l->grad_output, l->out_dim,
+              0.0,
+              l->grad_Wagg,  l->out_dim);
+    });
 
-    size_t ldd_input = l->grad_input->stride;
-    size_t ldWroot = l->Wroot->stride;
-    double *d_input = l->grad_input->data;
-    double *Wroot = l->Wroot->data;
+    // grad_input = grad_output @ Wroot^T
+    // grad_output: num_nodes x out_dim
+    // Wroot:       in_dim x out_dim
+    // grad_input:  num_nodes x in_dim
     TIMER_BLOCK(l->timer_dinput, {
-            dgemm(l->num_nodes, l->in_dim, l->out_dim,
-                  LinalgNoTrans, LinalgTrans,
-                  1.0,
-                  d_output, ldd_output,
-                  Wroot, ldWroot,
-                  0.0,
-                  d_input, ldd_input);
-        });
+        dgemm(l->num_nodes, l->in_dim, l->out_dim,
+              LinalgNoTrans, LinalgTrans,
+              1.0,
+              l->grad_output, l->out_dim,
+              l->Wroot,       l->out_dim,
+              0.0,
+              l->grad_input,  l->in_dim);
+    });
 
+    // Neighbor gradient scatter:
+    // grad_input[src] += mean_scale[dst] * grad_output[dst] @ Wagg^T
     double t0 = omp_get_wtime();
 #pragma omp parallel for
-    for (size_t e = 0; e < l->num_edges; e++) {
-        // With source_to_target flow, src gets gradient from dst's computation
-        // (outgoing gradient) grad_input[src] += grad_output[dst] @ Wagg^T
-        for (size_t i = 0; i < l->in_dim; i++) {
-            double sum = 0.0;
+    for (size_t e = 0; e < l->num_edges; e++)
+    {
+        uint32_t src = l->edges.src[e];
+        uint32_t dst = l->edges.dst[e];
+        Real scale = l->mean_scale[dst];
+        Real *grad_out_dst = &l->grad_output[dst * l->out_dim];
+        Real *grad_in_src  = &l->grad_input[src * l->in_dim];
+
+        for (size_t i = 0; i < l->in_dim; i++)
+        {
+            Real sum = 0.0;
             for (size_t j = 0; j < l->out_dim; j++)
             {
-                sum += MIDX(l->grad_output, l->edges.dst[e], j) * MIDX(l->Wagg, i, j);
+                sum += grad_out_dst[j] * l->Wagg[i * l->out_dim + j];
             }
 #pragma omp atomic
-            MIDX(l->grad_input, l->edges.src[e], i) += sum * l->mean_scale[l->edges.dst[e]];
+            grad_in_src[i] += sum * scale;
         }
     }
     timer_record(l->timer_dneigh, omp_get_wtime() - t0, NULL);
@@ -467,72 +480,49 @@ void sageconv_backward(SageLayer *const l)
     nob_log(NOB_INFO, "sageconv_backward: ok");
 }
 
-// Update weights
-// void sage_layer_update_weights(SageLayer* const l, float lr, bool do_adam)
-// {
-//     if (do_adam)
-//     {
-//         adam_step()
-//     }
-//     else
-//     {
-//         daxpy(l->Wroot->M*l->Wroot->N, -lr,
-//               l->grad_Wroot->data, 1,
-//               l->Wroot->data, 1);
-
-//         daxpy(l->Wagg->M*l->Wagg->N, -lr,
-//               l->grad_Wagg->data, 1,
-//               l->Wagg->data, 1);
-//     }
-
-//     nob_log(NOB_INFO, "update_sageconv_weights: ok");
-// }
-
-// void linear_layer_update_weights(LinearLayer* const l, float lr)
-// {
-//     daxpy(l->W->M*l->W->N, -lr,
-//           l->grad_W->data, 1,
-//           l->W->data, 1);
-
-//     if (l->grad_bias != NULL) {
-//         daxpy(l->bias->N, -lr,
-//               l->grad_bias->data, 1,
-//               l->bias->data, 1);
-//     }
-
-//     nob_log(NOB_INFO, "update_linear_weights: ok");
-// }
-
 // Reset gradient
+#define GRAD_PARALLEL_THRESHOLD 32768  // 256KB of doubles i.e L2 cache
+static inline void zero_out(Real *a, size_t n)
+{
+    if (n < GRAD_PARALLEL_THRESHOLD)
+    {
+        memset(a, 0, n * sizeof(Real));
+    }
+    else
+    {
+#pragma omp parallel for simd
+        for (size_t i = 0; i < n; i++)
+        {
+            a[i] = 0.0;
+        }
+    }
+}
+
 void sage_layer_zero_gradients(SageLayer* l)
 {
-    matrix_zero(l->grad_output); // just a call to memset
-    matrix_zero(l->grad_input);
-    matrix_zero(l->grad_Wagg);
-    matrix_zero(l->grad_Wroot);
+    zero_out(l->grad_input, l->num_nodes * l->in_dim);
+    zero_out(l->grad_Wagg, l->in_dim * l->out_dim);
+    zero_out(l->grad_Wroot, l->in_dim * l->out_dim);
 }
 
 void relu_layer_zero_gradients(ReluLayer* l)
 {
-    matrix_zero(l->grad_output);
-    matrix_zero(l->grad_input);
+    zero_out(l->grad_input, l->num_nodes * l->dim);
 }
 
 void normalize_layer_zero_gradients(L2NormLayer* l)
 {
-    matrix_zero(l->grad_output);
-    matrix_zero(l->grad_input);
+    zero_out(l->grad_input, l->num_nodes * l->dim);
 }
 
 void linear_layer_zero_gradients(LinearLayer* l)
 {
-    matrix_zero(l->grad_output);
-    matrix_zero(l->grad_input);
-    matrix_zero(l->grad_W);
-    matrix_zero(l->grad_bias);
+    zero_out(l->grad_input, l->num_nodes * l->in_dim);
+    zero_out(l->grad_W, l->in_dim * l->out_dim);
+    zero_out(l->grad_bias, l->out_dim);
 }
 
 void logsoft_layer_zero_gradients(LogSoftLayer* l)
 {
-    matrix_zero(l->grad_input);
+    zero_out(l->grad_input, l->num_nodes * l->dim);
 }

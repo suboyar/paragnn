@@ -2,6 +2,19 @@
 #define CORE_H
 
 #include <stdio.h>
+#include <math.h>
+
+#ifdef USE_DOUBLE
+#define Real      double
+#define real_sqrt sqrt
+#define real_pow  pow
+#define real_fabs fabs
+#else
+#define Real      float
+#define real_sqrt sqrtf
+#define real_pow  powf
+#define real_fabs fabsf
+#endif
 
 #ifndef MIN
 #define MIN(a,b) (((a) < (b)) ? (a) : (b))

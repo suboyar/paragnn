@@ -3,37 +3,55 @@
 #include "core.h"
 #include "layers.h"
 #include "gnn.h"
-#include "matrix.h"
 #include "dataset.h"
 #include "timer.h"
 #include "linalg/linalg.h"
+
+static inline void fill_xavier_uniform(Real *x, size_t in, size_t out)
+{
+    const Real limit = real_sqrt(6.0 / (in + out));
+    const Real recip_rand_max = 1.0 / RAND_MAX;
+
+    // OpenMP can't be used here as rand() isn't thread-safe, variants that might
+    // be of interest are srand48_r or random_r. This can be looked more closely if this
+    // function ever takes more too much time.
+    for (size_t i = 0; i < in * out; i++)
+    {
+        x[i] = limit * (2 * (Real)rand() * recip_rand_max - 1.0);
+    }
+}
 
 SageLayer* sage_layer_create(uint32_t num_nodes, uint32_t num_edges, Edges edges, size_t in_dim, size_t out_dim)
 {
     SageLayer *layer = malloc(sizeof(*layer));
     if (!layer) ERROR("Could not allocate SageLayer");
-
-    *layer = (SageLayer){
-        .num_nodes   = num_nodes,
-        .num_edges   = num_edges,
-        .edges       = edges,
-        .in_dim      = in_dim,
-        .out_dim     = out_dim,
-        .input       = NULL, // Set later when connecting layers
-        .output      = matrix_create(num_nodes, out_dim),
-        .agg         = matrix_create(num_nodes, in_dim),
-        .Wagg        = matrix_create(in_dim, out_dim),
-        .Wroot       = matrix_create(in_dim, out_dim),
-        .grad_input  = matrix_create(num_nodes, in_dim),
-        .grad_output = NULL, // Set later when connecting layers
-        .grad_Wagg   = matrix_create(in_dim, out_dim),
-        .grad_Wroot  = matrix_create(in_dim, out_dim),
+    *layer = (SageLayer) {
+        .num_nodes    = num_nodes,
+        .num_edges    = num_edges,
+        .edges        = edges,
+        .in_dim       = in_dim,
+        .out_dim      = out_dim,
+        .input        = NULL,   // Set later when connecting layer
+        .output       = malloc(num_nodes * out_dim * sizeof(Real)),
+        .agg          = malloc(num_nodes * in_dim * sizeof(Real)),
+        .Wagg         = malloc(in_dim * out_dim * sizeof(Real)),
+        .Wroot        = malloc(in_dim * out_dim * sizeof(Real)),
+        .grad_input   = malloc(num_nodes * in_dim * sizeof(Real)),
+        .grad_output  = NULL,   // Set later when connecting layer
+        .grad_Wagg    = malloc(in_dim * out_dim * sizeof(Real)),
+        .grad_Wroot   = malloc(in_dim * out_dim * sizeof(Real)),
+        .mean_scale   = malloc(num_nodes * sizeof(Real)),
     };
-    layer->mean_scale = malloc(num_nodes * sizeof(*layer->mean_scale));
+
+    if (!layer->output || !layer->agg || !layer->Wagg || !layer->Wroot ||
+        !layer->grad_input || !layer->grad_Wagg || !layer->grad_Wroot || !layer->mean_scale)
+    {
+        ERROR("Could not allocate SageLayer buffers");
+    }
 
     // Initialize weights randomly
-    matrix_fill_xavier_uniform(layer->Wroot, in_dim, out_dim);
-    matrix_fill_xavier_uniform(layer->Wagg, in_dim, out_dim);
+    fill_xavier_uniform(layer->Wroot, in_dim, out_dim);
+    fill_xavier_uniform(layer->Wagg, in_dim, out_dim);
 
     return layer;
 }
@@ -47,8 +65,8 @@ ReluLayer* relu_layer_create(uint32_t num_nodes, size_t dim)
         .num_nodes   = num_nodes,
         .dim         = dim,
         .input       = NULL, // Set later when connecting layers,
-        .output      = matrix_create(num_nodes, dim),
-        .grad_input  = matrix_create(num_nodes, dim),
+        .output      = malloc(num_nodes * dim * sizeof(Real)),
+        .grad_input  = malloc(num_nodes * dim * sizeof(Real)),
         .grad_output = NULL, // Set later when connecting layers, mat_create(dim, num_nodes),
     };
 
@@ -65,10 +83,10 @@ L2NormLayer* l2norm_layer_create(uint32_t num_nodes, size_t dim)
         .num_nodes   = num_nodes,
         .dim         = dim,
         .input       = NULL, // Set later when connecting layers,
-        .output      = matrix_create(num_nodes, dim),
-        .grad_input  = matrix_create(num_nodes, dim),
+        .output      = malloc(num_nodes * dim * sizeof(Real)),
+        .grad_input  = malloc(num_nodes * dim * sizeof(Real)),
         .grad_output = NULL, // Set later when connecting layers, mat_create(dim, num_nodes),
-        .recip_mag   = matrix_create(num_nodes, 1)
+        .recip_mag   = malloc(num_nodes * sizeof(Real)),
     };
 
     return layer;
@@ -84,21 +102,20 @@ LinearLayer* linear_layer_create(uint32_t num_nodes, size_t in_dim, size_t out_d
         .in_dim      = in_dim,
         .out_dim     = out_dim,
         .input       = NULL, // Set later when connecting layers
-        .output      = matrix_create(num_nodes, out_dim),
-        .W           = matrix_create(in_dim, out_dim),
-        .bias        = matrix_create(1, out_dim),
-        .grad_input  = matrix_create(num_nodes, in_dim),
+        .output      = malloc(num_nodes * out_dim * sizeof(Real)),
+        .W           = malloc(in_dim * out_dim * sizeof(Real)),
+        .bias        = malloc(out_dim * sizeof(Real)),
+        .grad_input  = malloc(num_nodes * in_dim * sizeof(Real)),
         .grad_output = NULL, // Set later when connecting layers
-        .grad_W      = matrix_create(in_dim, out_dim),
-        .grad_bias   = matrix_create(1, out_dim),
+        .grad_W      = malloc(in_dim * out_dim * sizeof(Real)),
+        .grad_bias   = malloc(out_dim * sizeof(Real)),
     };
 
-    matrix_fill_xavier_uniform(layer->W, in_dim, out_dim);
-    matrix_fill_xavier_uniform(layer->bias, 1, out_dim);
+    fill_xavier_uniform(layer->W, in_dim, out_dim);
+    fill_xavier_uniform(layer->bias, 1, out_dim);
 
     return layer;
 }
-
 
 LogSoftLayer* logsoft_layer_create(uint32_t num_nodes, uint32_t num_classes, size_t dim)
 {
@@ -110,8 +127,8 @@ LogSoftLayer* logsoft_layer_create(uint32_t num_nodes, uint32_t num_classes, siz
         .num_classes = num_classes,
         .dim         = dim,
         .input       = NULL, // Set later when connecting layers
-        .output      = matrix_create(num_nodes, dim),
-        .grad_input  = matrix_create(num_nodes, dim),
+        .output      = malloc(num_nodes * dim * sizeof(Real)),
+        .grad_input  = malloc(num_nodes * dim * sizeof(Real)),
     };
 
     return layer;
@@ -204,11 +221,11 @@ SageNet* sage_net_create(LayerConf *conf, size_t count, Dataset *ds)
     }
 
     // Set first layer's input to the dataset features
-    Matrix *input = matrix_create(ds->num_nodes, ds->num_features);
+    Real *input = malloc(ds->num_nodes * ds->num_features * sizeof(Real));
 #pragma omp parallel for
     for (size_t i = 0; i < ds->num_nodes * ds->num_features; i++)
     {
-        input->data[i] = ds->nodes[i];
+        input[i] = ds->nodes[i];
     }
     *(net->layers[0].input_ptr) = input;
 
@@ -229,20 +246,20 @@ void sage_layer_bind(SageLayer *layer, uint32_t num_nodes, uint32_t num_edges, E
 {
     if (layer->num_nodes != num_nodes)
     {
-        matrix_free(layer->output);
-        matrix_free(layer->agg);
-        if (!no_grad) matrix_free(layer->grad_input);
-        if (!no_grad) matrix_free(layer->grad_Wroot);
-        if (!no_grad) matrix_free(layer->grad_Wagg);
+        free(layer->output);
+        free(layer->agg);
+        if (!no_grad) free(layer->grad_input);
+        if (!no_grad) free(layer->grad_Wroot);
+        if (!no_grad) free(layer->grad_Wagg);
 
         free(layer->mean_scale);
 
-        layer->output                   = matrix_create(num_nodes, layer->out_dim);
-        layer->agg                      = matrix_create(num_nodes, layer->in_dim);
-        if (!no_grad) layer->grad_input = matrix_create(num_nodes, layer->in_dim);
-        if (!no_grad) layer->grad_Wagg  = matrix_create(num_nodes, layer->in_dim);
-        if (!no_grad) layer->grad_Wroot = matrix_create(num_nodes, layer->in_dim);
-        layer->mean_scale               = malloc(num_nodes * sizeof(*layer->mean_scale));
+        layer->output                   = malloc(num_nodes * layer->out_dim * sizeof(Real));
+        layer->agg                      = malloc(num_nodes * layer->in_dim * sizeof(Real));
+        if (!no_grad) layer->grad_input = malloc(num_nodes * layer->in_dim * sizeof(Real));
+        if (!no_grad) layer->grad_Wagg  = malloc(layer->in_dim * layer->out_dim * sizeof(Real));
+        if (!no_grad) layer->grad_Wroot = malloc(layer->in_dim * layer->out_dim * sizeof(Real));
+        layer->mean_scale               = malloc(num_nodes * sizeof(Real));
     }
     layer->num_nodes = num_nodes;
     layer->num_edges = num_edges;
@@ -253,11 +270,11 @@ void relu_layer_bind(ReluLayer *layer, uint32_t num_nodes, bool no_grad)
 {
     if (layer->num_nodes != num_nodes)
     {
-        matrix_free(layer->output);
-        if (!no_grad) matrix_free(layer->grad_input);
+        free(layer->output);
+        if (!no_grad) free(layer->grad_input);
 
-        layer->output                   = matrix_create(num_nodes, layer->dim);
-        if (!no_grad) layer->grad_input = matrix_create(num_nodes, layer->dim);
+        layer->output                   = malloc(num_nodes * layer->dim * sizeof(Real));
+        if (!no_grad) layer->grad_input = malloc(num_nodes * layer->dim * sizeof(Real));
     }
     layer->num_nodes = num_nodes;
 }
@@ -266,13 +283,13 @@ void l2norm_layer_bind(L2NormLayer *layer, uint32_t num_nodes, bool no_grad)
 {
     if (layer->num_nodes != num_nodes)
     {
-        matrix_free(layer->output);
-        if (!no_grad) matrix_free(layer->grad_input);
-        matrix_free(layer->recip_mag);
+        free(layer->output);
+        if (!no_grad) free(layer->grad_input);
+        free(layer->recip_mag);
 
-        layer->output                   = matrix_create(num_nodes, layer->dim);
-        if (!no_grad) layer->grad_input = matrix_create(num_nodes, layer->dim);
-        layer->recip_mag                = matrix_create(num_nodes, 1);
+        layer->output                   = malloc(num_nodes * layer->dim * sizeof(Real));
+        if (!no_grad) layer->grad_input = malloc(num_nodes * layer->dim * sizeof(Real));
+        layer->recip_mag                = malloc(num_nodes * sizeof(Real));
     }
     layer->num_nodes = num_nodes;
 }
@@ -281,15 +298,15 @@ void linear_layer_bind(LinearLayer *layer, uint32_t num_nodes, bool no_grad)
 {
     if (layer->num_nodes != num_nodes)
     {
-        matrix_free(layer->output);
-        if (!no_grad) matrix_free(layer->grad_input);
-        if (!no_grad) matrix_free(layer->grad_W);
-        if (!no_grad) matrix_free(layer->grad_bias);
+        free(layer->output);
+        if (!no_grad) free(layer->grad_input);
+        if (!no_grad) free(layer->grad_W);
+        if (!no_grad) free(layer->grad_bias);
 
-        layer->output                   = matrix_create(num_nodes, layer->out_dim);
-        if (!no_grad) layer->grad_input = matrix_create(num_nodes, layer->in_dim);
-        if (!no_grad) layer->grad_W     = matrix_create(layer->in_dim, layer->out_dim);
-        if (!no_grad) layer->grad_bias  = matrix_create(num_nodes, layer->in_dim);
+        layer->output                   = malloc(num_nodes * layer->out_dim * sizeof(Real));
+        if (!no_grad) layer->grad_input = malloc(num_nodes * layer->in_dim * sizeof(Real));
+        if (!no_grad) layer->grad_W     = malloc(layer->in_dim * layer->out_dim * sizeof(Real));
+        if (!no_grad) layer->grad_bias  = malloc(layer->out_dim * sizeof(Real));
     }
     layer->num_nodes = num_nodes;
 }
@@ -298,11 +315,11 @@ void logsoft_layer_bind(LogSoftLayer *layer, uint32_t num_nodes, bool no_grad)
 {
     if (layer->num_nodes != num_nodes)
     {
-        matrix_free(layer->output);
-        if (!no_grad) matrix_free(layer->grad_input);
+        free(layer->output);
+        if (!no_grad) free(layer->grad_input);
 
-        layer->output                   = matrix_create(num_nodes, layer->dim);
-        if (!no_grad) layer->grad_input = matrix_create(num_nodes, layer->dim);
+        layer->output                   = malloc(num_nodes * layer->dim * sizeof(Real));
+        if (!no_grad) layer->grad_input = malloc(num_nodes * layer->dim * sizeof(Real));
     }
     layer->num_nodes = num_nodes;
 }
@@ -335,15 +352,15 @@ void sage_net_bind(SageNet *net, Dataset *ds, bool no_grad)
     }
 
     // Re-set input features
-    Matrix *input = matrix_create(ds->num_nodes, ds->num_features);
+    Real *input = malloc(ds->num_nodes * ds->num_features * sizeof(Real));
 #pragma omp parallel for
     for (size_t i = 0; i < ds->num_nodes * ds->num_features; i++)
     {
-        input->data[i] = ds->nodes[i];
+        input[i] = ds->nodes[i];
     }
 
-    // Free old input if you own it
-    matrix_free(*(net->layers[0].input_ptr));
+    // TODO: just use the the pointer of input from dataset
+    free(*(net->layers[0].input_ptr));
     *(net->layers[0].input_ptr) = input;
 
     // Re-wire inter-layer pointers (outputs changed address)
@@ -357,146 +374,101 @@ void sage_net_bind(SageNet *net, Dataset *ds, bool no_grad)
     }
 }
 
-void sage_layer_reset(const SageLayer *l, Dataset *ds)
-{
-    matrix_zero(l->output);
-    matrix_zero(l->agg);
-    matrix_zero(l->Wagg);
-    matrix_zero(l->Wroot);
-    matrix_zero(l->grad_input);
-    matrix_zero(l->grad_Wagg);
-    matrix_zero(l->grad_Wroot);
-    memset(l->mean_scale, 0, ds->num_nodes*sizeof(*l->mean_scale));
-
-    matrix_fill_xavier_uniform(l->Wroot, l->in_dim, l->out_dim);
-    matrix_fill_xavier_uniform(l->Wagg, l->in_dim, l->out_dim);
-}
-
-void relu_layer_reset(const ReluLayer *l)
-{
-    matrix_zero(l->output);
-    matrix_zero(l->grad_input);
-}
-
-void l2norm_layer_reset(const L2NormLayer *l)
-{
-    matrix_zero(l->output);
-    matrix_zero(l->grad_input);
-    matrix_zero(l->recip_mag);
-}
-
-void linear_layer_reset(const LinearLayer *l)
-{
-    matrix_zero(l->output);
-    matrix_zero(l->W);
-    matrix_zero(l->bias);
-    matrix_zero(l->grad_input);
-    matrix_zero(l->grad_W);
-    matrix_zero(l->grad_bias);
-
-    matrix_fill_xavier_uniform(l->W, l->in_dim, l->out_dim);
-    matrix_fill_xavier_uniform(l->bias, 1, l->out_dim);
-}
-
-void logsoft_layer_reset(const LogSoftLayer *l)
-{
-    matrix_zero(l->output);
-    matrix_zero(l->grad_input);
-}
 
 // We don't free matrices that are references from other layers, i.e input and grad_output
-void sage_layer_free(SageLayer *l)
+void sage_layer_free(SageLayer **l)
 {
-    if (!l) return;
+    if (!(*l)) return;
 
-    if (l->output) matrix_free(l->output);
-    if (l->agg) matrix_free(l->agg);
-    if (l->Wagg) matrix_free(l->Wagg);
-    if (l->Wroot) matrix_free(l->Wroot);
-    if (l->grad_input) matrix_free(l->grad_input);
-    if (l->grad_Wagg) matrix_free(l->grad_Wagg);
-    if (l->grad_Wroot) matrix_free(l->grad_Wroot);
-    if (l->mean_scale) free(l->mean_scale);
-
-    free(l);
+    free((*l)->output);
+    free((*l)->agg);
+    free((*l)->Wagg);
+    free((*l)->Wroot);
+    free((*l)->grad_input);
+    free((*l)->grad_Wagg);
+    free((*l)->grad_Wroot);
+    free((*l)->mean_scale);
+    free((*l));
+    *l = NULL;
 }
 
-void relu_layer_free(ReluLayer *l)
+void relu_layer_free(ReluLayer **l)
 {
-    if (!l) return;
+    if (!*l) return;
 
-    if (l->output) matrix_free(l->output);
-    if (l->grad_input) matrix_free(l->grad_input);
-
-    free(l);
+    free((*l)->output);
+    free((*l)->grad_input);
+    free(*l);
+    *l = NULL;
 }
 
-void l2norm_layer_free(L2NormLayer *l)
+void l2norm_layer_free(L2NormLayer **l)
 {
-    if (!l) return;
+    if (!*l) return;
 
-    if (l->output) matrix_free(l->output);
-    if (l->grad_input) matrix_free(l->grad_input);
-    if (l->recip_mag) matrix_free(l->recip_mag);
-
-    free(l);
+    free((*l)->output);
+    free((*l)->grad_input);
+    free((*l)->recip_mag);
+    free((*l));
+    *l = NULL;
 }
 
-void linear_layer_free(LinearLayer *l)
+void linear_layer_free(LinearLayer **l)
 {
-    if (!l) return;
+    if (!*l) return;
 
-    if (l->output) matrix_free(l->output);
-    if (l->W) matrix_free(l->W);
-    if (l->bias) matrix_free(l->bias);
-    if (l->grad_input) matrix_free(l->grad_input);
-    if (l->grad_W) matrix_free(l->grad_W);
-    if (l->grad_bias) matrix_free(l->grad_bias);
-
-    free(l);
+    free((*l)->output);
+    free((*l)->W);
+    free((*l)->bias);
+    free((*l)->grad_input);
+    free((*l)->grad_W);
+    free((*l)->grad_bias);
+    free(*l);
+    *l = NULL;
 }
 
-void logsoft_layer_free(LogSoftLayer *l)
+void logsoft_layer_free(LogSoftLayer **l)
 {
-    if (!l) return;
+    if (!*l) return;
 
-    if (l->output) matrix_free(l->output);
-    if (l->grad_input) matrix_free(l->grad_input);
-
-    free(l);
+    free((*l)->output);
+    free((*l)->grad_input);
+    free(*l);
+    *l = NULL;
 }
 
-void sage_net_free(SageNet *net)
+void sage_net_free(SageNet **net)
 {
-    if (!net) return;
+    if (!(*net)) return;
 
-    for (size_t i = 0; i < net->num_layers; i++)
+    for (size_t i = 0; i < (*net)->num_layers; i++)
 	{
-        Layer layer = net->layers[i];
+        Layer layer = (*net)->layers[i];
         switch(layer.type)
         {
         case LAYER_SAGE:
-            sage_layer_free((SageLayer*)layer.ctx);
+            sage_layer_free((SageLayer**)&layer.ctx);
             break;
         case LAYER_RELU:
-            relu_layer_free((ReluLayer*)layer.ctx);
+            relu_layer_free((ReluLayer**)&layer.ctx);
             break;
         case LAYER_L2NORM:
-            l2norm_layer_free((L2NormLayer*)layer.ctx);
+            l2norm_layer_free((L2NormLayer**)&layer.ctx);
             break;
         case LAYER_LOGSOFT:
-            logsoft_layer_free((LogSoftLayer*)layer.ctx);
+            logsoft_layer_free((LogSoftLayer**)&layer.ctx);
             break;
         case LAYER_LINEAR:
-            linear_layer_free((LinearLayer*)layer.ctx);
+            linear_layer_free((LinearLayer**)&layer.ctx);
             break;
         default:
             ERROR("Unknown layer type %d", layer.type);
         }
     }
 
-    free(net->layers);
-    free(net);
+    free((*net)->layers);
+    free(*net);
+    *net = NULL;
 }
 
 void sage_net_info(const SageNet *net)

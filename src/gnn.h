@@ -3,7 +3,6 @@
 
 #include <stddef.h>
 
-#include "matrix.h"
 #include "layers.h"
 
 void sageconv(SageLayer* const l);
@@ -12,17 +11,14 @@ void normalize(L2NormLayer* const l);
 void linear(LinearLayer* const l);
 void logsoft(LogSoftLayer* const l);
 
-double nll_loss(Matrix *const pred, uint32_t *labels);
-double accuracy(Matrix *const pred, uint32_t *labels, uint32_t num_classes);
+float nll_loss(LogSoftLayer *l, const uint32_t *labels);
+float accuracy(const LogSoftLayer *l, const uint32_t *labels);
 
 void cross_entropy_backward(LogSoftLayer *const l, uint32_t *labels);
 void linear_backward(LinearLayer* const l);
 void normalize_backward(L2NormLayer* const l);
 void relu_backward(ReluLayer* const l);
 void sageconv_backward(SageLayer *const l);
-
-// void sage_layer_update_weights(SageLayer* const l, float lr);
-// void linear_layer_update_weights(LinearLayer* const l, float lr);
 
 void sage_layer_zero_gradients(SageLayer* l);
 void relu_layer_zero_gradients(ReluLayer* l);

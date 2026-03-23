@@ -3,7 +3,7 @@
 
 #include <stdio.h>
 
-#include "matrix.h"
+#include "core.h"
 #include "dataset.h"
 
 typedef enum {
@@ -31,10 +31,10 @@ typedef struct Layer {
     void *ctx;              // Points to SageLayer, ReluLayer, etc.
 
     // Used  when connecting layers to each other
-    Matrix **input_ptr;
-    Matrix **output_ptr;
-    Matrix **grad_input_ptr;
-    Matrix **grad_output_ptr;
+    Real **input_ptr;
+    Real **output_ptr;
+    Real **grad_input_ptr;
+    Real **grad_output_ptr;
 } Layer;
 
 typedef struct {
@@ -48,13 +48,13 @@ typedef struct {
     Edges edges;
     size_t in_dim;
     size_t out_dim;
-    Matrix *input;            // Points to previous layer's output
-    Matrix *output;
-    Matrix *agg;
-    Matrix *Wagg, *Wroot;
-    Matrix *grad_output;      // Gradients w.r.t. this layer's output (from downstream)
-    Matrix *grad_input;       // Gradients w.r.t. this layer's input (to upstream)
-    Matrix *grad_Wagg, *grad_Wroot;
+    Real *input;            // Points to previous layer's output
+    Real *output;
+    Real *agg;
+    Real *Wagg, *Wroot;
+    Real *grad_output;      // Gradients w.r.t. this layer's output (from downstream)
+    Real *grad_input;       // Gradients w.r.t. this layer's input (to upstream)
+    Real *grad_Wagg, *grad_Wroot;
     double *mean_scale;       // Scaling factors for mean aggregation (1/neighbor_count)
 
     const char *timer_dWroot;
@@ -66,44 +66,44 @@ typedef struct {
 typedef struct {
     uint32_t num_nodes;
     size_t dim;
-    Matrix *input;            // Points to previous layer's output
-    Matrix *output;
-    Matrix *grad_output;      // Gradients w.r.t. this layer's output (from downstream)
-    Matrix *grad_input;       // Gradients w.r.t. this layer's input (to upstream)
+    Real *input;            // Points to previous layer's output
+    Real *output;
+    Real *grad_output;      // Gradients w.r.t. this layer's output (from downstream)
+    Real *grad_input;       // Gradients w.r.t. this layer's input (to upstream)
 } ReluLayer;
 
 typedef struct {
     uint32_t num_nodes;
     size_t dim;
-    Matrix *input;            // Points to previous layer's output
-    Matrix *output;
-    Matrix *grad_output;      // Gradients w.r.t. this layer's output (from downstream)
-    Matrix *grad_input;       // Gradients w.r.t. this layer's input (to upstream)
-    Matrix *recip_mag;        // 1/||x||_2
+    Real *input;            // Points to previous layer's output
+    Real *output;
+    Real *grad_output;      // Gradients w.r.t. this layer's output (from downstream)
+    Real *grad_input;       // Gradients w.r.t. this layer's input (to upstream)
+    Real *recip_mag;        // 1/||x||_2
 } L2NormLayer;
 
 typedef struct {
     uint32_t num_nodes;
     size_t in_dim;
     size_t out_dim;
-    Matrix *input;            // Points to previous layer's output
-    Matrix *output;
-    Matrix *W;
-    Matrix *bias;
-    Matrix *grad_output;      // Gradients w.r.t. this layer's output (from downstream)
-    Matrix *grad_input;       // Gradients w.r.t. this layer's input (to upstream)
-    Matrix *grad_W;
-    Matrix *grad_bias;
+    Real *input;            // Points to previous layer's output
+    Real *output;
+    Real *W;
+    Real *bias;
+    Real *grad_output;      // Gradients w.r.t. this layer's output (from downstream)
+    Real *grad_input;       // Gradients w.r.t. this layer's input (to upstream)
+    Real *grad_W;
+    Real *grad_bias;
 } LinearLayer;
 
 typedef struct {
     uint32_t num_nodes;
     uint32_t num_classes;
     size_t dim;
-    Matrix *input;            // Points to previous layer's output
-    Matrix *output;
+    Real *input;            // Points to previous layer's output
+    Real *output;
     // We use cross-entropy derivative since we are be using (LogSoftmax+NLLLoss)
-    Matrix *grad_input;
+    Real *grad_input;
 } LogSoftLayer;
 
 #define SAGE_NET_CREATE(conf, d) sage_net_create((conf), sizeof(conf)/sizeof(conf[0]), (d))
@@ -121,19 +121,12 @@ void l2norm_layer_bind(L2NormLayer *layer, uint32_t num_nodes, bool no_grad);
 void linear_layer_bind(LinearLayer *layer, uint32_t num_nodes, bool no_grad);
 void logsoft_layer_bind(LogSoftLayer *layer, uint32_t num_nodes, bool no_grad);
 
-void sage_net_reset(const SageNet *net, Dataset *ds);
-void sage_layer_reset(const SageLayer *l, Dataset *ds);
-void relu_layer_reset(const ReluLayer *l);
-void l2norm_layer_reset(const L2NormLayer *l);
-void linear_layer_reset(const LinearLayer *l);
-void logsoft_layer_reset(const LogSoftLayer *l);
-
-void sage_net_free(SageNet *net);
-void sage_layer_free(SageLayer* l);
-void relu_layer_free(ReluLayer* l);
-void l2norm_layer_free(L2NormLayer* l);
-void linear_layer_free(LinearLayer *l);
-void logsoft_layer_free(LogSoftLayer *l);
+void sage_net_free(SageNet **net);
+void sage_layer_free(SageLayer **l);
+void relu_layer_free(ReluLayer **l);
+void l2norm_layer_free(L2NormLayer **l);
+void linear_layer_free(LinearLayer **l);
+void logsoft_layer_free(LogSoftLayer **l);
 
 void sage_net_info(const SageNet *net);
 

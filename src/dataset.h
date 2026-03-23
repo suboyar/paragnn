@@ -1,9 +1,8 @@
 #ifndef GRAPH_H_
 #define GRAPH_H_
 
+#include <stdbool.h>
 #include <stdint.h>
-
-#include "matrix.h"
 
 typedef enum {
     SPLIT_TRAIN,

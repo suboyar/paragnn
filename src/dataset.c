@@ -1,13 +1,21 @@
 #define _GNU_SOURCE
+#include <fcntl.h>
+#include <errno.h>
 #include <math.h>
 #include <stdlib.h>
 #include <stdint.h>
-#include <strings.h>
+#include <string.h>
 #include <inttypes.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+#include "core.h"
+
 
 #include <omp.h>
 
+#include "core.h"
 #include "dataset.h"
 
 static const uint32_t num_nodes = 169343;

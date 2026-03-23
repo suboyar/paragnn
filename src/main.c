@@ -12,7 +12,6 @@
 
 #include "core.h"
 #include "timer.h"
-#include "matrix.h"
 #include "layers.h"
 #include "gnn.h"
 #include "dataset.h"
@@ -249,17 +248,18 @@ int main(int argc, char** argv)
     SageNet *net = SAGE_NET_CREATE(arch, ds_train);
     sage_net_info(net);
 
-    Matrix *output = *net->layers[net->num_layers - 1].output_ptr;
+    LogSoftLayer *log_prob_layer = (LogSoftLayer *)net->layers[net->num_layers - 1].ctx;
 
     OptimKind optim_kind = OPTIM_ADAM;
     Optim *optim = optim_create(optim_kind, net, lr);
+
 
     double old_loss = DBL_MAX;
     for (size_t epoch = 1; epoch <= epochs; epoch++)
     {
         TIMER_BLOCK("epoch", {
                 inference(net);
-                double loss = nll_loss(output, ds_train->labels);
+                float loss = nll_loss(log_prob_layer, ds_train->labels);
                 if (early_stop && old_loss < loss)
                 {
                     printf("Early stopping at epoch %zu/%zu: loss increased (%.6f -> %.6f)\n",
@@ -267,7 +267,7 @@ int main(int argc, char** argv)
                     break;
                 }
                 old_loss = loss;
-                double train_acc = accuracy(output, ds_train->labels, ds_train->num_classes);
+                float train_acc = accuracy(log_prob_layer, ds_train->labels);
                 train(net, ds_train, optim, optim_kind);
                 printf("Epoch: %zu/%zu, Loss: %f, Train: %.2f%%\n",
                        epoch, epochs, loss, 100*train_acc);
@@ -277,13 +277,11 @@ int main(int argc, char** argv)
     bool no_grad = true;
     sage_net_bind(net, ds_valid, no_grad);
     inference(net);
-    Matrix *val_out = *net->layers[net->num_layers - 1].output_ptr;
-    double val_acc = accuracy(val_out, ds_valid->labels, ds_valid->num_classes);
+    double val_acc = accuracy(log_prob_layer, ds_valid->labels);
 
     sage_net_bind(net, ds_test, no_grad);
     inference(net);
-    Matrix *test_out = *net->layers[net->num_layers - 1].output_ptr;
-    double test_acc = accuracy(test_out, ds_test->labels, ds_test->num_classes);
+    double test_acc = accuracy(log_prob_layer, ds_test->labels);
 
     printf("Valid: %.2f%%, Test: %.2f%%\n", 100*val_acc, 100*test_acc);
 
@@ -291,7 +289,7 @@ int main(int argc, char** argv)
     timer_export_csv(csv_name);
 
     optim_free(&optim, optim_kind);
-    sage_net_free(net);
+    sage_net_free(&net);
     dataset_free(ds_test);
     dataset_free(ds_valid);
     dataset_free(ds_train);

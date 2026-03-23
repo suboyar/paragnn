@@ -62,7 +62,6 @@ Target targets[] = {
             SRC_FOLDER"gnn.c",
             SRC_FOLDER"dataset.c",
             SRC_FOLDER"layers.c",
-            SRC_FOLDER"matrix.c",
             SRC_FOLDER"optim.c",
             SRC_FOLDER"linalg/axpy.c",
             SRC_FOLDER"linalg/copy.c",
@@ -75,7 +74,6 @@ Target targets[] = {
     {
         .name = "tsmm_tn",
         .srcs = STRINGS(
-            SRC_FOLDER"matrix.c",
             SRC_FOLDER"timer.c",
             KERNEL_FOLDER"cache_counter.c",
             KERNEL_FOLDER"tsmm_tn.c",
@@ -240,6 +238,9 @@ void append_common_flags(BuildPhase phase)
     if (flags.debug) {
         nob_cmd_append(&cmd, "-ggdb", "-g3", "-gdwarf-2");
     }
+
+    // TODO: Remove this
+    nob_cmd_append(&cmd, "-DUSE_DOUBLE");
 
     if (flags.release) {
         nob_cmd_append(&cmd, "-O3", "-march=native", "-DNDEBUG", "-ffast-math");
