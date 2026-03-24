@@ -59,6 +59,7 @@ Target targets[] = {
         .name = "paragnn",
         .srcs = STRINGS(
             SRC_FOLDER"main.c",
+            SRC_FOLDER"core.c",
             SRC_FOLDER"gnn.c",
             SRC_FOLDER"dataset.c",
             SRC_FOLDER"layers.c",
@@ -103,6 +104,7 @@ typedef struct {
     bool   download_ogb;
     bool   asm_output;
     bool   asan;
+    bool   etags;
     bool   help;
     char*  target;
     char*  out_dir;
@@ -587,6 +589,29 @@ int clean(void)
     return 0;
 }
 
+bool etags(void)
+{
+    const char *folders[] = { SRC_FOLDER, KERNEL_FOLDER };
+
+    nob_log(NOB_INFO, "Generating etags...");
+
+    Nob_Cmd cmd = {0};
+    nob_cmd_append(&cmd, "find", ".", "-type", "f");
+
+    nob_cmd_append(&cmd, "(");
+    for (size_t i = 0; i < NOB_ARRAY_LEN(folders); i++) {
+        if (i > 0) nob_cmd_append(&cmd, "-o");
+        nob_cmd_append(&cmd, "-ipath",
+                       nob_temp_sprintf("*/%s*", folders[i]));
+    }
+    nob_cmd_append(&cmd, ")");
+
+    nob_cmd_append(&cmd, "(", "-name", "*.[ch]", ")");
+    nob_cmd_append(&cmd, "-exec", "etags", "--declarations", "{}", "+");
+    if (!nob_cmd_run(&cmd)) return 1;
+    return 0;
+}
+
 void usage(FILE* stream)
 {
     fprintf(stream, "Usage: ./nob [OPTIONS] [--] [ARGS]\n\n");
@@ -619,6 +644,7 @@ int main(int argc, char** argv)
     flag_bool_var(&flags.extract_ogb,    "extract-ogb",  false,     "Re-extract OGB raw files");
 
     flag_bool_var(&flags.clean,          "clean",        false,     "Clean build artifacts");
+    flag_bool_var(&flags.etags,          "etags",        false,     "Genereate etags");
     flag_bool_var(&flags.help,           "help",         false,     "Print this help message");
 
     if (!flag_parse(argc, argv)) {
@@ -651,6 +677,11 @@ int main(int argc, char** argv)
     if (flags.clean) {
         return clean();
     }
+
+    if (flags.etags) {
+        return etags();
+    }
+
 
     if (flags.partitions.count > 0 && strcmp(flags.partitions.items[0], "list") == 0) {
         list_partitions();
