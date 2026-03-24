@@ -32,6 +32,7 @@ typedef struct {
             uint32_t *row_idx;  // [num_edges]
         };
     };
+    uint8_t *self_loop;
 } Edges;
 
 typedef struct {

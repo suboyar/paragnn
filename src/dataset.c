@@ -284,6 +284,36 @@ static void symmetrize_edges(RawEdges *raw)
     free(packed);
 }
 
+uint8_t *detect_self_loops(RawEdges raw_edges, uint32_t num_nodes)
+{
+    uint8_t *self_loop = cache_aligned_alloc(num_nodes * sizeof(*self_loop));
+#pragma omp parallel for
+    for (size_t i = 0; i < num_nodes; i++)
+    {
+        self_loop[i] = 0;
+    }
+
+    uint32_t self_loop_count = 0;
+#pragma omp parallel for
+    for (size_t i = 0; i < raw_edges.count; i++)
+    {
+        if (raw_edges.u[i] == raw_edges.v[i])
+        {
+            self_loop[raw_edges.u[i]] = 1;
+            self_loop_count++;
+        }
+    }
+
+    if (self_loop_count == 0)
+    {
+        printf("No self loops was found\n");
+        free(self_loop);
+        self_loop = NULL;
+    }
+
+    return self_loop;
+}
+
 Dataset* dataset_load_arxiv(EdgeFormat format, bool to_symmetric)
 {
     double t = omp_get_wtime();
@@ -292,10 +322,12 @@ Dataset* dataset_load_arxiv(EdgeFormat format, bool to_symmetric)
     if (!ds) ERROR("Could not allocate Dataset");
     ds->num_features = num_features;
     ds->num_classes = num_classes;
+    ds->num_nodes = num_nodes;
 
     // Edges
     double t_e = omp_get_wtime();
     RawEdges raw_edges = load_edges();
+    ds->edges.self_loop = detect_self_loops(raw_edges, num_nodes);
     if (to_symmetric)
     {
         symmetrize_edges(&raw_edges);
@@ -334,7 +366,6 @@ Dataset* dataset_load_arxiv(EdgeFormat format, bool to_symmetric)
     // Features
     double t_f = omp_get_wtime();
     ds->nodes = cache_aligned_alloc(num_nodes * num_features * sizeof(*ds->nodes));
-    ds->num_nodes = num_nodes;
     load_inputs(ds->nodes, num_nodes);
     t_f = omp_get_wtime() - t_f;
 
