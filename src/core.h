@@ -9,11 +9,13 @@
 #define real_sqrt sqrt
 #define real_pow  pow
 #define real_fabs fabs
+#define real_fmax fmax
 #else
 #define Real      float
 #define real_sqrt sqrtf
 #define real_pow  powf
 #define real_fabs fabsf
+#define real_fmax fmaxf
 #endif
 
 #ifndef MIN
@@ -74,6 +76,7 @@ typedef struct {
     char* filename;
 } FileHandler;
 
-void fill_uniform(double low, double high, double* out, size_t size);
+void *cache_aligned_alloc(size_t size);
+void real_zero_out(Real *a, size_t n);
 
 #endif // CORE_H

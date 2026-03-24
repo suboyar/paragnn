@@ -55,8 +55,14 @@ typedef struct {
     Real *grad_output;      // Gradients w.r.t. this layer's output (from downstream)
     Real *grad_input;       // Gradients w.r.t. this layer's input (to upstream)
     Real *grad_Wagg, *grad_Wroot;
-    double *mean_scale;       // Scaling factors for mean aggregation (1/neighbor_count)
+    Real *mean_scale;       // Scaling factors for mean aggregation (1/neighbor_count)
 
+    // scratch buffer
+    Real *tls_dWroot;
+    Real *tls_dWagg;
+    Real *grad_scatter;
+
+    // timer names
     const char *timer_dWroot;
     const char *timer_dWagg;
     const char *timer_dinput;
@@ -114,12 +120,12 @@ L2NormLayer* l2norm_layer_create(uint32_t num_nodes, size_t dim);
 LinearLayer* linear_layer_create(uint32_t num_nodes, size_t in_dim, size_t out_dim);
 LogSoftLayer* logsoft_layer_create(uint32_t num_nodes, uint32_t num_classes, size_t dim);
 
-void sage_net_bind(SageNet *net, Dataset *ds, bool no_grad);
-void sage_layer_bind(SageLayer *layer, uint32_t num_nodes, uint32_t num_edges, Edges edges, bool no_grad);
-void relu_layer_bind(ReluLayer *layer, uint32_t num_nodes, bool no_grad);
-void l2norm_layer_bind(L2NormLayer *layer, uint32_t num_nodes, bool no_grad);
-void linear_layer_bind(LinearLayer *layer, uint32_t num_nodes, bool no_grad);
-void logsoft_layer_bind(LogSoftLayer *layer, uint32_t num_nodes, bool no_grad);
+void sage_net_bind(SageNet *net, Dataset *ds);
+void sage_layer_bind(SageLayer *l, uint32_t num_nodes, uint32_t num_edges, Edges edges);
+void relu_layer_bind(ReluLayer *l, uint32_t num_nodes);
+void l2norm_layer_bind(L2NormLayer *l, uint32_t num_nodes);
+void linear_layer_bind(LinearLayer *l, uint32_t num_nodes);
+void logsoft_layer_bind(LogSoftLayer *l, uint32_t num_nodes);
 
 void sage_net_free(SageNet **net);
 void sage_layer_free(SageLayer **l);

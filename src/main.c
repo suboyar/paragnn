@@ -205,7 +205,7 @@ int main(int argc, char** argv)
     EdgeFormat edge_format = parse_edge_format(edge_format_str);
     if (quick)
     {
-        epochs   = 50;
+        epochs   = 5;
         layers   = 2;
         channels = 4;
     }
@@ -275,15 +275,14 @@ int main(int argc, char** argv)
     }
 
     timer_disable();
-    bool no_grad = true;
     double val_acc, test_acc;
     TIMER_BLOCK("valid-inference", {
-            sage_net_bind(net, ds_valid, no_grad);
+            sage_net_bind(net, ds_valid);
             inference(net);
             val_acc = accuracy(log_prob_layer, ds_valid->labels);
         });
     TIMER_BLOCK("test-inference", {
-            sage_net_bind(net, ds_test, no_grad);
+            sage_net_bind(net, ds_test);
             inference(net);
             test_acc = accuracy(log_prob_layer, ds_test->labels);
         });
