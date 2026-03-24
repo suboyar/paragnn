@@ -29,12 +29,6 @@ typedef struct {
 typedef struct Layer {
     LayerType type;
     void *ctx;              // Points to SageLayer, ReluLayer, etc.
-
-    // Used  when connecting layers to each other
-    Real **input_ptr;
-    Real **output_ptr;
-    Real **grad_input_ptr;
-    Real **grad_output_ptr;
 } Layer;
 
 typedef struct {

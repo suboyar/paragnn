@@ -344,6 +344,76 @@ void logsoft_layer_bind(LogSoftLayer *l, uint32_t num_nodes)
 
 // SAGENET
 
+static void wireup_network(SageNet *net, size_t num_layers, Dataset *ds)
+{
+    // Set first layer's input to the dataset features
+    ((SageLayer*)net->layers[0].ctx)->input = ds->nodes;
+
+    // Wire everything up
+    for (size_t i = 0; i < num_layers - 1; i++)
+    {
+        Layer layer = net->layers[i];
+        Real *out, **go;
+        switch (layer.type)
+        {
+        case LAYER_SAGE:
+            out = ((SageLayer*)layer.ctx)->output;
+            go  = &((SageLayer*)layer.ctx)->grad_output;
+            break;
+        case LAYER_RELU:
+            out = ((ReluLayer*)layer.ctx)->output;
+            go  = &((ReluLayer*)layer.ctx)->grad_output;
+            break;
+        case LAYER_L2NORM:
+            out = ((L2NormLayer*)layer.ctx)->output;
+            go  = &((L2NormLayer*)layer.ctx)->grad_output;
+            break;
+        case LAYER_LOGSOFT:
+            out = ((LogSoftLayer*)layer.ctx)->output;
+            go  = NULL;
+            break;
+        case LAYER_LINEAR:
+            out = ((LinearLayer*)layer.ctx)->output;
+            go  = &((LinearLayer*)layer.ctx)->grad_output;
+            break;
+        default:
+            ERROR("Unknown layer type %d", layer.type);
+        }
+
+        Layer next_layer = net->layers[i+1];
+        Real **next_in, *next_gi;
+        switch (next_layer.type)
+        {
+        case LAYER_SAGE:
+            next_in = &((SageLayer*)next_layer.ctx)->input;
+            next_gi = ((SageLayer*)next_layer.ctx)->grad_input;
+            break;
+        case LAYER_RELU:
+            next_in = &((ReluLayer*)next_layer.ctx)->input;
+            next_gi = ((ReluLayer*)next_layer.ctx)->grad_input;
+            break;
+        case LAYER_L2NORM:
+            next_in = &((L2NormLayer*)next_layer.ctx)->input;
+            next_gi = ((L2NormLayer*)next_layer.ctx)->grad_input;
+            break;
+        case LAYER_LOGSOFT:
+            next_in = &((LogSoftLayer*)next_layer.ctx)->input;
+            next_gi = ((LogSoftLayer*)next_layer.ctx)->grad_input;
+            break;
+        case LAYER_LINEAR:
+            next_in = &((LinearLayer*)next_layer.ctx)->input;
+            next_gi = ((LinearLayer*)next_layer.ctx)->grad_input;
+            break;
+        default:
+            ERROR("Unknown layer type %d", next_layer.type);
+        }
+
+        *next_in = out;
+        if (go) *go = next_gi;
+    }
+}
+
+
 SageNet* sage_net_create(LayerConf *conf, size_t count, Dataset *ds)
 {
     SageNet *net = malloc(sizeof(*net));
@@ -376,10 +446,6 @@ SageNet* sage_net_create(LayerConf *conf, size_t count, Dataset *ds)
             net->layers[i] = (Layer){
 				.type            = LAYER_SAGE,
                 .ctx             = ctx,
-                .input_ptr       = &((SageLayer*)ctx)->input,
-                .grad_output_ptr = &((SageLayer*)ctx)->grad_output,
-                .output_ptr      = &((SageLayer*)ctx)->output,
-                .grad_input_ptr  = &((SageLayer*)ctx)->grad_input,
             };
             break;
         case LAYER_RELU:
@@ -387,10 +453,6 @@ SageNet* sage_net_create(LayerConf *conf, size_t count, Dataset *ds)
             net->layers[i] = (Layer){
 				.type            = LAYER_RELU,
                 .ctx             = ctx,
-                .input_ptr       = &((ReluLayer*)ctx)->input,
-                .grad_output_ptr = &((ReluLayer*)ctx)->grad_output,
-                .output_ptr      = &((ReluLayer*)ctx)->output,
-                .grad_input_ptr  = &((ReluLayer*)ctx)->grad_input,
             };
             break;
         case LAYER_L2NORM:
@@ -398,10 +460,6 @@ SageNet* sage_net_create(LayerConf *conf, size_t count, Dataset *ds)
             net->layers[i] = (Layer){
 				.type            = LAYER_L2NORM,
                 .ctx             = ctx,
-                .input_ptr       = &((L2NormLayer*)ctx)->input,
-                .grad_output_ptr = &((L2NormLayer*)ctx)->grad_output,
-                .output_ptr      = &((L2NormLayer*)ctx)->output,
-                .grad_input_ptr  = &((L2NormLayer*)ctx)->grad_input,
             };
             break;
         case LAYER_LINEAR:
@@ -409,10 +467,6 @@ SageNet* sage_net_create(LayerConf *conf, size_t count, Dataset *ds)
             net->layers[i] = (Layer){
 				.type            = LAYER_LINEAR,
                 .ctx             = ctx,
-                .input_ptr       = &((LinearLayer*)ctx)->input,
-                .grad_output_ptr = &((LinearLayer*)ctx)->grad_output,
-                .output_ptr      = &((LinearLayer*)ctx)->output,
-                .grad_input_ptr  = &((LinearLayer*)ctx)->grad_input,
             };
             break;
         case LAYER_LOGSOFT:
@@ -420,10 +474,6 @@ SageNet* sage_net_create(LayerConf *conf, size_t count, Dataset *ds)
             net->layers[i] = (Layer){
 				.type            = LAYER_LOGSOFT,
                 .ctx             = ctx,
-                .input_ptr       = &((LogSoftLayer*)ctx)->input,
-                .grad_output_ptr = NULL,
-                .output_ptr      = &((LogSoftLayer*)ctx)->output,
-                .grad_input_ptr  = &((LogSoftLayer*)ctx)->grad_input,
             };
             break;
         default:
@@ -431,19 +481,7 @@ SageNet* sage_net_create(LayerConf *conf, size_t count, Dataset *ds)
         }
     }
 
-    // Set first layer's input to the dataset features
-    *(net->layers[0].input_ptr) = ds->nodes;
-
-    // Wire everything up
-    for (size_t i = 0; i < count - 1; i++)
-    {
-        *(net->layers[i + 1].input_ptr)   = *(net->layers[i].output_ptr);
-        if (net->layers[i].grad_output_ptr)
-        {
-            *(net->layers[i].grad_output_ptr) = *(net->layers[i + 1].grad_input_ptr);
-        }
-    }
-
+    wireup_network(net, count, ds);
     return net;
 }
 
@@ -474,18 +512,7 @@ void sage_net_bind(SageNet *net, Dataset *ds)
         }
     }
 
-    // Re-set input features
-    *(net->layers[0].input_ptr) = ds->nodes;
-
-    // Re-wire inter-layer pointers
-    for (size_t i = 0; i < net->num_layers - 1; i++)
-    {
-        *(net->layers[i + 1].input_ptr) = *(net->layers[i].output_ptr);
-        if (net->layers[i].grad_output_ptr)
-        {
-            *(net->layers[i].grad_output_ptr) = *(net->layers[i + 1].grad_input_ptr);
-        }
-    }
+    wireup_network(net, net->num_layers, ds);
 }
 
 void sage_net_free(SageNet **net)
