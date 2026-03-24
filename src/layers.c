@@ -431,15 +431,9 @@ SageNet* sage_net_create(LayerConf *conf, size_t count, Dataset *ds)
     }
 
     // Set first layer's input to the dataset features
-    Real *input = cache_aligned_alloc(ds->num_nodes * ds->num_features * sizeof(Real));
-#pragma omp parallel for
-    for (size_t i = 0; i < ds->num_nodes * ds->num_features; i++)
-    {
-        input[i] = ds->nodes[i];
-    }
-    *(net->layers[0].input_ptr) = input;
+    *(net->layers[0].input_ptr) = ds->nodes;
 
-// Wire everything up
+    // Wire everything up
     for (size_t i = 0; i < count - 1; i++)
     {
         *(net->layers[i + 1].input_ptr)   = *(net->layers[i].output_ptr);
@@ -480,18 +474,9 @@ void sage_net_bind(SageNet *net, Dataset *ds)
     }
 
     // Re-set input features
-    Real *input = cache_aligned_alloc(ds->num_nodes * ds->num_features * sizeof(Real));
-#pragma omp parallel for
-    for (size_t i = 0; i < ds->num_nodes * ds->num_features; i++)
-    {
-        input[i] = ds->nodes[i];
-    }
+    *(net->layers[0].input_ptr) = ds->nodes;
 
-    // TODO: just use the the pointer of input from dataset
-    free(*(net->layers[0].input_ptr));
-    *(net->layers[0].input_ptr) = input;
-
-    // Re-wire inter-layer pointers (outputs changed address)
+    // Re-wire inter-layer pointers
     for (size_t i = 0; i < net->num_layers - 1; i++)
     {
         *(net->layers[i + 1].input_ptr) = *(net->layers[i].output_ptr);
