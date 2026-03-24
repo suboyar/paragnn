@@ -47,6 +47,6 @@ typedef struct {
 EdgeFormat parse_edge_format(const char* str);
 Dataset* dataset_load_arxiv(EdgeFormat format, bool to_symmetric);
 Dataset *dataset_split(Dataset *src, Split split);
-void dataset_free(Dataset *ds);
+void dataset_free(Dataset **ds);
 
 #endif // GRAPH_H_

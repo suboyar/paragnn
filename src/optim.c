@@ -98,8 +98,8 @@ static AdamState *adam_state_create(size_t n, double lr)
     AdamState *s  = malloc(sizeof(*s));
     if (!s) ERROR("Could not allocate AdamState");
     s->kind       = OPTIM_ADAM;
-    s->m          = malloc(n*sizeof(double));
-    s->v          = malloc(n*sizeof(double));
+    s->m          = cache_aligned_alloc(n*sizeof(double));
+    s->v          = cache_aligned_alloc(n*sizeof(double));
     adam_state_reset(s, n, lr);
 
     // First touch
@@ -196,7 +196,6 @@ void adam_free(Adam **adam)
     free(*adam);
     *adam = NULL;
 }
-
 
 // General interface
 Optim *optim_create(OptimKind kind, SageNet *net, double lr)

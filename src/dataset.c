@@ -114,7 +114,7 @@ static uint32_t load_split(const char *path, uint32_t **split)
         p++;
     }
 
-    *split = malloc(size * sizeof(**split));
+    *split = cache_aligned_alloc(size * sizeof(**split));
 
     p = data;
     size_t count = 0;
@@ -151,7 +151,7 @@ static void load_inputs(double *dest, uint32_t num_nodes)
     fstat(fd, &sb);
     char* data = mmap(NULL, sb.st_size, PROT_READ, MAP_PRIVATE | MAP_POPULATE, fd, 0);
 
-    char** line_starts = malloc((num_nodes + 1) * sizeof(char*));
+    char** line_starts = cache_aligned_alloc((num_nodes + 1) * sizeof(char*));
     line_starts[0] = data;
     size_t line = 1;
     for (char* p = data; p < data + sb.st_size; p++) {
@@ -217,8 +217,8 @@ static RawEdges load_edges(void)
         if (*p == '\n') count++;
     }
 
-    uint32_t *u = malloc(count * sizeof(*u));
-    uint32_t *v = malloc(count * sizeof(*v));
+    uint32_t *u = cache_aligned_alloc(count * sizeof(*u));
+    uint32_t *v = cache_aligned_alloc(count * sizeof(*v));
 
     char *p = data, *end = data + sb.st_size;
     size_t i = 0;
@@ -244,7 +244,7 @@ static int cmp_u64(const void *a, const void *b) {
 
 static void symmetrize_edges(RawEdges *raw)
 {
-    uint64_t *packed = malloc(2 * raw->count * sizeof(*packed));
+    uint64_t *packed = cache_aligned_alloc(2 * raw->count * sizeof(*packed));
     uint32_t n = 0;
 
     for (uint32_t i = 0; i < raw->count; i++)
@@ -289,8 +289,7 @@ Dataset* dataset_load_arxiv(EdgeFormat format, bool to_symmetric)
     double t = omp_get_wtime();
 
     Dataset *ds = malloc(sizeof(*ds));
-
-    // Add size info
+    if (!ds) ERROR("Could not allocate Dataset");
     ds->num_features = num_features;
     ds->num_classes = num_classes;
 
@@ -307,8 +306,8 @@ Dataset* dataset_load_arxiv(EdgeFormat format, bool to_symmetric)
     switch(format)
     {
     case EDGE_COO:
-        ds->edges.src = malloc(ds->num_edges*sizeof(ds->edges.src));
-        ds->edges.dst = malloc(ds->num_edges*sizeof(ds->edges.dst));
+        ds->edges.src = cache_aligned_alloc(ds->num_edges*sizeof(ds->edges.src));
+        ds->edges.dst = cache_aligned_alloc(ds->num_edges*sizeof(ds->edges.dst));
         if (!ds->edges.src || !ds->edges.dst) ERROR("Could not allocate COO edges");
 
         for (size_t i = 0; i < raw_edges.count; i++)
@@ -334,14 +333,14 @@ Dataset* dataset_load_arxiv(EdgeFormat format, bool to_symmetric)
 
     // Features
     double t_f = omp_get_wtime();
-    ds->nodes = malloc(num_nodes * num_features * sizeof(*ds->nodes));
+    ds->nodes = cache_aligned_alloc(num_nodes * num_features * sizeof(*ds->nodes));
     ds->num_nodes = num_nodes;
     load_inputs(ds->nodes, num_nodes);
     t_f = omp_get_wtime() - t_f;
 
     // Labels
     double t_l = omp_get_wtime();
-    ds->labels = malloc(num_nodes * sizeof(*ds->labels));
+    ds->labels = cache_aligned_alloc(num_nodes * sizeof(*ds->labels));
     load_labels(ds->labels);
     t_l = omp_get_wtime() - t_l;
 
@@ -382,11 +381,12 @@ Dataset *dataset_split(Dataset *base, Split split)
 #endif
 
     Dataset *ds = malloc(sizeof(*ds));
+    if (!ds) ERROR("Could not allocate split Dataset");
     ds->num_features = num_features;
     ds->num_classes  = num_classes;
 
     // Gather features
-    ds->nodes = malloc(split_size * num_features * sizeof(*ds->nodes));
+    ds->nodes = cache_aligned_alloc(split_size * num_features * sizeof(*ds->nodes));
 #pragma omp parallel for
     for (size_t i = 0; i < split_size; i++) {
         memcpy(&ds->nodes[i * num_features],
@@ -395,18 +395,18 @@ Dataset *dataset_split(Dataset *base, Split split)
     }
 
     // Gather labels
-    ds->labels = malloc(split_size * sizeof(*ds->labels));
+    ds->labels = cache_aligned_alloc(split_size * sizeof(*ds->labels));
     for (size_t i = 0; i < split_size; i++) {
         ds->labels[i] = base->labels[split_idx[i]];
     }
 
-    uint32_t *node_map = malloc(num_nodes * sizeof(*node_map));
+    uint32_t *node_map = cache_aligned_alloc(num_nodes * sizeof(*node_map));
     build_node_mapping(node_map, num_nodes, split_idx, split_size);
 
     // Filter and remap edges
     // Worst case: every edge survives
-    ds->edges.src = malloc(base->num_edges * sizeof(*ds->edges.src));
-    ds->edges.dst = malloc(base->num_edges * sizeof(*ds->edges.dst));
+    ds->edges.src = cache_aligned_alloc(base->num_edges * sizeof(*ds->edges.src));
+    ds->edges.dst = cache_aligned_alloc(base->num_edges * sizeof(*ds->edges.dst));
     uint32_t edge_count = 0;
     for (uint32_t i = 0; i < base->num_edges; i++) {
         uint32_t src = node_map[base->edges.src[i]];
@@ -432,11 +432,14 @@ Dataset *dataset_split(Dataset *base, Split split)
     return ds;
 }
 
-void dataset_free(Dataset *ds)
+void dataset_free(Dataset **ds)
 {
-    free(ds->edges.src);
-    free(ds->edges.dst);
-    free(ds->nodes);
-    free(ds->labels);
-    free(ds);
+    if (!(*ds)) return;
+
+    free((*ds)->edges.src); (*ds)->edges.src = NULL;
+    free((*ds)->edges.dst); (*ds)->edges.dst = NULL;
+    free((*ds)->nodes);     (*ds)->nodes     = NULL;
+    free((*ds)->labels);    (*ds)->labels    = NULL;
+    free((*ds));
+    *ds = NULL;
 }

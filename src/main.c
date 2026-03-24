@@ -219,8 +219,7 @@ int main(int argc, char** argv)
     Dataset *ds_train = dataset_split(ds, SPLIT_TRAIN);
     Dataset *ds_valid = dataset_split(ds, SPLIT_VALID);
     Dataset *ds_test = dataset_split(ds, SPLIT_TEST);
-    dataset_free(ds);
-    (void)ds;
+    dataset_free(&ds);
 
     size_t num_features = ds_train->num_features;
     size_t num_classes = ds_train->num_classes;
@@ -293,9 +292,9 @@ int main(int argc, char** argv)
 
     optim_free(&optim, optim_kind);
     sage_net_free(&net);
-    dataset_free(ds_test);
-    dataset_free(ds_valid);
-    dataset_free(ds_train);
+    dataset_free(&ds_test);
+    dataset_free(&ds_valid);
+    dataset_free(&ds_train);
     return 0;
 }
 
