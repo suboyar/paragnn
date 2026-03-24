@@ -25,19 +25,10 @@ void aggregate(SageLayer *const l)
     double* X = l->input;
     size_t ldX = l->in_dim;
 
-    int nthreads = omp_get_max_threads();
-    double* t_gather = calloc(nthreads, sizeof(double));
-    if (!t_gather) ERROR("Could not calloc t_gather");
-    double* t_pool = calloc(nthreads, sizeof(double));
-    if (!t_pool) ERROR("Could not calloc t_pool");
-
-    memset(l->agg, 0, l->num_nodes * in_dim * sizeof(Real));
-    memset(l->mean_scale, 0, l->num_nodes * sizeof(Real));
-
 #pragma omp parallel
     {
         int tid = omp_get_thread_num();
-        size_t* adj = malloc(l->num_nodes * sizeof(size_t));
+        uint32_t *tid_adj = l->tls_adj + tid * l->num_nodes;
 
 #pragma omp for
         for (size_t i = 0; i < l->num_nodes; i++) {
@@ -46,8 +37,6 @@ void aggregate(SageLayer *const l)
 
             // NOTE: Collects neighbors from only incoming direction.
 
-            double t0 = omp_get_wtime();
-            // Find neighbors of count sample size
             for (size_t e = 0; e < l->num_edges; e++) {
 
                 // The source_to_target flow is the default of torch_geometric.nn.conv.message_passing,
@@ -59,41 +48,28 @@ void aggregate(SageLayer *const l)
                 // paper src cites i (source_to_target)
                 if (i == l->edges.dst[e])
                 {
-                    adj[neigh_count++] = l->edges.src[e];
+                    tid_adj[neigh_count++] = l->edges.src[e];
                 }
 
-                // else if (i == src) { // paper i cites dst (target_to_source)
-                //     adj[neigh_count++] = dst;
+                // else if (i == l->edges.src[e]) { // paper i cites dst (target_to_source)
+                //     adj[neigh_count++] = l->edges.dst[e];
                 // }
             }
-
-            t_gather[tid] += omp_get_wtime() - t0;
 
             if (neigh_count == 0) continue;
 
             double scale = 1.0 / neigh_count;
 
-            double t1 = omp_get_wtime();
             for (size_t j = 0; j < in_dim; j++) {
                 double sum = 0.0;
                 for (size_t k = 0; k < neigh_count; k++) {
-                    sum += X[adj[k] * ldX + j];
+                    sum += X[tid_adj[k] * ldX + j];
                 }
                 Y[j] = sum * scale;
             }
-            t_pool[tid] += omp_get_wtime() - t1;
-
             l->mean_scale[i] = scale;
         }
-
-        free(adj);
     }
-
-    timer_record_parallel("gather", t_gather, nthreads);
-    timer_record_parallel("pool", t_pool, nthreads);
-
-    free(t_gather);
-    free(t_pool);
 }
 
 void sageconv(SageLayer *const l)

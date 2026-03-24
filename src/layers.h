@@ -52,9 +52,10 @@ typedef struct {
     Real *mean_scale;       // Scaling factors for mean aggregation (1/neighbor_count)
 
     // scratch buffer
-    Real *tls_dWroot;
-    Real *tls_dWagg;
-    Real *grad_scatter;
+    Real     *tls_dWroot;
+    Real     *tls_dWagg;
+    uint32_t *tls_adj;
+    Real     *grad_scatter;
 
     // timer names
     const char *timer_dWroot;
