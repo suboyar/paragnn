@@ -58,6 +58,7 @@ typedef struct {
 } TimerStack;
 
 static _Thread_local TimerStack timer_stack = { .depth = 0 };
+static bool timer_enabled = false;
 
 static TimerEntry entries[TIMER_HASHTABLE_SIZE];
 static TimerRegistry reg = {
@@ -76,8 +77,7 @@ static inline TimerEntry* stack_top(void)
 static inline void stack_push(TimerEntry* entry)
 {
     if (timer_stack.depth >= TIMER_MAX_STACK_DEPTH) {
-        nob_log(NOB_ERROR, "Timer stack overflow");
-        abort();
+        ERROR("Timer stack overflow");
     }
     timer_stack.entries[timer_stack.depth++] = entry;
 }
@@ -162,9 +162,10 @@ static TimerEntry* find_or_create_entry(const char* name) {
 
 void timer_record(const char* name, double elapsed, TimerEntry* entry)
 {
+    if (!timer_enabled) return;
+
     if (!entry && (entry = find_or_create_entry(name)) == NULL) {
-        nob_log(NOB_ERROR, "Timer '%s': registry full", name);
-        abort();
+        ERROR("Timer '%s': registry full", name);
     }
 
     entry->total_time += elapsed;
@@ -175,6 +176,8 @@ void timer_record(const char* name, double elapsed, TimerEntry* entry)
 
 void timer_record_parallel(const char* name, double* elapsed, int nthreads)
 {
+    if (!timer_enabled) return;
+
     double wall_time = 0.0;
     for (int t = 0; t < nthreads; t++) {
         wall_time = fmax(wall_time, elapsed[t]);
@@ -182,12 +185,24 @@ void timer_record_parallel(const char* name, double* elapsed, int nthreads)
     timer_record(name, wall_time, NULL);
 }
 
+void timer_enable(void)
+{
+    timer_enabled = true;
+}
+
+void timer_disable(void)
+{
+    timer_enabled = false;
+}
+
 TimerEntry* __timer_scope_push(const char* name)
 {
+    if (!timer_enabled) return NULL;
+
     TimerEntry* entry = find_or_create_entry(name);
 
     if (entry == NULL) {
-        nob_log(NOB_ERROR, "Timer '%s': registry full", name);
+        ERROR("Timer '%s': registry full", name);
         abort();
     }
 
@@ -197,6 +212,8 @@ TimerEntry* __timer_scope_push(const char* name)
 
 void __timer_scope_end(TimerScope* scope)
 {
+    if (!timer_enabled) return;
+
     double elapsed = omp_get_wtime() - scope->start_time;
 
     stack_pop();

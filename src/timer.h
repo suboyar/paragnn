@@ -16,9 +16,9 @@ enum TimerMetric {
 typedef struct TimerEntry TimerEntry;
 
 typedef struct {
-    const char*       name;
+    const char* name;
     TimerEntry* entry;
-    double            start_time;
+    double      start_time;
 } TimerScope;
 
 TimerEntry* __timer_scope_push(const char* name);
@@ -42,6 +42,8 @@ void __timer_scope_end(TimerScope* scope);
 
 void timer_record(const char* name, double elapsed, TimerEntry* entry);
 void timer_record_parallel(const char* name, double* elapsed, int nthreads);
+void timer_enable(void);
+void timer_disable(void);
 double timer_get_time(const char* name, enum TimerMetric metric);
 void timer_print(void);
 void timer_export_csv(const char *fname);
