@@ -350,7 +350,8 @@ SageNet* sage_net_create(LayerConf *conf, size_t count, Dataset *ds)
     if (!net) ERROR("Could not allocate SageNet");
 
     net->num_layers = count;
-    net->layers = malloc(count * sizeof(*net->layers));
+    // NOTE: we calloc here to make gcc not complain
+    net->layers = calloc(count,sizeof(*net->layers));
     if (!net->layers) ERROR("Could not allocate layers");
 
     for (size_t i = 0; i < count; i++)
