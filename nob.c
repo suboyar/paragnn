@@ -1,25 +1,15 @@
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <zlib.h>
+
 #define NOB_EXPERIMENTAL_DELETE_OLD
 #define NOB_IMPLEMENTATION
 #define NOB_WARN_DEPRECATED
-#define NOB_REBUILD_URSELF(binary_path, source_path) "gcc", "-ggdb", "-o", binary_path, source_path
+#define NOB_REBUILD_URSELF(binary_path, source_path) \
+    "gcc", "-ggdb", "-fopenmp", "-o", binary_path, source_path, "-lz"
 #define nob_cc(cmd) nob_cmd_append(cmd, "gcc")
 #include "nob.h"
 #undef nob_cc_flags
-
-#define FLAG_IMPLEMENTATION
-#define FLAG_PUSH_DASH_DASH_BACK
-#include "flag.h"
-
-#define BUILD_FOLDER "build/"
-#define SRC_FOLDER   "src/"
-#define KERNEL_FOLDER "kernels/"
-
-#define OGB_ARXIV_PATH "./arxiv/"
-#define OGB_ARXIV_URL "http://snap.stanford.edu/ogb/data/nodeproppred/arxiv.zip"
-#define OGB_ARXIV_RAW OGB_ARXIV_PATH"raw/"
-#define OGB_ARXIV_PROCESSED OGB_ARXIV_PATH"processed/"
-#define OGB_ARXIV_FILES_COUNT 6
-
 
 #define nob_cc_flags(cmd) nob_cmd_append(cmd, "-std=c17", "-D_POSIX_C_SOURCE=200809L")
 #define nob_cc_error_flags(cmd) \
@@ -30,6 +20,541 @@
                    "-Werror=implicit-function-declaration",             \
                    "-Werror=strict-prototypes",                         \
                    "-Werror=incompatible-pointer-types") // Maybe re-add -Wno-unknown-pragmas?
+
+#define FLAG_IMPLEMENTATION
+#define FLAG_PUSH_DASH_DASH_BACK
+#include "flag.h"
+
+#define DATASET_INFO_IMPLEMENTATION
+#include "dataset_info.h"
+
+#define BUILD_FOLDER "build/"
+#define SRC_FOLDER   "src/"
+#define KERNEL_FOLDER "kernels/"
+
+typedef struct {
+    char*         target;
+    bool          release;
+    bool          debug;
+    bool          asan;
+    bool          omp_off;
+    bool          asm_output;
+    char*         out_dir;
+    Flag_List_Mut macros;
+
+    bool          run;
+    bool          slurm;
+    Flag_List_Mut partitions;
+
+    char*         dataset;
+    char*         data_dir;
+
+    bool          etags;
+    bool          help;
+    bool          clean;
+
+    int           rest_argc;
+    char**        rest_argv;
+} Flags;
+
+Flags flags = {0};
+Nob_Cmd cmd = {0};
+Nob_Procs procs = {0};
+
+// This is specifically design to only conver cases for node-feat.csv with no space handling
+static inline double parse_double(char** pp)
+{
+    char* p = *pp;
+    double sign = 1.0;
+
+    if (*p == '-') { sign = -1.0; p++; }
+    else if (*p == '+') { p++; }
+
+    int64_t intpart = 0;
+    while (*p >= '0' && *p <= '9')
+    {
+        intpart = intpart * 10 + (*p++ - '0');
+    }
+
+    double val = (double)intpart;
+
+    if (*p == '.')
+    {
+        p++;
+        double scale = 0.1;
+        while (*p >= '0' && *p <= '9')
+        {
+            val += (*p++ - '0') * scale;
+            scale *= 0.1;
+        }
+    }
+
+    if (*p == 'e' || *p == 'E')
+    {
+        p++;
+        int exp_sign = 1;
+        if (*p == '-') { exp_sign = -1; p++; }
+        else if (*p == '+') { p++; }
+
+        int exp = 0;
+        while (*p >= '0' && *p <= '9')
+        {
+            exp = exp * 10 + (*p++ - '0');
+        }
+
+        if (exp_sign > 0)
+        {
+            while (exp-- > 0) val *= 10.0;
+        }
+        else
+        {
+            while (exp-- > 0) val *= 0.1;
+        }
+    }
+
+    *pp = p;
+    return sign * val;
+}
+
+// This is specifically design to only be used for node indicies that aren't bigger
+// then 32bit value. It does not do any space checking or clean-up.
+static inline uint32_t parse_u32(char** pp)
+{
+    char* p = *pp;
+
+    uint32_t val = 0;
+    while (*p >= '0' && *p <= '9')
+    {
+        val = val * 10 + (*p++ - '0');
+    }
+
+    *pp = p;
+    return val;
+}
+
+size_t ptrlen(void **arr) {
+    size_t n = 0;
+    while (arr[n]) n++;
+    return n;
+}
+
+bool mkdir_recursive(const char *path)
+{
+    if (path == NULL || path[0] == '\0')
+    {
+        nob_log(NOB_ERROR, "cannot create directory from empty path");
+        return false;
+    }
+
+    struct stat st;
+    bool already_exists = (stat(path, &st) == 0 && S_ISDIR(st.st_mode));
+    if (already_exists) return true;
+
+    Nob_String_View sv = nob_sv_from_cstr(path);
+    Nob_String_Builder sb = {0};
+
+    while (sv.count > 0)
+    {
+        Nob_String_View dir = nob_sv_chop_by_delim(&sv, '/');
+        if (dir.count == 0) continue;
+
+        nob_sb_appendf(&sb, "%s/", nob_temp_sv_to_cstr(dir));
+        int result = mkdir(sb.items, 0755);
+        if (result < 0 && errno != EEXIST)
+        {
+            nob_log(NOB_ERROR, "could not create directory `%s`: %s", sb.items, strerror(errno));
+            return false;
+        }
+    }
+
+    if (!already_exists)
+    {
+        nob_log(NOB_INFO, "Created directory %s", path);
+    }
+
+    return true;
+}
+
+void parse_feats(char *input, size_t input_size, char *output, uint32_t num_nodes, uint32_t num_features)
+{
+    double *dest = (double *)output;
+    char **line_starts = malloc((num_nodes + 1) * sizeof(char*));
+    line_starts[0] = input;
+    size_t line = 1;
+    for (char *p = input; p < input + input_size; p++)
+    {
+        if (*p == '\n' && line < num_nodes)
+        {
+            line_starts[line++] = p + 1;
+        }
+    }
+
+#pragma omp parallel for
+    for (size_t i = 0; i < num_nodes; i++)
+    {
+        char *p = line_starts[i];
+        for (size_t j = 0; j < num_features; j++)
+        {
+            dest[i * num_features + j] = parse_double(&p);
+            if (*p == ',') p++;
+        }
+    }
+    free(line_starts);
+}
+
+void parse_labels(char *input, size_t input_size, char *output)
+{
+    uint32_t *dest = (uint32_t *)output;
+    char *p = input;
+    char *end = input + input_size;
+    size_t i = 0;
+    while (p < end)
+    {
+        dest[i++] = parse_u32(&p);
+        if (*p == '\n') p++;
+    }
+}
+
+void parse_edges(char *input, size_t input_size, char *output)
+{
+    uint32_t *dest = (uint32_t *)output;
+    char *p = input;
+    char *end = input + input_size;
+    size_t i = 0;
+    while (p < end)
+    {
+        dest[2 * i]     = parse_u32(&p);
+        if (*p == ',') p++;
+        dest[2 * i + 1] = parse_u32(&p);
+        if (*p == '\n') p++;
+        i++;
+    }
+}
+
+size_t gz_decompress(const char* file_path, uint8_t **buf)
+{
+    gzFile file = gzopen(file_path, "rb");
+    if (!file)
+    {
+        fprintf(stderr, "gzopen failed: %s\n", strerror(errno));
+        *buf = NULL;
+        return 0;
+    }
+
+    size_t cap = 1 << 20;
+    size_t len = 0;
+    *buf = malloc(cap);
+
+
+    while (1)
+    {
+        size_t remaining = cap - len;
+        unsigned int chunk = remaining > INT_MAX ? INT_MAX : (unsigned int)remaining;
+        int n = gzread(file, *buf + len, chunk);
+        if (n <= 0) break;
+        len += n;
+        if (len == cap)
+        {
+            cap *= 2;
+            *buf = realloc(*buf, cap);
+        }
+    }
+
+    int err = 0;
+    const char *error_string = "";
+    int ret = gzeof(file);
+    if (!ret)
+    {
+        error_string = gzerror(file, &err);
+        fprintf(stderr, "gzread failed: %s\n", error_string);
+        free(*buf);
+        *buf = NULL;
+        gzclose(file);
+        return 0;
+    }
+    gzclose(file);
+    return len;
+}
+
+typedef enum { PARSE_FEATS, PARSE_LABELS, PARSE_EDGES } ParseKind;
+bool process_csv_gz(const char *csv_gz_path, const char *bin_path, size_t out_size,
+                    ParseKind kind, DatasetInfo *ds_info)
+{
+    nob_log(NOB_INFO, "Processing %s", bin_path);
+    // Input
+    uint8_t *input;
+    size_t input_size = gz_decompress(csv_gz_path, &input);
+    if (input == NULL) return false;
+
+    // Output
+    int fd_out = open(bin_path, O_RDWR | O_CREAT | O_TRUNC, 0644);
+    if (fd_out < 0)
+    {
+        nob_log(NOB_ERROR, "Could not open %s: %s", csv_gz_path, strerror(errno));
+        free(input);
+        return false;
+    }
+    ftruncate(fd_out, out_size);
+    char* output = mmap(NULL, out_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd_out, 0);
+
+    switch (kind) {
+    case PARSE_FEATS:  parse_feats(input, input_size, output, ds_info->num_nodes, ds_info->num_features); break;
+    case PARSE_LABELS: parse_labels(input, input_size, output); break;
+    case PARSE_EDGES:  parse_edges(input, input_size, output); break;
+    default: NOB_UNREACHABLE(nob_temp_sprintf("Wrong parse kind: %d", kind));
+    }
+
+    free(input);
+    munmap(output, out_size);
+    close(fd_out);
+
+    return true;
+}
+
+typedef struct {
+    size_t header_size;
+    size_t elem_size;
+    char   type_char;
+} NpyHeader;
+
+NpyHeader parse_npy_header(const char *data)
+{
+    NpyHeader h = {0};
+    uint8_t major = data[6];
+    uint16_t len2; uint32_t len4;
+
+    if (major == 1) { memcpy(&len2, data+8, 2); h.header_size = 10 + len2; }
+    else            { memcpy(&len4, data+8, 4); h.header_size = 12 + len4; }
+
+    const char *q = strstr(data + (major == 1 ? 10 : 12), "'descr'");
+    if (q) { q = strchr(q+7, '\'') + 1; h.type_char = q[1]; h.elem_size = q[2] - '0'; }
+
+    return h;
+}
+
+bool process_npy(const char *npy_path, const char *bin_path, size_t out_size, size_t dst_elem_size)
+{
+    bool ret = true;
+    nob_log(NOB_INFO, "Processing %s", bin_path);
+
+    int fd_in = open(npy_path, O_RDONLY);
+    if (fd_in < 0)
+    {
+        nob_log(NOB_ERROR, "Could not open %s: %s", npy_path, strerror(errno));
+        return false;
+    }
+    struct stat sb;
+    fstat(fd_in, &sb);
+    char *input = mmap(NULL, sb.st_size, PROT_READ, MAP_PRIVATE, fd_in, 0);
+
+    NpyHeader hdr = parse_npy_header(input);
+    char *src = input + hdr.header_size;
+    size_t total = out_size / dst_elem_size;
+
+    int fd_out = open(bin_path, O_RDWR | O_CREAT | O_TRUNC, 0644);
+    if (fd_out < 0)
+    {
+        nob_log(NOB_ERROR, "Could not open %s: %s", bin_path, strerror(errno));
+        munmap(input, sb.st_size);
+        close(fd_in);
+        return false;
+    }
+    ftruncate(fd_out, out_size);
+    char *output = mmap(NULL, out_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd_out, 0);
+
+    // f4 -> f8
+    if (hdr.type_char == 'f' && hdr.elem_size == 4 && dst_elem_size == 8)
+    {
+        float *s = (float*)src; double *d = (double*)output;
+        for (size_t i = 0; i < total; i++) d[i] = s[i];
+    }
+    // i8 -> u4
+    else if (hdr.type_char == 'i' && hdr.elem_size == 8 && dst_elem_size == 4)
+    {
+        int64_t *s = (int64_t*)src; uint32_t *d = (uint32_t*)output;
+        for (size_t i = 0; i < total; i++) d[i] = s[i];
+    }
+    // f4 -> u4
+    else if (hdr.type_char == 'f' && hdr.elem_size == 4 && dst_elem_size == 4)
+    {
+        float *s = (float*)src; uint32_t *d = (uint32_t*)output;
+        for (size_t i = 0; i < total; i++) d[i] = s[i];
+    }
+    else if (hdr.elem_size == dst_elem_size)
+    {
+        memcpy(output, src, out_size);
+    }
+    else
+    {
+        nob_log(NOB_ERROR, "Unsupported npy conversion: %c%zu -> %zu",
+                hdr.type_char, hdr.elem_size, dst_elem_size);
+        ret = false;
+    }
+
+    munmap(input, sb.st_size);
+    close(fd_in);
+    munmap(output, out_size);
+    close(fd_out);
+    return ret;
+}
+
+static int cmp_u64(const void *a, const void *b) {
+    uint64_t x = *(const uint64_t *)a;
+    uint64_t y = *(const uint64_t *)b;
+    return (x > y) - (x < y);
+}
+
+static bool symmetrize_edges(const char *bin_path, uint32_t original_edges)
+{
+    int fd = open(bin_path, O_RDONLY);
+    if (fd < 0) { nob_log(NOB_ERROR, "Could not open %s: %s", bin_path, strerror(errno)); return false; }
+    struct stat sb;
+    fstat(fd, &sb);
+    uint32_t *edges = mmap(NULL, sb.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+
+
+    uint64_t *packed = malloc(2ULL * original_edges * sizeof(*packed));
+    uint32_t n = 0;
+
+    for (uint32_t i = 0; i < original_edges; i++)
+    {
+        uint32_t u = edges[2*i], v = edges[2*i+1];
+        packed[n++] = ((uint64_t)u << 32) | v;
+        if (u != v) packed[n++] = ((uint64_t)v << 32) | u; // skip self-loops
+    }
+
+    munmap(edges, sb.st_size);
+    close(fd);
+
+    qsort(packed, n, sizeof(uint64_t), cmp_u64);
+    uint32_t unique = 0;
+    for (uint32_t i = 0; i < n; i++)
+    {
+        if (unique == 0 || packed[i] != packed[unique - 1])
+        {
+            packed[unique++] = packed[i];
+        }
+    }
+
+    size_t out_size = 2 * unique * sizeof(uint32_t);
+    fd = open(bin_path, O_RDWR | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) { nob_log(NOB_ERROR, "Could not open %s: %s", bin_path, strerror(errno)); return false; }
+    ftruncate(fd, out_size);
+    uint32_t *out = mmap(NULL, out_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    for (uint32_t i = 0; i < unique; i++)
+    {
+        out[2*i] = (uint32_t)(packed[i] >> 32);
+        out[2*i+1] = (uint32_t)(packed[i]);
+    }
+
+    munmap(out, out_size);
+    close(fd);
+    free(packed);
+
+    nob_log(NOB_INFO, "Symmetrized edges: %u -> %u", original_edges, unique);
+    return true;
+}
+
+int prepare_dataset()
+{
+    DatasetInfo *ds_info = &ds_infos[str_to_dataset_kind(flags.dataset)];
+    if (!mkdir_recursive(flags.data_dir)) return EXIT_FAILURE;
+
+    const char *zip_name = strrchr(ds_info->url, '/') + 1;
+    const char *zip_path =  nob_temp_sprintf("%s/%s", flags.data_dir, zip_name);
+    size_t base_len = strrchr(zip_name, '.') - zip_name;
+    const char *ds_path = nob_temp_sprintf("%s/%.*s", flags.data_dir, (int)base_len, zip_name);
+    const char *proc_path = nob_temp_sprintf("%s/processed", ds_path);
+
+    if (nob_file_exists(nob_temp_sprintf("%s/edge.bin", proc_path)) &&
+        nob_file_exists(nob_temp_sprintf("%s/node-feat.bin", proc_path)) &&
+        nob_file_exists(nob_temp_sprintf("%s/node-label.bin", proc_path)))
+    {
+        nob_log(NOB_INFO, "Dataset %s already processed, skipping", ds_info->name);
+        return EXIT_SUCCESS;
+    }
+
+    if (!nob_file_exists(nob_temp_sprintf("%s/raw", ds_path)))
+    {
+        if (!nob_file_exists(zip_path))
+        {
+            nob_log(NOB_INFO, "Downloading %s...", ds_info->name);
+            nob_cmd_append(&cmd, "wget", "-q", "--show-progress", "-P", flags.data_dir, ds_info->url);
+            if (!nob_cmd_run(&cmd))
+            {
+                nob_log(NOB_ERROR, "Failed to download %s dataset", ds_info->name);
+                return EXIT_FAILURE;
+            }
+        }
+
+        nob_log(NOB_INFO, "Extracting %s...", ds_info->name);
+        nob_cmd_append(&cmd, "unzip", "-q", "-n", zip_path, "-d", flags.data_dir);
+        if (!nob_cmd_run(&cmd))
+        {
+            nob_log(NOB_ERROR, "Failed to unzip %s dataset", ds_info->name);
+            return EXIT_FAILURE;
+        }
+    }
+
+    size_t N = ds_info->num_nodes, F = ds_info->num_features, E = ds_info->num_edges;
+    if (ds_info->raw_format == FMT_CSV_GZ)
+    {
+        if (!process_csv_gz(nob_temp_sprintf("%s/raw/node-feat.csv.gz", ds_path),
+                            nob_temp_sprintf("%s/node-feat.bin", proc_path),
+                            N * F * sizeof(double), PARSE_FEATS, ds_info)) return EXIT_FAILURE;
+
+        if (!process_csv_gz(nob_temp_sprintf("%s/raw/node-label.csv.gz", ds_path),
+                            nob_temp_sprintf("%s/node-label.bin", proc_path),
+                            N * sizeof(uint32_t), PARSE_LABELS, ds_info)) return EXIT_FAILURE;
+
+        if (!process_csv_gz(nob_temp_sprintf("%s/raw/edge.csv.gz", ds_path),
+                            nob_temp_sprintf("%s/edge.bin", proc_path),
+                            2ULL * E * sizeof(uint32_t), PARSE_EDGES, ds_info)) return EXIT_FAILURE;
+    }
+    else if (ds_info->raw_format == FMT_NPY)
+    {
+        nob_cmd_append(&cmd, "unzip", "-q", "-n",
+                       nob_temp_sprintf("%s/raw/data.npz", ds_path), "-d",
+                       nob_temp_sprintf("%s/raw/data", ds_path));
+        if (!nob_cmd_run(&cmd)) return EXIT_FAILURE;
+
+        nob_cmd_append(&cmd, "unzip", "-q", "-n",
+                       nob_temp_sprintf("%s/raw/node-label.npz", ds_path), "-d",
+                       nob_temp_sprintf("%s/raw/node-label", ds_path));
+        if (!nob_cmd_run(&cmd)) return EXIT_FAILURE;
+
+
+        if (!process_npy(nob_temp_sprintf("%s/raw/data/node_feat.npy", ds_path),
+                         nob_temp_sprintf("%s/node-feat.bin", proc_path),
+                         N * F * sizeof(double), sizeof(double))) return EXIT_FAILURE;
+
+        if (!process_npy(nob_temp_sprintf("%s/raw/node-label/node_label.npy", ds_path),
+                         nob_temp_sprintf("%s/node-label.bin", proc_path),
+                         N * sizeof(uint32_t), sizeof(uint32_t))) return EXIT_FAILURE;
+
+        if (!process_npy(nob_temp_sprintf("%s/raw/data/edge_index.npy", ds_path),
+                         nob_temp_sprintf("%s/edge.bin", proc_path),
+                         2ULL * E * sizeof(uint32_t), sizeof(uint32_t))) return EXIT_FAILURE;
+    }
+    else
+    {
+        nob_log(NOB_ERROR, "Invalid fromat: %d", ds_info->raw_format);
+        return EXIT_FAILURE;
+    }
+
+    if (ds_info->undirected)
+    {
+        nob_log(NOB_INFO, "Adding symmetric edges");
+        if(!symmetrize_edges(nob_temp_sprintf("%s/edge.bin", proc_path), E))
+        {
+            nob_log(NOB_ERROR, "Failed to symmetrize edges");
+            return EXIT_FAILURE;
+        }
+    }
+
+    nob_temp_reset();
+    return EXIT_SUCCESS;
+}
 
 #define STRINGS(...) { \
     .items = (const char*[]){__VA_ARGS__}, \
@@ -73,6 +598,18 @@ Target targets[] = {
         .libs = STRINGS("-lm", "-lopenblas"),
     },
     {
+        .name = "sageconv_backward",
+        .srcs = STRINGS(
+            KERNEL_FOLDER"sageconv_backward.c",
+            SRC_FOLDER"core.c",
+            SRC_FOLDER"dataset.c",
+            SRC_FOLDER"layers.c",
+            SRC_FOLDER"timer.c",
+            KERNEL_FOLDER"cache_counter.c",
+            ),
+        .libs = STRINGS("-lm", "-lopenblas"),
+    },
+    {
         .name = "tsmm_tn",
         .srcs = STRINGS(
             SRC_FOLDER"timer.c",
@@ -92,58 +629,8 @@ Target targets[] = {
             ),
         .libs = STRINGS("-lm"),
     },
+
 };
-
-typedef struct {
-    bool   run;
-    bool   debug;
-    bool   release;
-    bool   clean;
-    bool   omp_off;
-    bool   extract_ogb;
-    bool   download_ogb;
-    bool   asm_output;
-    bool   asan;
-    bool   etags;
-    bool   help;
-    char*  target;
-    char*  out_dir;
-    bool   slurm;
-    Flag_List_Mut partitions;
-    Flag_List_Mut macros;
-    int    rest_argc;
-    char** rest_argv;
-} Flags;
-
-Flags flags = {0};
-Nob_Cmd cmd = {0};
-Nob_Procs procs = {0};
-
-size_t ptrlen(void **arr) {
-    size_t n = 0;
-    while (arr[n]) n++;
-    return n;
-}
-
-bool mkdir_recursive(const char *path)
-{
-    if (path == NULL || path[0] == '\0') {
-        nob_log(NOB_ERROR, "cannot create directory from empty path");
-        return false;
-    }
-
-    Nob_String_View sv = nob_sv_from_cstr(path);
-    Nob_String_Builder sb = {0};
-
-    while (sv.count > 0) {
-        Nob_String_View dir = nob_sv_chop_by_delim(&sv, '/');
-        if (dir.count == 0) continue;
-
-        nob_sb_appendf(&sb, "%s/", nob_temp_sv_to_cstr(dir));
-        if (!nob_mkdir_if_not_exists(sb.items)) return false;
-    }
-    return true;
-}
 
 typedef enum {
     NO_DEFAULT = 0,
@@ -262,99 +749,8 @@ void append_common_flags(BuildPhase phase)
     }
 }
 
-bool ungzip(Nob_File_Paths *file_paths, const char* subfolder)
-{
-    for (size_t i = 0; i < file_paths->count; i++) {
-        const char *files = file_paths->items[i];
-        if (*files == '.') continue;
-        nob_log(NOB_INFO, "Extracting %s to %s", files, OGB_ARXIV_PROCESSED);
-
-        if (!subfolder) {
-            subfolder = ".";
-        }
-
-        char *in = nob_temp_sprintf(OGB_ARXIV_PATH"%s/%s", subfolder, files);
-
-        size_t base_len = strlen(files) - 3; // strip .gz
-        const char *out = nob_temp_sprintf("%s%.*s", OGB_ARXIV_PROCESSED, (int)base_len, files);
-
-        nob_cmd_append(&cmd, "gzip", "-d", "-c", in);
-        if (!nob_cmd_run(&cmd, .stdout_path = out)) {
-            nob_log(NOB_ERROR, "Failed to extract %s", files);
-            return false;
-        }
-    }
-    return true;
-}
-
-#define OGB_ARXIV_PROCESSED_COUNT 9
-bool prepare_ogb_dataset()
-{
-    bool result = true;
-    Nob_File_Paths processed_file_paths = {0};
-    Nob_File_Paths raw_file_paths = {0};
-    Nob_File_Paths split_file_paths = {0};
-
-    if (!flags.extract_ogb &&
-        nob_read_entire_dir(OGB_ARXIV_PROCESSED, &processed_file_paths) &&
-        processed_file_paths.count == OGB_ARXIV_PROCESSED_COUNT+2) { // . and .. included in dir listing
-        nob_log(NOB_INFO, "OGB dataset already processed");
-        nob_return_defer(true);
-    }
-
-    if(!nob_read_entire_dir(OGB_ARXIV_PATH"raw", &raw_file_paths) ||
-       !nob_read_entire_dir(OGB_ARXIV_PATH"split/time", &split_file_paths)) {
-        if (!flags.download_ogb) {
-            // Maybe support downloading other datasets from OGB, than only supporting ogb-arxiv
-            nob_log(NOB_ERROR, "OGB dataset not found. Run with -download-ogb to fetch it");
-            nob_return_defer(false);
-        }
-
-        // TODO: try this later when I'm not on metered connection
-        nob_log(NOB_INFO, "Downloading OGB arxiv dataset...");
-        nob_cmd_append(&cmd, "wget", "-q", "--show-progress", OGB_ARXIV_URL);
-        if (!nob_cmd_run(&cmd)) {
-            nob_log(NOB_ERROR, "Failed to download ogb-arxiv dataset");
-            nob_return_defer(false);
-        }
-
-        nob_cmd_append(&cmd, "unzip", "-q", "arxiv.zip"); // No need for -d OGB_ARXIV_PATH as the zip already has files under arxiv/
-        if (!nob_cmd_run(&cmd)) {
-            nob_log(NOB_ERROR, "Failed to unzip arxiv.zip");
-            nob_return_defer(false);
-        }
-
-        // Try reading the files one more time
-        if(!nob_read_entire_dir(OGB_ARXIV_PATH"raw", &raw_file_paths)) {
-            nob_log(NOB_ERROR, "Failed to read raw files after extraction");
-            nob_return_defer(false);
-        }
-        if(!nob_read_entire_dir(OGB_ARXIV_PATH"split/time", &split_file_paths)) {
-            nob_log(NOB_ERROR, "Failed to read split files after extraction");
-            nob_return_defer(false);
-        }
-    }
-
-    if (!ungzip(&raw_file_paths, "raw")) nob_return_defer(false);
-    if (!ungzip(&split_file_paths, "split/time")) nob_return_defer(false);
-
-    nob_log(NOB_INFO, "OGB dataset ready");
-
-defer:
-    nob_da_free(processed_file_paths);
-    nob_da_free(raw_file_paths);
-    nob_da_free(split_file_paths);
-
-    return result;
-}
-
 int build_target(Target* t)
 {
-    // Download-extract-decompress dataset if needed
-    if (strcmp(t->name, "paragnn") == 0) {
-        if (!prepare_ogb_dataset()) return 1;
-    }
-
     // Determine output directory
     const char* out_dir = flags.out_dir ? flags.out_dir :
                           t->out_dir    ? t->out_dir : BUILD_FOLDER;
@@ -589,7 +985,7 @@ int clean(void)
     return 0;
 }
 
-bool etags(void)
+int etags(void)
 {
     const char *folders[] = { SRC_FOLDER, KERNEL_FOLDER };
 
@@ -617,6 +1013,8 @@ void usage(FILE* stream)
     fprintf(stream, "Usage: ./nob [OPTIONS] [--] [ARGS]\n\n");
     fprintf(stream, "OPTIONS:\n");
     flag_print_options(stream);
+    fprintf(stream, "\nDATASETS:\n");
+    list_datasets();
     fprintf(stream, "\nTARGETS:\n");
     list_targets();
 }
@@ -640,8 +1038,8 @@ int main(int argc, char** argv)
     flag_bool_var(&flags.slurm,          "slurm",        false,     "Submit job to Slurm");
     flag_list_mut_var(&flags.partitions, "p",                       "Partition(s) to submit to (or 'list', 'all', 'aarch64', 'x86_64')");
 
-    flag_bool_var(&flags.download_ogb,   "download-ogb", false,     "Download OGB arxiv dataset");
-    flag_bool_var(&flags.extract_ogb,    "extract-ogb",  false,     "Re-extract OGB raw files");
+    flag_str_var(&flags.dataset,         "dataset",      "arxiv",   "Dataset to use (arxiv, products, papers100M)");
+    flag_str_var(&flags.data_dir,        "data-dir",     "./data",  "Directory for downloading and reading datasets");
 
     flag_bool_var(&flags.clean,          "clean",        false,     "Clean build artifacts");
     flag_bool_var(&flags.etags,          "etags",        false,     "Genereate etags");
@@ -656,6 +1054,18 @@ int main(int argc, char** argv)
     if (flags.help) {
         usage(stdout);
         return 0;
+    }
+
+    if (strcmp(flags.dataset, "list") == 0)
+    {
+        list_datasets();
+        return 0;
+    }
+    if (str_to_dataset_kind(flags.dataset) == DATASET_INVALID)
+    {
+        nob_log(NOB_ERROR, "Given dataset is not valid: %s", flags.dataset);
+        list_datasets();
+        return 1;
     }
 
     // Handle rest args
@@ -682,7 +1092,6 @@ int main(int argc, char** argv)
         return etags();
     }
 
-
     if (flags.partitions.count > 0 && strcmp(flags.partitions.items[0], "list") == 0) {
         list_partitions();
         return 0;
@@ -700,5 +1109,6 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    if (prepare_dataset() == EXIT_FAILURE) return EXIT_FAILURE;
     return build_target(t);
 }
