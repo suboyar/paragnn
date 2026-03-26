@@ -61,6 +61,15 @@ Flags flags = {0};
 Nob_Cmd cmd = {0};
 Nob_Procs procs = {0};
 
+static const char *path_join(const char *dir, const char *file)
+{
+    size_t dir_len = strlen(dir);
+    if (dir[dir_len-1] != '/')
+        return nob_temp_sprintf("%s/%s", dir, file);
+    else
+        return nob_temp_sprintf("%s%s", dir, file);
+}
+
 // This is specifically design to only conver cases for node-feat.csv with no space handling
 static inline double parse_double(char** pp)
 {
@@ -276,7 +285,20 @@ size_t gz_decompress(const char* file_path, uint8_t **buf)
     return len;
 }
 
-typedef enum { PARSE_FEATS, PARSE_LABELS, PARSE_EDGES } ParseKind;
+void parse_splits(char *input, size_t input_size, char *output)
+{
+    uint32_t *dest = (uint32_t *)output;
+    char *p = input;
+    char *end = input + input_size;
+    size_t i = 0;
+    while (p < end)
+    {
+        dest[i++] = parse_u32(&p);
+        if (*p == '\n') p++;
+    }
+}
+
+typedef enum { PARSE_FEATS, PARSE_LABELS, PARSE_EDGES, PARSE_SPLIT} ParseKind;
 bool process_csv_gz(const char *csv_gz_path, const char *bin_path, size_t out_size,
                     ParseKind kind, DatasetInfo *ds_info)
 {
@@ -285,6 +307,16 @@ bool process_csv_gz(const char *csv_gz_path, const char *bin_path, size_t out_si
     uint8_t *input;
     size_t input_size = gz_decompress(csv_gz_path, &input);
     if (input == NULL) return false;
+
+    if (kind == PARSE_SPLIT)
+    {
+        size_t count = 0;
+        for (size_t i = 0; i < input_size; i++)
+            if (input[i] == '\n') count++;
+        // handle missing trailing newline
+        if (input_size > 0 && input[input_size - 1] != '\n') count++;
+        out_size = count * sizeof(uint32_t);
+    }
 
     // Output
     int fd_out = open(bin_path, O_RDWR | O_CREAT | O_TRUNC, 0644);
@@ -301,6 +333,7 @@ bool process_csv_gz(const char *csv_gz_path, const char *bin_path, size_t out_si
     case PARSE_FEATS:  parse_feats(input, input_size, output, ds_info->num_nodes, ds_info->num_features); break;
     case PARSE_LABELS: parse_labels(input, input_size, output); break;
     case PARSE_EDGES:  parse_edges(input, input_size, output); break;
+    case PARSE_SPLIT:  parse_splits(input, input_size, output); break;
     default: NOB_UNREACHABLE(nob_temp_sprintf("Wrong parse kind: %d", kind));
     }
 
@@ -398,83 +431,30 @@ bool process_npy(const char *npy_path, const char *bin_path, size_t out_size, si
     return ret;
 }
 
-static int cmp_u64(const void *a, const void *b) {
-    uint64_t x = *(const uint64_t *)a;
-    uint64_t y = *(const uint64_t *)b;
-    return (x > y) - (x < y);
-}
-
-static bool symmetrize_edges(const char *bin_path, uint32_t original_edges)
-{
-    int fd = open(bin_path, O_RDONLY);
-    if (fd < 0) { nob_log(NOB_ERROR, "Could not open %s: %s", bin_path, strerror(errno)); return false; }
-    struct stat sb;
-    fstat(fd, &sb);
-    uint32_t *edges = mmap(NULL, sb.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
-
-
-    uint64_t *packed = malloc(2ULL * original_edges * sizeof(*packed));
-    uint32_t n = 0;
-
-    for (uint32_t i = 0; i < original_edges; i++)
-    {
-        uint32_t u = edges[2*i], v = edges[2*i+1];
-        packed[n++] = ((uint64_t)u << 32) | v;
-        if (u != v) packed[n++] = ((uint64_t)v << 32) | u; // skip self-loops
-    }
-
-    munmap(edges, sb.st_size);
-    close(fd);
-
-    qsort(packed, n, sizeof(uint64_t), cmp_u64);
-    uint32_t unique = 0;
-    for (uint32_t i = 0; i < n; i++)
-    {
-        if (unique == 0 || packed[i] != packed[unique - 1])
-        {
-            packed[unique++] = packed[i];
-        }
-    }
-
-    size_t out_size = 2 * unique * sizeof(uint32_t);
-    fd = open(bin_path, O_RDWR | O_CREAT | O_TRUNC, 0644);
-    if (fd < 0) { nob_log(NOB_ERROR, "Could not open %s: %s", bin_path, strerror(errno)); return false; }
-    ftruncate(fd, out_size);
-    uint32_t *out = mmap(NULL, out_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-    for (uint32_t i = 0; i < unique; i++)
-    {
-        out[2*i] = (uint32_t)(packed[i] >> 32);
-        out[2*i+1] = (uint32_t)(packed[i]);
-    }
-
-    munmap(out, out_size);
-    close(fd);
-    free(packed);
-
-    nob_log(NOB_INFO, "Symmetrized edges: %u -> %u", original_edges, unique);
-    return true;
-}
-
 int prepare_dataset()
 {
     DatasetInfo *ds_info = &ds_infos[str_to_dataset_kind(flags.dataset)];
     if (!mkdir_recursive(flags.data_dir)) return EXIT_FAILURE;
 
-    const char *zip_name = strrchr(ds_info->url, '/') + 1;
-    const char *zip_path =  nob_temp_sprintf("%s/%s", flags.data_dir, zip_name);
-    size_t base_len = strrchr(zip_name, '.') - zip_name;
-    const char *ds_path = nob_temp_sprintf("%s/%.*s", flags.data_dir, (int)base_len, zip_name);
-    const char *proc_path = nob_temp_sprintf("%s/processed", ds_path);
+    const char *zip_name = nob_path_name(ds_info->url);
+    const char *zip_path = nob_temp_sprintf("%s/%s", flags.data_dir, zip_name);
+    const char *ds_path = path_join(flags.data_dir, ds_info->dir_name);
+    const char *proc_path = path_join(ds_path, "processed");
+    const char *split_root = path_join(ds_path, "split");
+    const char *split_path  = path_join(split_root, ds_info->split_name);
 
-    if (nob_file_exists(nob_temp_sprintf("%s/edge.bin", proc_path)) &&
-        nob_file_exists(nob_temp_sprintf("%s/node-feat.bin", proc_path)) &&
-        nob_file_exists(nob_temp_sprintf("%s/node-label.bin", proc_path)))
+    if (nob_file_exists(path_join(proc_path, "edge.bin")) &&
+        nob_file_exists(path_join(proc_path, "node-feat.bin")) &&
+        nob_file_exists(path_join(proc_path, "node-label.bin")) &&
+        nob_file_exists(path_join(proc_path, "train.bin")) &&
+        nob_file_exists(path_join(proc_path, "valid.bin")) &&
+        nob_file_exists(path_join(proc_path, "test.bin")))
     {
         nob_log(NOB_INFO, "Dataset %s already processed, skipping", ds_info->name);
         return EXIT_SUCCESS;
     }
 
-    if (!nob_file_exists(nob_temp_sprintf("%s/raw", ds_path)))
+    if (!nob_file_exists(path_join(ds_path, "raw")))
     {
         if (!nob_file_exists(zip_path))
         {
@@ -496,45 +476,48 @@ int prepare_dataset()
         }
     }
 
-    size_t N = ds_info->num_nodes, F = ds_info->num_features, E = ds_info->num_edges;
+
+    size_t feat_size = ds_info->num_nodes * ds_info->num_features * sizeof(double);
+    size_t label_size = ds_info->num_nodes * sizeof(uint32_t);
+    size_t edge_size = 2ULL * ds_info->num_edges * sizeof(uint32_t);
     if (ds_info->raw_format == FMT_CSV_GZ)
     {
-        if (!process_csv_gz(nob_temp_sprintf("%s/raw/node-feat.csv.gz", ds_path),
-                            nob_temp_sprintf("%s/node-feat.bin", proc_path),
-                            N * F * sizeof(double), PARSE_FEATS, ds_info)) return EXIT_FAILURE;
+        // Data
+        if (!process_csv_gz(path_join(ds_path, "raw/node-feat.csv.gz"), path_join(proc_path, "node-feat.bin"), feat_size, PARSE_FEATS, ds_info))
+            return EXIT_FAILURE;
+        if (!process_csv_gz(path_join(ds_path, "raw/node-label.csv.gz"), path_join(proc_path, "node-label.bin"), label_size, PARSE_LABELS, ds_info))
+            return EXIT_FAILURE;
+        if (!process_csv_gz(path_join(ds_path, "raw/edge.csv.gz"), path_join(proc_path, "edge.bin"), edge_size, PARSE_EDGES, ds_info))
+            return EXIT_FAILURE;
 
-        if (!process_csv_gz(nob_temp_sprintf("%s/raw/node-label.csv.gz", ds_path),
-                            nob_temp_sprintf("%s/node-label.bin", proc_path),
-                            N * sizeof(uint32_t), PARSE_LABELS, ds_info)) return EXIT_FAILURE;
-
-        if (!process_csv_gz(nob_temp_sprintf("%s/raw/edge.csv.gz", ds_path),
-                            nob_temp_sprintf("%s/edge.bin", proc_path),
-                            2ULL * E * sizeof(uint32_t), PARSE_EDGES, ds_info)) return EXIT_FAILURE;
+        // Splits
+        if (!process_csv_gz(path_join(split_path, "train.csv.gz"), path_join(proc_path, "train.bin"), 0, PARSE_SPLIT, ds_info))
+            return EXIT_FAILURE;
+        if (!process_csv_gz(path_join(split_path, "valid.csv.gz"), path_join(proc_path, "valid.bin"), 0, PARSE_SPLIT, ds_info))
+            return EXIT_FAILURE;
+        if (!process_csv_gz(path_join(split_path, "test.csv.gz"), path_join(proc_path, "test.bin"), 0, PARSE_SPLIT, ds_info))
+            return EXIT_FAILURE;
     }
     else if (ds_info->raw_format == FMT_NPY)
     {
         nob_cmd_append(&cmd, "unzip", "-q", "-n",
-                       nob_temp_sprintf("%s/raw/data.npz", ds_path), "-d",
-                       nob_temp_sprintf("%s/raw/data", ds_path));
+                       path_join(ds_path, "raw/data.npz"),
+                       "-d",
+                       path_join(ds_path, "raw/data"));
         if (!nob_cmd_run(&cmd)) return EXIT_FAILURE;
 
         nob_cmd_append(&cmd, "unzip", "-q", "-n",
-                       nob_temp_sprintf("%s/raw/node-label.npz", ds_path), "-d",
+                       nob_temp_sprintf("%s/raw/node-label.npz", ds_path),
+                       "-d",
                        nob_temp_sprintf("%s/raw/node-label", ds_path));
         if (!nob_cmd_run(&cmd)) return EXIT_FAILURE;
 
-
-        if (!process_npy(nob_temp_sprintf("%s/raw/data/node_feat.npy", ds_path),
-                         nob_temp_sprintf("%s/node-feat.bin", proc_path),
-                         N * F * sizeof(double), sizeof(double))) return EXIT_FAILURE;
-
-        if (!process_npy(nob_temp_sprintf("%s/raw/node-label/node_label.npy", ds_path),
-                         nob_temp_sprintf("%s/node-label.bin", proc_path),
-                         N * sizeof(uint32_t), sizeof(uint32_t))) return EXIT_FAILURE;
-
-        if (!process_npy(nob_temp_sprintf("%s/raw/data/edge_index.npy", ds_path),
-                         nob_temp_sprintf("%s/edge.bin", proc_path),
-                         2ULL * E * sizeof(uint32_t), sizeof(uint32_t))) return EXIT_FAILURE;
+        if (!process_npy(path_join(ds_path, "raw/data/node_feat.npy"), path_join(proc_path, "node-feat.bin"), feat_size, sizeof(double)))
+            return EXIT_FAILURE;
+        if (!process_npy(path_join(ds_path, "raw/node-label/node_label.npy"), path_join(proc_path, "node-label.bin"), label_size, sizeof(uint32_t)))
+            return EXIT_FAILURE;
+        if (!process_npy(nob_temp_sprintf(ds_path, "raw/data/edge_index.npy"), nob_temp_sprintf(proc_path, "edge.bin"), edge_size, sizeof(uint32_t)))
+            return EXIT_FAILURE;
     }
     else
     {
@@ -542,18 +525,17 @@ int prepare_dataset()
         return EXIT_FAILURE;
     }
 
-    if (ds_info->undirected)
-    {
-        nob_log(NOB_INFO, "Adding symmetric edges");
-        if(!symmetrize_edges(nob_temp_sprintf("%s/edge.bin", proc_path), E))
-        {
-            nob_log(NOB_ERROR, "Failed to symmetrize edges");
-            return EXIT_FAILURE;
-        }
-    }
-
     nob_temp_reset();
     return EXIT_SUCCESS;
+}
+
+void list_datasets(void)
+{
+    printf("Available datasets:\n");
+    for (size_t i = 0; i < NOB_ARRAY_LEN(ds_infos); i++)
+    {
+        printf("  %s\n", ds_infos[i].name);
+    }
 }
 
 #define STRINGS(...) { \

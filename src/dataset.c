@@ -9,18 +9,11 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
-
-#include "core.h"
-
-
 #include <omp.h>
 
 #include "core.h"
+#include "../dataset_info.h"
 #include "dataset.h"
-
-static const uint32_t num_nodes = 169343;
-static const uint32_t num_features = 128;
-static const uint32_t num_classes = 40;
 
 static const char *split_name[] = {
     [SPLIT_TRAIN] = "train",
@@ -36,66 +29,15 @@ EdgeFormat parse_edge_format(const char* str)
     ERROR("Not a valid edge format: %s", str);
 }
 
-// This is specifically design to only conver cases for node-feat.csv with no space handling
-static inline double parse_double(char** pp)
+static void path_join(char *buf, size_t size, const char *dir, const char *file)
 {
-    char* p = *pp;
-    double sign = 1.0;
+    int ret;
+    size_t dir_len = strlen(dir);
+    if (dir[dir_len-1] != '/') ret = snprintf(buf, size, "%s/%s", dir, file);
+    else ret = snprintf(buf, size, "%s%s", dir, file);
 
-    if (*p == '-') { sign = -1.0; p++; }
-    else if (*p == '+') { p++; }
-
-    int64_t intpart = 0;
-    while (*p >= '0' && *p <= '9') {
-        intpart = intpart * 10 + (*p++ - '0');
-    }
-
-    double val = (double)intpart;
-
-    if (*p == '.') {
-        p++;
-        double scale = 0.1;
-        while (*p >= '0' && *p <= '9') {
-            val += (*p++ - '0') * scale;
-            scale *= 0.1;
-        }
-    }
-
-    if (*p == 'e' || *p == 'E') {
-        p++;
-        int exp_sign = 1;
-        if (*p == '-') { exp_sign = -1; p++; }
-        else if (*p == '+') { p++; }
-
-        int exp = 0;
-        while (*p >= '0' && *p <= '9') {
-            exp = exp * 10 + (*p++ - '0');
-        }
-
-        if (exp_sign > 0) {
-            while (exp-- > 0) val *= 10.0;
-        } else {
-            while (exp-- > 0) val *= 0.1;
-        }
-    }
-
-    *pp = p;
-    return sign * val;
-}
-
-// This is specifically design to only be used for node indicies that aren't bigger
-// then 32bit value. It does not do any space checking or clean-up.
-static inline uint32_t parse_u32(char** pp)
-{
-    char* p = *pp;
-
-    uint32_t val = 0;
-    while (*p >= '0' && *p <= '9') {
-        val = val * 10 + (*p++ - '0');
-    }
-
-    *pp = p;
-    return val;
+    if (ret < 0 || (size_t)ret >= size)
+        ERROR("Path too long: %s/%s", dir, file);
 }
 
 static uint32_t load_split(const char *path, uint32_t **split)
@@ -104,27 +46,17 @@ static uint32_t load_split(const char *path, uint32_t **split)
     if (fd < 0) ERROR("Could not open %s: %s", path, strerror(errno));
     struct stat sb;
     fstat(fd, &sb);
-    char* data = mmap(NULL, sb.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
-
-    char* p = data;
-    char* end = data + sb.st_size;
-    uint32_t size = 0;
-    while (p < end) {
-        if (*p == '\n') size++;
-        p++;
+    uint32_t* data = mmap(NULL, sb.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    size_t count = sb.st_size / sizeof(*data);
+    *split = cache_aligned_alloc(sb.st_size);
+#pragma omp parallel for
+    for (size_t i = 0; i < count; i++)
+    {
+        (*split)[i] = data[i];
     }
-
-    *split = cache_aligned_alloc(size * sizeof(**split));
-
-    p = data;
-    size_t count = 0;
-    while (p < end) {
-        (*split)[count++] = parse_u32(&p);
-        if (*p == '\n') p++;
-    }
-
+    munmap(data, sb.st_size);
     close(fd);
-    return size;
+    return count;
 }
 
 static void build_node_mapping(uint32_t* map,  uint32_t num_nodes, uint32_t* split_idx, uint32_t split_size)
@@ -142,97 +74,74 @@ static void build_node_mapping(uint32_t* map,  uint32_t num_nodes, uint32_t* spl
     }
 }
 
-static void load_inputs(double *dest, uint32_t num_nodes)
+static double *load_nodes(const char *file)
 {
-    const char *file = "./arxiv/processed/node-feat.csv";
     int fd = open(file, O_RDONLY);
     if (fd < 0) ERROR("Could not open %s: %s", file, strerror(errno));
     struct stat sb;
     fstat(fd, &sb);
-    char* data = mmap(NULL, sb.st_size, PROT_READ, MAP_PRIVATE | MAP_POPULATE, fd, 0);
-
-    char** line_starts = cache_aligned_alloc((num_nodes + 1) * sizeof(char*));
-    line_starts[0] = data;
-    size_t line = 1;
-    for (char* p = data; p < data + sb.st_size; p++) {
-        if (*p == '\n' && line < num_nodes) {
-            line_starts[line++] = p + 1;
-        }
-    }
-
+    double *data = mmap(NULL, sb.st_size, PROT_READ, MAP_PRIVATE | MAP_POPULATE, fd, 0);
+    size_t count = sb.st_size / sizeof(*data);
+    double *nodes = cache_aligned_alloc(sb.st_size);
 #pragma omp parallel for
-    for (size_t i = 0; i < num_nodes; i++) {
-        char* p = line_starts[i];
-        for (size_t j = 0; j < num_features; j++) {
-            dest[i*num_features + j] = parse_double(&p);
-            if (*p == ',') p++;
-        }
+    for(size_t i = 0; i < count; i++)
+    {
+        nodes[i] = data[i];
     }
 
-    free(line_starts);
     munmap(data, sb.st_size);
     close(fd);
-
+    return nodes;
 }
 
-static void load_labels(uint32_t *dest)
+static uint32_t *load_labels(const char *file)
 {
-    const char *file = "./arxiv/processed/node-label.csv";
     int fd = open(file, O_RDONLY);
     if (fd < 0) ERROR("Could not open %s: %s", file, strerror(errno));
     struct stat sb;
     fstat(fd, &sb);
-    char* data = mmap(NULL, sb.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
-
-    char* p = data;
-    char* end = data + sb.st_size;
-
-    size_t i = 0;
-    while (p < end) {
-        dest[i++] = parse_u32(&p);
-        if (*p == '\n') p++;
+    uint32_t* data = mmap(NULL, sb.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    uint32_t count =  sb.st_size / sizeof(*data);
+    uint32_t *labels = cache_aligned_alloc(sb.st_size);
+#pragma omp parallel for
+    for (size_t i = 0; i < count; i++)
+    {
+        labels[i] = data[i];
     }
 
     munmap(data, sb.st_size);
     close(fd);
+
+    return labels;
 }
 
 typedef struct {
     uint32_t *u;
     uint32_t *v;
-    uint32_t count;
+    uint32_t count; // only relevant in case of undirected graphs
 } RawEdges;
 
-static RawEdges load_edges(void)
+static RawEdges load_edges(const char *file)
 {
-    const char *file = "./arxiv/processed/edge.csv";
     int fd = open(file, O_RDONLY);
     if (fd < 0) ERROR("Could not open %s: %s", file, strerror(errno));
     struct stat sb;
     fstat(fd, &sb);
-    char *data = mmap(NULL, sb.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
-
-    uint32_t count = 0;
-    for (char *p = data; p < data + sb.st_size; p++) {
-        if (*p == '\n') count++;
-    }
+    uint32_t *data = mmap(NULL, sb.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    uint32_t count =  sb.st_size / sizeof(*data) / 2;
 
     uint32_t *u = cache_aligned_alloc(count * sizeof(*u));
     uint32_t *v = cache_aligned_alloc(count * sizeof(*v));
 
-    char *p = data, *end = data + sb.st_size;
-    size_t i = 0;
-    while (p < end) {
-        u[i] = parse_u32(&p);
-        if (*p == ',') p++;
-        v[i] = parse_u32(&p);
-        if (*p == '\n') p++;
-        i++;
+#pragma omp parallel for
+    for (size_t i = 0; i < count; i++)
+    {
+        u[i] = data[2*i];
+        v[i] = data[2*i+1];
     }
 
     munmap(data, sb.st_size);
     close(fd);
-
     return (RawEdges){ .u = u, .v = v, .count = count };
 }
 
@@ -284,7 +193,7 @@ static void symmetrize_edges(RawEdges *raw)
     free(packed);
 }
 
-uint8_t *detect_self_loops(RawEdges raw_edges, uint32_t num_nodes)
+static uint8_t *detect_self_loops(RawEdges raw_edges, uint32_t num_nodes)
 {
     uint8_t *self_loop = cache_aligned_alloc(num_nodes * sizeof(*self_loop));
 #pragma omp parallel for
@@ -314,34 +223,56 @@ uint8_t *detect_self_loops(RawEdges raw_edges, uint32_t num_nodes)
     return self_loop;
 }
 
-Dataset* dataset_load_arxiv(EdgeFormat format, bool to_symmetric)
+Dataset* dataset_load_arxiv(char const* dataset, char const* data_dir, EdgeFormat format, bool to_symmetric)
 {
     double t = omp_get_wtime();
 
+    DatasetKind datatset_kind = str_to_dataset_kind(dataset);
+    if (datatset_kind == DATASET_INVALID) ERROR("Given dataset is not valid: %s", dataset);
+
+    // Equvalent of whats in nob.c
+    DatasetInfo *ds_info = &ds_infos[datatset_kind];
+
+    char ds_path[256];
+    path_join(ds_path, sizeof(ds_path), data_dir, ds_info->dir_name);
+    if (access(ds_path, F_OK) != 0)
+    {
+        ERROR("Dataset is missing, run ./nob -dataset %s -data_dir %s", dataset, data_dir);
+    }
+    char proc_path[256];
+    path_join(proc_path, sizeof(proc_path), ds_path, "processed");
+
     Dataset *ds = malloc(sizeof(*ds));
-    if (!ds) ERROR("Could not allocate Dataset");
-    ds->num_features = num_features;
-    ds->num_classes = num_classes;
-    ds->num_nodes = num_nodes;
+    ds->name = malloc(strlen(dataset)+1); strcpy(ds->name, dataset);
+    ds->path = malloc(strlen(ds_path)+1); strcpy(ds->path, ds_path);
+    ds->num_nodes = ds_info->num_nodes;
+    ds->num_features = ds_info->num_features;
+    ds->num_classes = ds_info->num_classes;
+    ds->num_edges = ds_info->num_edges;
+
+    char bin_path[256];
 
     // Edges
     double t_e = omp_get_wtime();
-    RawEdges raw_edges = load_edges();
-    ds->edges.self_loop = detect_self_loops(raw_edges, num_nodes);
-    if (to_symmetric)
+    path_join(bin_path, sizeof(bin_path), proc_path, "edge.bin");
+    RawEdges raw_edges = load_edges(bin_path);
+
+    ds->edges.self_loop = detect_self_loops(raw_edges, ds->num_nodes);
+    if (to_symmetric || ds_info->undirected)
     {
         symmetrize_edges(&raw_edges);
+        ds->num_edges = raw_edges.count;
     }
 
-    ds->num_edges = raw_edges.count;
     ds->edges.format = format;
     switch(format)
     {
     case EDGE_COO:
-        ds->edges.src = cache_aligned_alloc(ds->num_edges*sizeof(ds->edges.src));
-        ds->edges.dst = cache_aligned_alloc(ds->num_edges*sizeof(ds->edges.dst));
+        ds->edges.src = cache_aligned_alloc(ds->num_edges*sizeof(*ds->edges.src));
+        ds->edges.dst = cache_aligned_alloc(ds->num_edges*sizeof(*ds->edges.dst));
         if (!ds->edges.src || !ds->edges.dst) ERROR("Could not allocate COO edges");
-
+        // First touch
+#pragma omp parallel for
         for (size_t i = 0; i < raw_edges.count; i++)
         {
             ds->edges.src[i] = raw_edges.u[i];
@@ -359,26 +290,23 @@ Dataset* dataset_load_arxiv(EdgeFormat format, bool to_symmetric)
     }
     free(raw_edges.u);
     free(raw_edges.v);
-
-
     t_e = omp_get_wtime() - t_e;
 
-    // Features
-    double t_f = omp_get_wtime();
-    ds->nodes = cache_aligned_alloc(num_nodes * num_features * sizeof(*ds->nodes));
-    load_inputs(ds->nodes, num_nodes);
-    t_f = omp_get_wtime() - t_f;
-
-    // Labels
     double t_l = omp_get_wtime();
-    ds->labels = cache_aligned_alloc(num_nodes * sizeof(*ds->labels));
-    load_labels(ds->labels);
+    path_join(bin_path, sizeof(bin_path), proc_path, "node-label.bin");
+    ds->labels = load_labels(bin_path);
     t_l = omp_get_wtime() - t_l;
+
+    double t_f = omp_get_wtime();
+    path_join(bin_path, sizeof(bin_path), proc_path, "node-feat.bin");
+    ds->nodes = load_nodes(bin_path);
+    t_f = omp_get_wtime() - t_f;
 
     printf("Loaded OGB-ARXIV in %.2fs\n", omp_get_wtime() - t);
     printf("    loading edges: %.2fs\n", t_e);
     printf("    loading features: %.2fs\n", t_f);
     printf("    loading labels: %.2fs\n", t_l);
+
     return ds;
 }
 
@@ -389,10 +317,13 @@ Dataset *dataset_split(Dataset *base, Split split)
     double t = omp_get_wtime();
     uint32_t *split_idx, split_size;
 
-    static const char *split_paths[] = {
-        [SPLIT_TRAIN] = "./arxiv/processed/train.csv",
-        [SPLIT_VALID] = "./arxiv/processed/valid.csv",
-        [SPLIT_TEST]  = "./arxiv/processed/test.csv",
+    char proc_path[256];
+    path_join(proc_path, sizeof(proc_path), base->path, "processed");
+
+    const char *split_names[] = {
+        [SPLIT_TRAIN] = "train.bin",
+        [SPLIT_VALID] = "valid.bin",
+        [SPLIT_TEST]  = "test.bin",
     };
 
     if (split < 0 || split > SPLIT_TEST)
@@ -400,7 +331,9 @@ Dataset *dataset_split(Dataset *base, Split split)
         ERROR("Unknown split: %d", split);
     }
 
-    split_size = load_split(split_paths[split], &split_idx);
+    char split_file[256];
+    path_join(split_file, sizeof(split_file), proc_path, split_names[split]);
+    split_size = load_split(split_file, &split_idx);
 
 #if defined(REDUCED_GRAPH)
     static const uint32_t reduced_sizes[] = {
@@ -413,16 +346,16 @@ Dataset *dataset_split(Dataset *base, Split split)
 
     Dataset *ds = malloc(sizeof(*ds));
     if (!ds) ERROR("Could not allocate split Dataset");
-    ds->num_features = num_features;
-    ds->num_classes  = num_classes;
+    ds->num_features = base->num_features;
+    ds->num_classes  = base->num_classes;
 
     // Gather features
-    ds->nodes = cache_aligned_alloc(split_size * num_features * sizeof(*ds->nodes));
+    ds->nodes = cache_aligned_alloc(split_size * ds->num_features * sizeof(*ds->nodes));
 #pragma omp parallel for
     for (size_t i = 0; i < split_size; i++) {
-        memcpy(&ds->nodes[i * num_features],
-               &base->nodes[split_idx[i] * num_features],
-               num_features * sizeof(*ds->nodes));
+        memcpy(&ds->nodes[i * ds->num_features],
+               &base->nodes[split_idx[i] * ds->num_features],
+               ds->num_features * sizeof(*ds->nodes));
     }
 
     // Gather labels
@@ -431,8 +364,8 @@ Dataset *dataset_split(Dataset *base, Split split)
         ds->labels[i] = base->labels[split_idx[i]];
     }
 
-    uint32_t *node_map = cache_aligned_alloc(num_nodes * sizeof(*node_map));
-    build_node_mapping(node_map, num_nodes, split_idx, split_size);
+    uint32_t *node_map = cache_aligned_alloc(base->num_nodes * sizeof(*node_map));
+    build_node_mapping(node_map, base->num_nodes, split_idx, split_size);
 
     // Filter and remap edges
     // Worst case: every edge survives
@@ -469,6 +402,8 @@ void dataset_free(Dataset **ds)
 
     free((*ds)->edges.src); (*ds)->edges.src = NULL;
     free((*ds)->edges.dst); (*ds)->edges.dst = NULL;
+    free((*ds)->name);      (*ds)->name      = NULL;
+    free((*ds)->path);      (*ds)->path      = NULL;
     free((*ds)->nodes);     (*ds)->nodes     = NULL;
     free((*ds)->labels);    (*ds)->labels    = NULL;
     free((*ds));
