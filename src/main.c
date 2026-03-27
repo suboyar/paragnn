@@ -241,7 +241,7 @@ int main(int argc, char** argv)
     print_config();
 
     bool to_symmetric = true;
-    Dataset *ds = dataset_load_arxiv(flags.dataset, flags.data_dir, edge_format, to_symmetric);
+    Dataset *ds = dataset_load(flags.dataset, flags.data_dir, edge_format, to_symmetric);
 
     Dataset *ds_train = dataset_split(ds, SPLIT_TRAIN);
     Dataset *ds_valid = dataset_split(ds, SPLIT_VALID);

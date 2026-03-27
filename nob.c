@@ -823,6 +823,8 @@ int build_target(Target* t)
         for (int i = 0; i < flags.rest_argc; i++) {
             nob_cmd_append(&cmd, flags.rest_argv[i]);
         }
+        if (flags.dataset) nob_cmd_append(&cmd, "-dataset", flags.dataset);
+        if (flags.data_dir) nob_cmd_append(&cmd, "-data-dir", flags.data_dir);
         if (!nob_cmd_run(&cmd)) return 1;
     }
 

@@ -223,7 +223,7 @@ static uint8_t *detect_self_loops(RawEdges raw_edges, uint32_t num_nodes)
     return self_loop;
 }
 
-Dataset* dataset_load_arxiv(char const* dataset, char const* data_dir, EdgeFormat format, bool to_symmetric)
+Dataset* dataset_load(char const* dataset, char const* data_dir, EdgeFormat format, bool to_symmetric)
 {
     double t = omp_get_wtime();
 
@@ -243,7 +243,6 @@ Dataset* dataset_load_arxiv(char const* dataset, char const* data_dir, EdgeForma
     path_join(proc_path, sizeof(proc_path), ds_path, "processed");
 
     Dataset *ds = malloc(sizeof(*ds));
-    ds->name = malloc(strlen(dataset)+1); strcpy(ds->name, dataset);
     ds->path = malloc(strlen(ds_path)+1); strcpy(ds->path, ds_path);
     ds->num_nodes = ds_info->num_nodes;
     ds->num_features = ds_info->num_features;
@@ -346,6 +345,7 @@ Dataset *dataset_split(Dataset *base, Split split)
 
     Dataset *ds = malloc(sizeof(*ds));
     if (!ds) ERROR("Could not allocate split Dataset");
+    ds->path = malloc(strlen(base->path)+1); strcpy(ds->path, base->path);
     ds->num_features = base->num_features;
     ds->num_classes  = base->num_classes;
 
@@ -402,7 +402,6 @@ void dataset_free(Dataset **ds)
 
     free((*ds)->edges.src); (*ds)->edges.src = NULL;
     free((*ds)->edges.dst); (*ds)->edges.dst = NULL;
-    free((*ds)->name);      (*ds)->name      = NULL;
     free((*ds)->path);      (*ds)->path      = NULL;
     free((*ds)->nodes);     (*ds)->nodes     = NULL;
     free((*ds)->labels);    (*ds)->labels    = NULL;

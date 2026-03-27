@@ -36,7 +36,6 @@ typedef struct {
 } Edges;
 
 typedef struct {
-    char *name;
     char *path;
     uint32_t num_nodes;
     uint32_t num_features;
@@ -48,8 +47,8 @@ typedef struct {
 } Dataset;
 
 EdgeFormat parse_edge_format(const char* str);
-Dataset* dataset_load_arxiv(char const* dataset, char const* data_dir, EdgeFormat format, bool to_symmetric);
-Dataset *dataset_split(Dataset *src, Split split);
+Dataset* dataset_load(char const* dataset, char const* data_dir, EdgeFormat format, bool to_symmetric);
+Dataset *dataset_split(Dataset *base, Split split);
 void dataset_free(Dataset **ds);
 
 #endif // GRAPH_H_
