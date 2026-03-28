@@ -680,6 +680,40 @@ void list_targets(void)
     }
 }
 
+typedef enum {
+    CPU_UNKNOWN,
+    CPU_ARM_NEOVERSE_V2,
+    CPU_ARM_THUNDERX2,
+    CPU_ARM_KUNPENG_920,
+} CPUVendor;
+
+char const* arch_macro_name[] = {
+    [CPU_UNKNOWN] = NULL,
+    [CPU_ARM_NEOVERSE_V2] = "__neoverse_v2__",
+    [CPU_ARM_THUNDERX2] = "__thunderx2__",
+    [CPU_ARM_KUNPENG_920] = "__kunpeng_920__",
+};
+
+static CPUVendor detect_cpu_vendor(void)
+{
+#if defined(__aarch64__) || defined(__arm__)
+    // ref: https://developer.arm.com/documentation/107771/0102/AArch64-registers/AArch64-Identification-registers-summary/MIDR-EL1--Main-ID-Register
+    uint64_t midr;
+    __asm__ __volatile__("mrs %0, midr_el1" : "=r"(midr));
+
+    uint8_t implementer = (midr >> 24) & 0xFF;
+    uint16_t part_num = (midr >> 4) & 0xFFF;
+
+    // eX3 has only these ARM CPUs, and I don't think they will add any new ones
+    // before I finish my thesis. So this should be enough.
+
+    if (implementer == 0x41 && part_num == 0xD4F) return CPU_ARM_NEOVERSE_V2;
+    if (implementer == 0x43 && part_num == 0x0AF) return CPU_ARM_THUNDERX2;
+    if (implementer == 0x48 && part_num == 0xD01) return CPU_ARM_KUNPENG_920;
+#endif
+    return CPU_UNKNOWN;
+}
+
 const char* get_artifact_path(const char* out_dir, const char* src_path)
 {
     const char* base = nob_path_name(src_path);
@@ -750,6 +784,13 @@ int build_target(Target* t)
     // Compile all source files
     const char** dst_paths = nob_temp_alloc(t->srcs.count * sizeof(char*));
 
+    CPUVendor cpu_vendor = detect_cpu_vendor();
+    if (cpu_vendor != CPU_UNKNOWN)
+    {
+        nob_log(NOB_INFO, "Adding missing architecture macro %s", arch_macro_name[cpu_vendor]);
+    }
+
+    printf("[>>>] Compiling\n");
     for (size_t i = 0; i < t->srcs.count; i++) {
         const char* src = t->srcs.items[i];
         const char* dst = get_artifact_path(out_dir, src);
@@ -757,13 +798,21 @@ int build_target(Target* t)
 
         nob_cc(&cmd);
         append_common_flags(COMPILING);
+        if (cpu_vendor != CPU_UNKNOWN)
+        {
+            nob_cmd_append(&cmd, nob_temp_sprintf("-D%s", arch_macro_name[cpu_vendor]));
+        }
 
-        if (flags.release && t->release_macros.items) {
-            for (size_t i = 0; i < t->release_macros.count; i++) {
+        if (flags.release && t->release_macros.items)
+        {
+            for (size_t i = 0; i < t->release_macros.count; i++)
+            {
                 bool overwrite = false;
-                for (size_t j = 0; j < flags.macros.count; j++) {
+                for (size_t j = 0; j < flags.macros.count; j++)
+                {
                     char *user_macro = nob_temp_sprintf("-D%s", flags.macros.items[j]);
-                        if (strcmp(user_macro, t->release_macros.items[i]) == 0) {
+                        if (strcmp(user_macro, t->release_macros.items[i]) == 0)
+                        {
                             overwrite = true;
                             break;
                         }
@@ -799,6 +848,7 @@ int build_target(Target* t)
     }
 
     // Link
+    printf("[>>>] Linking\n");
     nob_cc(&cmd);
     append_common_flags(LINKING);
     nob_cmd_append(&cmd, "-fopenmp");
@@ -815,7 +865,7 @@ int build_target(Target* t)
 
     if (!nob_cmd_run(&cmd)) return 1;
 
-    nob_log(NOB_INFO, "Succesfully compiled: %s", exec_path);
+    nob_log(NOB_INFO, "Successfully compiled: %s", exec_path);
 
     // Run if requested
     if (flags.run) {
