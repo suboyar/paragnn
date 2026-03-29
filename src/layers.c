@@ -2,7 +2,6 @@
 
 #include "core.h"
 #include "layers.h"
-#include "gnn.h"
 #include "dataset.h"
 #include "timer.h"
 #include "linalg/linalg.h"

@@ -20,24 +20,20 @@ void aggregate(SageLayer *const l)
 {
     TIMER_FUNC();
 
+    uint32_t num_nodes = l->num_nodes;
     uint32_t in_dim = l->in_dim;
-
-    double* X = l->input;
-    size_t ldX = l->in_dim;
 
 #pragma omp parallel
     {
         int tid = omp_get_thread_num();
-        uint32_t *tid_adj = l->tls_adj + tid * l->num_nodes;
+        uint32_t *tid_adj = l->tls_adj + tid * num_nodes;
 
 #pragma omp for
-        for (size_t i = 0; i < l->num_nodes; i++) {
+        for (size_t i = 0; i < num_nodes; i++)
+        {
             size_t neigh_count = 0;
-            double *Y = l->agg + i * l->in_dim;
-
-            // NOTE: Collects neighbors from only incoming direction.
-
-            for (size_t e = 0; e < l->num_edges; e++) {
+            for (size_t e = 0; e < l->num_edges; e++)
+            {
 
                 // The source_to_target flow is the default of torch_geometric.nn.conv.message_passing,
                 // and as far as I can tell non of the entries of OGB leaderboard that uses SageCONV
@@ -58,14 +54,17 @@ void aggregate(SageLayer *const l)
 
             if (neigh_count == 0) continue;
 
-            double scale = 1.0 / neigh_count;
+            Real scale = 1.0 / neigh_count;
 
-            for (size_t j = 0; j < in_dim; j++) {
-                double sum = 0.0;
-                for (size_t k = 0; k < neigh_count; k++) {
-                    sum += X[tid_adj[k] * ldX + j];
+            Real *ag_row = &l->agg[i * in_dim];
+            for (size_t j = 0; j < in_dim; j++)
+            {
+                Real sum = 0.0;
+                for (size_t k = 0; k < neigh_count; k++)
+                {
+                    sum += l->input[tid_adj[k] * in_dim + j];
                 }
-                Y[j] = sum * scale;
+                ag_row[j] = sum * scale;
             }
             l->mean_scale[i] = scale;
         }
@@ -382,123 +381,337 @@ void relu_backward(ReluLayer *const l)
     nob_log(NOB_INFO, "relu_backward: ok");
 }
 
-void sageconv_backward(SageLayer *const l)
+
+static void scatter_grad(SageLayer *l)
 {
     TIMER_FUNC();
 
-    // grad_Wroot = input^T @ grad_output
-    // input:       num_nodes x in_dim
-    // grad_output: num_nodes x out_dim
-    // grad_Wroot:  in_dim x out_dim
-    TIMER_BLOCK(l->timer_dWroot, {
-        dgemm(l->in_dim, l->out_dim, l->num_nodes,
-              LinalgTrans, LinalgNoTrans,
-              1.0,
-              l->input,      l->in_dim,
-              l->grad_output, l->out_dim,
-              0.0,
-              l->grad_Wroot, l->out_dim);
-    });
+#pragma omp parallel for
+    for (size_t n = 0; n < l->num_nodes; n++) // aka dst
+    {
+        const Real *restrict go = &l->grad_output[n * l->out_dim];
+        Real *restrict gs = &l->grad_scatter[n * l->in_dim];
+        const Real s = l->mean_scale[n];
 
-    // grad_Wagg = agg^T @ grad_output
-    // agg:         num_nodes x in_dim
-    // grad_output: num_nodes x out_dim
-    // grad_Wagg:   in_dim x out_dim
-    TIMER_BLOCK(l->timer_dWagg, {
-        dgemm(l->in_dim, l->out_dim, l->num_nodes,
-              LinalgTrans, LinalgNoTrans,
-              1.0,
-              l->agg,        l->in_dim,
-              l->grad_output, l->out_dim,
-              0.0,
-              l->grad_Wagg,  l->out_dim);
-    });
+        for (size_t i = 0; i < l->in_dim; i++)
+        {
+            const Real *restrict wa = &l->Wagg[i * l->out_dim];
+            Real sum = 0.0;
+#pragma omp simd reduction(+:sum)
+            for (size_t j = 0; j < l->out_dim; j++)
+            {
+                sum += go[j] * wa[j];
+            }
+            gs[i] = sum * s;
+        }
+    }
 
-    // grad_input = grad_output @ Wroot^T
-    // grad_output: num_nodes x out_dim
-    // Wroot:       in_dim x out_dim
-    // grad_input:  num_nodes x in_dim
-    TIMER_BLOCK(l->timer_dinput, {
-        dgemm(l->num_nodes, l->in_dim, l->out_dim,
-              LinalgNoTrans, LinalgTrans,
-              1.0,
-              l->grad_output, l->out_dim,
-              l->Wroot,       l->out_dim,
-              0.0,
-              l->grad_input,  l->in_dim);
-    });
-
-    // Neighbor gradient scatter:
-    // grad_input[src] += mean_scale[dst] * grad_output[dst] @ Wagg^T
-    double t0 = omp_get_wtime();
 #pragma omp parallel for
     for (size_t e = 0; e < l->num_edges; e++)
     {
         uint32_t src = l->edges.src[e];
         uint32_t dst = l->edges.dst[e];
-        Real scale = l->mean_scale[dst];
-        Real *grad_out_dst = &l->grad_output[dst * l->out_dim];
-        Real *grad_in_src  = &l->grad_input[src * l->in_dim];
+        Real *restrict gi  = &l->grad_input[src * l->in_dim];
+        const Real *restrict gs = &l->grad_scatter[dst * l->in_dim];
 
         for (size_t i = 0; i < l->in_dim; i++)
         {
-            Real sum = 0.0;
-            for (size_t j = 0; j < l->out_dim; j++)
-            {
-                sum += grad_out_dst[j] * l->Wagg[i * l->out_dim + j];
-            }
 #pragma omp atomic
-            grad_in_src[i] += sum * scale;
+            gi[i] += gs[i];
         }
     }
-    timer_record(l->timer_dneigh, omp_get_wtime() - t0, NULL);
-
-    nob_log(NOB_INFO, "sageconv_backward: ok");
 }
+
+#if defined(SAGECONV_BACKWARD_NAIVE)
+void sageconv_backward(SageLayer *const l)
+{
+    TIMER_FUNC();
+
+    double t0 = omp_get_wtime();
+
+    // grad_Wroot = input^T @ grad_output
+    // input:       num_nodes x in_dim
+    // grad_output: num_nodes x out_dim
+    // grad_Wroot:  in_dim x out_dim
+#pragma omp parallel for
+    for (uint32_t i = 0; i < l->in_dim; i++)
+    {
+        for (uint32_t j = 0; j < l->out_dim; j++)
+        {
+            Real sum = 0.0;
+#pragma omp simd reduction(+:sum)
+            for (uint32_t k = 0; k < l->num_nodes; k++)
+            {
+                sum += l->input[k*l->in_dim+i] * l->grad_output[k*l->out_dim+j];
+            }
+            l->grad_Wroot[i*l->out_dim+j] = sum;
+        }
+    }
+
+    // grad_Wagg = agg^T @ grad_output
+    // agg:         num_nodes x in_dim
+    // grad_output: num_nodes x out_dim
+    // grad_Wagg:   in_dim x out_dim
+#pragma omp parallel for
+    for (uint32_t i = 0; i < l->in_dim; i++)
+    {
+        for (uint32_t j = 0; j < l->out_dim; j++)
+        {
+            Real sum = 0.0;
+#pragma omp simd reduction(+:sum)
+            for (uint32_t k = 0; k < l->num_nodes; k++)
+            {
+                sum += l->agg[k*l->in_dim+i] * l->grad_output[k*l->out_dim+j];
+            }
+            l->grad_Wagg[i*l->out_dim+j] = sum;
+        }
+    }
+
+    // grad_input = grad_output @ Wroot^T
+    // grad_output: num_nodes x out_dim
+    // Wroot:       in_dim x out_dim
+    // grad_input:  num_nodes x in_dim
+#pragma omp parallel for
+    for (uint32_t i = 0; i < l->num_nodes; i++)
+    {
+        for (uint32_t j = 0; j < l->in_dim; j++)
+        {
+            Real sum = 0.0;
+#pragma omp simd reduction(+:sum)
+            for (uint32_t k = 0; k < l->out_dim; k++)
+            {
+                sum += l->grad_output[i*l->out_dim+k] * l->Wroot[j*l->out_dim+k];
+            }
+            l->grad_input[i*l->in_dim+j] = sum;
+        }
+    }
+
+    timer_record("dense_grad", omp_get_wtime()-t0, NULL);
+
+    scatter_grad(l);
+}
+
+#elif defined(SAGECONV_BACKWARD_BLAS)
+
+void sageconv_backward(SageLayer *const l)
+{
+    TIMER_FUNC();
+
+    cblas_dgemm(CblasRowMajor,
+                CblasTrans, CblasNoTrans,
+                l->in_dim, l->out_dim, l->num_nodes,
+                1.0,
+                l->input,      l->in_dim,
+                l->grad_output, l->out_dim,
+                0.0,
+                l->grad_Wroot, l->out_dim);
+
+    cblas_dgemm(CblasRowMajor,
+                CblasTrans, CblasNoTrans,
+                l->in_dim, l->out_dim, l->num_nodes,
+                1.0,
+                l->agg,        l->in_dim,
+                l->grad_output, l->out_dim,
+                0.0,
+                l->grad_Wagg,  l->out_dim);
+
+    cblas_dgemm(CblasRowMajor,
+                CblasNoTrans, CblasTrans,
+                l->num_nodes, l->in_dim, l->out_dim,
+                1.0,
+                l->grad_output, l->out_dim,
+                l->Wroot,       l->out_dim,
+                0.0,
+                l->grad_input,  l->in_dim);
+
+    scatter_grad(l);
+}
+
+#else
+
+/*
+ * For some cpus architecture GCC doesn't define a architecture-specific macros e.g. __neoverse_v2__.
+ * Hence, when compiling for these architectures, one needs to manually define them at compile time:
+ * -D__neoverse_v2__, -D__thunderx2__, -D__kunpeng_920__
+ */
+
+#if !defined(SAGE_NODE_BLOCK)
+    #if defined(__znver3__) || defined(__neoverse_v2__) || defined(__sapphirerapids__)
+        #define SAGE_NODE_BLOCK 8
+    #elif defined(__znver4__)
+        #error "Optimal __znver4__ SAGE_NODE_BLOCK value needs to be found"
+    #elif defined(__znver2__)
+        #define SAGE_NODE_BLOCK 4
+    #elif defined(__thunderx2__)
+        #define SAGE_NODE_BLOCK 16
+    #elif defined(__kunpeng_920__)
+        #error "Optimal __kunpeng_920__ SAGE_NODE_BLOCK value needs to be found"
+    #elif defined(__icelake_server__) // habanaq
+        #error "Optimal __icelake_server__ SAGE_NODE_BLOCK value needs to be found"
+    #else
+        #define SAGE_NODE_BLOCK 2
+    #endif
+#endif
+
+#ifndef SAGE_NODE_BLOCK         // To stop compiler from cascading error #error is hit above
+    #define SAGE_NODE_BLOCK 2
+#endif
+
+void sageconv_backward(SageLayer *const l)
+{
+    TIMER_FUNC();
+
+    size_t in_dim    = l->in_dim;
+    size_t out_dim   = l->out_dim;
+    size_t num_nodes = l->num_nodes;
+
+    int nthreads = omp_get_max_threads();
+    size_t wt_size = in_dim * out_dim;
+
+    real_zero_out(l->tls_dWroot, nthreads * wt_size);
+    real_zero_out(l->tls_dWagg,  nthreads * wt_size);
+
+    const size_t num_nodes_aligned = (num_nodes / SAGE_NODE_BLOCK) * SAGE_NODE_BLOCK;
+
+#pragma omp parallel
+    {
+        int tid = omp_get_thread_num();
+        Real *restrict tid_dWroot = &l->tls_dWroot[tid * wt_size];
+        Real *restrict tid_dWagg  = &l->tls_dWagg [tid * wt_size];
+        const Real *restrict Wroot = l->Wroot;
+
+#pragma omp for nowait
+        for (size_t n = 0; n < num_nodes_aligned; n+=SAGE_NODE_BLOCK)
+        {
+            const Real *go[SAGE_NODE_BLOCK], *in_r[SAGE_NODE_BLOCK], *ag_r[SAGE_NODE_BLOCK];
+            Real       *gi[SAGE_NODE_BLOCK];
+
+            PRAGMA_UNROLL(SAGE_NODE_BLOCK)
+            for (int u = 0; u < SAGE_NODE_BLOCK; u++)
+            {
+                size_t nx = n + u;
+                go[u]   = &l->grad_output[nx * out_dim];
+                in_r[u] = &l->input[nx * in_dim];
+                ag_r[u] = &l->agg[nx * in_dim];
+                gi[u]   = &l->grad_input[nx * in_dim];
+            }
+
+            for (size_t i = 0; i < in_dim; i++)
+            {
+                Real x[SAGE_NODE_BLOCK], a[SAGE_NODE_BLOCK], s[SAGE_NODE_BLOCK];
+                PRAGMA_UNROLL(SAGE_NODE_BLOCK)
+                for (int u = 0; u < SAGE_NODE_BLOCK; u++)
+                {
+                    x[u] = in_r[u][i];
+                    a[u] = ag_r[u][i];
+                    s[u] = 0.0;
+                }
+
+                const Real *restrict wr  = &Wroot[i * out_dim];
+                Real       *restrict dwr = &tid_dWroot[i * out_dim];
+                Real       *restrict dwa = &tid_dWagg[i * out_dim];
+
+
+#pragma omp simd
+                for (size_t j = 0; j < out_dim; j++)
+                {
+                    Real w = wr[j];
+                    Real dwr_acc = 0.0, dwa_acc = 0.0;
+                    PRAGMA_UNROLL(SAGE_NODE_BLOCK)
+                    for (int u = 0; u < SAGE_NODE_BLOCK; u++)
+                    {
+                        Real g = go[u][j];
+                        s[u]    += g * w;
+                        dwr_acc += x[u] * g;
+                        dwa_acc += a[u] * g;
+                    }
+                    dwr[j] += dwr_acc;
+                    dwa[j] += dwa_acc;
+                }
+                PRAGMA_UNROLL(SAGE_NODE_BLOCK)
+                for (int u = 0; u < SAGE_NODE_BLOCK; u++)
+                {
+                    gi[u][i] = s[u];
+                }
+            }
+        }
+
+#pragma omp single nowait
+        for (size_t n = (num_nodes / SAGE_NODE_BLOCK) * SAGE_NODE_BLOCK; n < num_nodes; n++)
+        {
+            const Real *restrict go = &l->grad_output[n * out_dim];
+            const Real *restrict in_row = &l->input[n * in_dim];
+            const Real *restrict ag_row = &l->agg[n * in_dim];
+            Real *restrict gi = &l->grad_input[n * in_dim];
+
+            for (size_t i = 0; i < in_dim; i++)
+            {
+                const Real *restrict wr  = &Wroot[i * out_dim];
+                Real *restrict dwr = &tid_dWroot[i * out_dim];
+                Real *restrict dwa = &tid_dWagg [i * out_dim];
+                Real xi = in_row[i], ai = ag_row[i];
+                Real sum = 0.0;
+#pragma omp simd reduction(+:sum)
+                for (size_t j = 0; j < out_dim; j++)
+                {
+                    Real gj = go[j];
+                    sum    += gj * wr[j];
+                    dwr[j] += xi * gj;
+                    dwa[j] += ai * gj;
+                }
+                gi[i] = sum;
+            }
+        }
+
+#pragma omp barrier
+
+#pragma omp for
+        for (size_t i = 0; i < wt_size; i++)
+        {
+            Real wr = 0.0, wa = 0.0;
+#pragma GCC unroll 4
+            for (int t = 0; t < nthreads; t++)
+            {
+                wr += l->tls_dWroot[t * wt_size + i];
+                wa += l->tls_dWagg [t * wt_size + i];
+            }
+            l->grad_Wroot[i] = wr;
+            l->grad_Wagg[i]  = wa;
+        }
+    }
+
+    scatter_grad(l)
+}
+
+#endif
 
 // Reset gradient
-#define GRAD_PARALLEL_THRESHOLD 32768  // 256KB of doubles i.e L2 cache
-static inline void zero_out(Real *a, size_t n)
-{
-    if (n < GRAD_PARALLEL_THRESHOLD)
-    {
-        memset(a, 0, n * sizeof(Real));
-    }
-    else
-    {
-#pragma omp parallel for simd
-        for (size_t i = 0; i < n; i++)
-        {
-            a[i] = 0.0;
-        }
-    }
-}
 
 void sage_layer_zero_gradients(SageLayer* l)
 {
-    zero_out(l->grad_input, l->num_nodes * l->in_dim);
-    zero_out(l->grad_Wagg, l->in_dim * l->out_dim);
-    zero_out(l->grad_Wroot, l->in_dim * l->out_dim);
+    real_zero_out(l->grad_input, l->num_nodes * l->in_dim);
+    real_zero_out(l->grad_Wagg, l->in_dim * l->out_dim);
+    real_zero_out(l->grad_Wroot, l->in_dim * l->out_dim);
 }
 
 void relu_layer_zero_gradients(ReluLayer* l)
 {
-    zero_out(l->grad_input, l->num_nodes * l->dim);
+    real_zero_out(l->grad_input, l->num_nodes * l->dim);
 }
 
 void normalize_layer_zero_gradients(L2NormLayer* l)
 {
-    zero_out(l->grad_input, l->num_nodes * l->dim);
+    real_zero_out(l->grad_input, l->num_nodes * l->dim);
 }
 
 void linear_layer_zero_gradients(LinearLayer* l)
 {
-    zero_out(l->grad_input, l->num_nodes * l->in_dim);
-    zero_out(l->grad_W, l->in_dim * l->out_dim);
-    zero_out(l->grad_bias, l->out_dim);
+    real_zero_out(l->grad_input, l->num_nodes * l->in_dim);
+    real_zero_out(l->grad_W, l->in_dim * l->out_dim);
+    real_zero_out(l->grad_bias, l->out_dim);
 }
 
 void logsoft_layer_zero_gradients(LogSoftLayer* l)
 {
-    zero_out(l->grad_input, l->num_nodes * l->dim);
+    real_zero_out(l->grad_input, l->num_nodes * l->dim);
 }

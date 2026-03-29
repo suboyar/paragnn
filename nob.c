@@ -746,11 +746,12 @@ void append_common_flags(BuildPhase phase)
 
     // TODO: Remove this
     nob_cmd_append(&cmd, "-DUSE_DOUBLE");
+    nob_cmd_append(&cmd, "-march=native");
 
     if (flags.release) {
-        nob_cmd_append(&cmd, "-O3", "-march=native", "-DNDEBUG", "-ffast-math");
+        nob_cmd_append(&cmd, "-O3", "-DNDEBUG", "-ffast-math");
     } else {
-        nob_cmd_append(&cmd, "-O0");
+        nob_cmd_append(&cmd, "-Og");
     }
 
     if (flags.asan)
