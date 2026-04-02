@@ -34,9 +34,13 @@ typedef struct {
             uint32_t *row_idx;  // [num_edges]
         };
     };
-    uint8_t *self_loop;      // O(1) lookup for if node has self loops
+    uint8_t *self_loop;      // O(1) lookup for node self-loops, NULL if none exist
     Real    *inv_in_degree;  // 1/deg_in(v), for source_to_target aggregation
     Real    *inv_out_degree; // 1/deg_out(v), for target_to_source aggregation
+
+    // Statistics
+    float   avg_self_loop;
+    float   avg_degree;
 } Edges;
 
 typedef struct {

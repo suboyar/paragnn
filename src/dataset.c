@@ -215,7 +215,6 @@ static uint8_t *detect_self_loops(RawEdges raw_edges, uint32_t num_nodes)
 
     if (self_loop_count == 0)
     {
-        printf("No self loops was found\n");
         free(self_loop);
         self_loop = NULL;
     }
@@ -352,7 +351,17 @@ Dataset* dataset_load(char const* dataset, char const* data_dir, EdgeFormat form
     ds->nodes = load_nodes(bin_path);
     t_f = omp_get_wtime() - t_f;
 
-    printf("Loaded OGB-ARXIV in %.2fs\n", omp_get_wtime() - t);
+    // Compute statistics
+    ds->edges.avg_degree = (float)ds->num_edges / ds->num_nodes;
+    size_t self_loop_count = 0;
+    for (uint32_t i = 0; ds->edges.self_loop && i < ds->num_nodes; i++)
+    {
+        if (ds->edges.self_loop[i]) self_loop_count++;
+    }
+    ds->edges.avg_self_loop = (float)self_loop_count / ds->num_nodes;
+
+    printf("Loaded OGB-ARXIV in %.2fs (node count: %u, edge count: %u, avg degree: %.2f, avg self loops: %.2f)\n",
+           omp_get_wtime() - t, ds->num_nodes, ds->num_edges, ds->edges.avg_degree, ds->edges.avg_self_loop);
     printf("    loading edges: %.2fs\n", t_e);
     printf("    loading features: %.2fs\n", t_f);
     printf("    loading labels: %.2fs\n", t_l);
@@ -399,24 +408,25 @@ Dataset *dataset_split(Dataset *base, Split split)
     ds->path = malloc(strlen(base->path)+1); strcpy(ds->path, base->path);
     ds->num_features = base->num_features;
     ds->num_classes  = base->num_classes;
+    ds->num_nodes = split_size;
 
     // Gather features
-    ds->nodes = cache_aligned_alloc(split_size * ds->num_features * sizeof(*ds->nodes));
+    ds->nodes = cache_aligned_alloc(ds->num_nodes * ds->num_features * sizeof(*ds->nodes));
 #pragma omp parallel for
-    for (size_t i = 0; i < split_size; i++) {
+    for (size_t i = 0; i < ds->num_nodes; i++) {
         memcpy(&ds->nodes[i * ds->num_features],
                &base->nodes[split_idx[i] * ds->num_features],
                ds->num_features * sizeof(*ds->nodes));
     }
 
     // Gather labels
-    ds->labels = cache_aligned_alloc(split_size * sizeof(*ds->labels));
-    for (size_t i = 0; i < split_size; i++) {
+    ds->labels = cache_aligned_alloc(ds->num_nodes * sizeof(*ds->labels));
+    for (size_t i = 0; i < ds->num_nodes; i++) {
         ds->labels[i] = base->labels[split_idx[i]];
     }
 
     uint32_t *node_map = cache_aligned_alloc(base->num_nodes * sizeof(*node_map));
-    build_node_mapping(node_map, base->num_nodes, split_idx, split_size);
+    build_node_mapping(node_map, base->num_nodes, split_idx, ds->num_nodes);
 
     // Count number of edges in the split
     // We do this in two passes since realloc might break cache allignment
@@ -444,20 +454,29 @@ Dataset *dataset_split(Dataset *base, Split split)
             edge_idx++;
         }
     }
+    ds->num_edges  = edge_count;
 
     // Transfer base's self loop
     RawEdges raw_edges = { .u = ds->edges.src, .v = ds->edges.dst, .count = edge_count };
-    ds->edges.self_loop = detect_self_loops(raw_edges, split_size);
-    ds->edges.inv_in_degree = get_inv_degree(raw_edges, split_size, IN_DEGREE);
-    ds->edges.inv_out_degree = get_inv_degree(raw_edges, split_size, OUT_DEGREE);
-
-    ds->num_nodes = split_size;
-    ds->num_edges  = edge_count;
+    ds->edges.self_loop = detect_self_loops(raw_edges, ds->num_nodes);
+    ds->edges.inv_in_degree = get_inv_degree(raw_edges, ds->num_nodes, IN_DEGREE);
+    ds->edges.inv_out_degree = get_inv_degree(raw_edges, ds->num_nodes, OUT_DEGREE);
 
     free(node_map);
     free(split_idx);
 
-    printf("Split OGB-ARXIV [%s] in %.2fs\n", split_name[split], omp_get_wtime() - t);
+    // Compute statistics
+    ds->edges.avg_degree = (float)edge_count / ds->num_nodes;
+    size_t self_loop_count = 0;
+    for (uint32_t i = 0; ds->edges.self_loop && i < ds->num_nodes; i++)
+    {
+        if (ds->edges.self_loop[i]) self_loop_count++;
+    }
+    ds->edges.avg_self_loop = (float)self_loop_count / ds->num_nodes;
+
+    printf("Split OGB-ARXIV [%s] in %.2fs (node count: %u, edge count %u, avg degree: %.2f, avg self loops: %.2f)\n",
+           split_name[split], omp_get_wtime() - t, ds->num_nodes, ds->num_edges, ds->edges.avg_degree, ds->edges.avg_self_loop);
+
     return ds;
 }
 
