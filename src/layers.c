@@ -44,7 +44,7 @@ static void sage_alloc_node_buffers(SageLayer *l, uint32_t num_nodes)
     }
 }
 
-SageLayer* sage_layer_create(uint32_t num_nodes, uint32_t num_edges, Edges edges, size_t in_dim, size_t out_dim)
+SageLayer* sage_layer_create(uint32_t num_nodes, uint32_t num_edges, Edges edges, size_t in_dim, size_t out_dim, FlowDirection flow)
 {
     SageLayer *layer = malloc(sizeof(*layer));
     if (!layer) ERROR("Could not allocate SageLayer");
@@ -54,6 +54,7 @@ SageLayer* sage_layer_create(uint32_t num_nodes, uint32_t num_edges, Edges edges
         .edges        = edges,
         .in_dim       = in_dim,
         .out_dim      = out_dim,
+        .flow         = flow,
         .input        = NULL,   // Set later when connecting layer
         .grad_output  = NULL,   // Set later when connecting layer
         .Wagg         = cache_aligned_alloc(in_dim * out_dim * sizeof(Real)),
@@ -415,7 +416,7 @@ static void wireup_network(SageNet *net, size_t num_layers, Dataset *ds)
 }
 
 
-SageNet* sage_net_create(LayerConf *conf, size_t count, Dataset *ds)
+SageNet* sage_net_create(LayerConf *conf, size_t count, Dataset *ds, FlowDirection flow)
 {
     SageNet *net = malloc(sizeof(*net));
     if (!net) ERROR("Could not allocate SageNet");
@@ -431,19 +432,7 @@ SageNet* sage_net_create(LayerConf *conf, size_t count, Dataset *ds)
         switch (conf[i].type)
         {
         case LAYER_SAGE:
-            ctx = sage_layer_create(ds->num_nodes, ds->num_edges, ds->edges, conf[i].in_dim, conf[i].out_dim);
-
-#ifdef VERBOSE_TIMERS
-            ((SageLayer*)ctx)->timer_dWroot = nob_temp_sprintf("L%zu_dWr:%zu->%zu", i, conf[i].in_dim, conf[i].out_dim);
-            ((SageLayer*)ctx)->timer_dWagg  = nob_temp_sprintf("L%zu_dWa:%zu->%zu", i, conf[i].in_dim, conf[i].out_dim);
-            ((SageLayer*)ctx)->timer_dinput = nob_temp_sprintf("L%zu_dIn:%zu", i, conf[i].in_dim);
-            ((SageLayer*)ctx)->timer_dneigh = nob_temp_sprintf("L%zu_dNe:%zu", i, conf[i].in_dim);
-#else
-            ((SageLayer*)ctx)->timer_dWroot = "dWroot";
-            ((SageLayer*)ctx)->timer_dWagg  = "dWagg";
-            ((SageLayer*)ctx)->timer_dinput = "dinput";
-            ((SageLayer*)ctx)->timer_dneigh = "dneigh";
-#endif
+            ctx = sage_layer_create(ds->num_nodes, ds->num_edges, ds->edges, conf[i].in_dim, conf[i].out_dim, flow);
             net->layers[i] = (Layer){
 				.type            = LAYER_SAGE,
                 .ctx             = ctx,

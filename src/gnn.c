@@ -16,12 +16,40 @@
 #include "../nob.h"
 
 // Forward propagation
+
+// The source_to_target flow is the default of torch_geometric.nn.conv.message_passing,
+// and as far as I can tell non of the entries of OGB leaderboard that uses SageCONV
+// changes this to target_to_source. But, many seems to transform ogb-arxiv (directed graph)
+// to have symmetric edges, making it an undirected graph. GraphSAGE paper also uses undirected
+// citation graph dataset for their experiments.
+
 void aggregate(SageLayer *const l)
 {
     TIMER_FUNC();
 
-    uint32_t num_nodes = l->num_nodes;
-    uint32_t in_dim = l->in_dim;
+    uint32_t  num_nodes  = l->num_nodes;
+    uint32_t  in_dim     = l->in_dim;
+    Real     *inv_degree = NULL;
+    uint32_t *match      = NULL;
+    uint32_t *neighbor   = NULL;
+
+    if (l->flow == SOURCE_TO_TARGET) // e.g. paper src cites i
+    {
+        match = l->edges.dst;
+        neighbor = l->edges.src;
+        inv_degree = l->edges.inv_in_degree;
+    }
+    else if (l->flow == TARGET_TO_SOURCE) // e.g. paper i cites dst
+    {
+        match = l->edges.src;
+        neighbor = l->edges.dst;
+        inv_degree = l->edges.inv_out_degree;
+    }
+    else
+    {
+        ERROR("SageLayer is missing flow direction");
+    }
+
 
 #pragma omp parallel
     {
@@ -31,30 +59,17 @@ void aggregate(SageLayer *const l)
 #pragma omp for
         for (size_t i = 0; i < num_nodes; i++)
         {
-            size_t neigh_count = 0;
-            for (size_t e = 0; e < l->num_edges; e++)
+            Real scale = inv_degree[i];
+            if (scale == 0.0) continue;
+
+            uint32_t neigh_count = 0;
+            for (uint32_t e = 0; e < l->num_edges; e++)
             {
-
-                // The source_to_target flow is the default of torch_geometric.nn.conv.message_passing,
-                // and as far as I can tell non of the entries of OGB leaderboard that uses SageCONV
-                // changes this to target_to_source. But, many seems to transform ogb-arxiv (directed graph)
-                // to have symmetric edges, making it an undirected graph. GraphSAGE paper also uses undirected
-                // citation graph dataset for their experiments.
-
-                // paper src cites i (source_to_target)
-                if (i == l->edges.dst[e])
+                if (i == match[e])
                 {
-                    tid_adj[neigh_count++] = l->edges.src[e];
+                    tid_adj[neigh_count++] = neighbor[e];
                 }
-
-                // else if (i == l->edges.src[e]) { // paper i cites dst (target_to_source)
-                //     adj[neigh_count++] = l->edges.dst[e];
-                // }
             }
-
-            if (neigh_count == 0) continue;
-
-            Real scale = 1.0 / neigh_count;
 
             Real *ag_row = &l->agg[i * in_dim];
             for (size_t j = 0; j < in_dim; j++)
@@ -66,7 +81,6 @@ void aggregate(SageLayer *const l)
                 }
                 ag_row[j] = sum * scale;
             }
-            l->mean_scale[i] = scale;
         }
     }
 }
@@ -680,7 +694,7 @@ void sageconv_backward(SageLayer *const l)
         }
     }
 
-    scatter_grad(l)
+    scatter_grad(l);
 }
 
 #endif

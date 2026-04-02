@@ -7,6 +7,12 @@
 #include "dataset.h"
 
 typedef enum {
+    FLOW_NONE,
+    SOURCE_TO_TARGET,
+    TARGET_TO_SOURCE,
+} FlowDirection;
+
+typedef enum {
     LAYER_SAGE,
     LAYER_RELU,
     LAYER_L2NORM,
@@ -20,11 +26,11 @@ typedef struct {
     size_t out_dim;  // ignored for relu, l2norm, logsoft
 } LayerConf;
 
-#define SAGE(in, out)   (LayerConf){ LAYER_SAGE,    (in), (out) }
-#define RELU(dim)       (LayerConf){ LAYER_RELU,    (dim), 0    }
-#define L2NORM(dim)     (LayerConf){ LAYER_L2NORM,  (dim), 0    }
-#define LINEAR(in, out) (LayerConf){ LAYER_LINEAR,  (in), (out) }
-#define LOGSOFT(dim)    (LayerConf){ LAYER_LOGSOFT,  (dim), 0    }
+#define SAGE(in, out)   (LayerConf){ LAYER_SAGE,    (in),  (out) }
+#define RELU(dim)       (LayerConf){ LAYER_RELU,    (dim), 0 }
+#define L2NORM(dim)     (LayerConf){ LAYER_L2NORM,  (dim), 0 }
+#define LINEAR(in, out) (LayerConf){ LAYER_LINEAR,  (in),  (out) }
+#define LOGSOFT(dim)    (LayerConf){ LAYER_LOGSOFT, (dim), 0 }
 
 typedef struct Layer {
     LayerType type;
@@ -37,31 +43,26 @@ typedef struct {
 } SageNet;
 
 typedef struct {
-    uint32_t num_nodes;
-    uint32_t num_edges;
-    Edges edges;
-    size_t in_dim;
-    size_t out_dim;
-    Real *input;            // Points to previous layer's output
-    Real *output;
-    Real *agg;
-    Real *Wagg, *Wroot;
-    Real *grad_output;      // Gradients w.r.t. this layer's output (from downstream)
-    Real *grad_input;       // Gradients w.r.t. this layer's input (to upstream)
-    Real *grad_Wagg, *grad_Wroot;
-    Real *mean_scale;       // Scaling factors for mean aggregation (1/neighbor_count)
+    uint32_t      num_nodes;
+    uint32_t      num_edges;
+    Edges         edges;
+    size_t        in_dim;
+    size_t        out_dim;
+    FlowDirection flow;
+    Real          *input;            // Points to previous layer's output
+    Real          *output;
+    Real          *agg;
+    Real          *Wagg, *Wroot;
+    Real          *grad_output;      // Gradients w.r.t. this layer's output (from downstream)
+    Real          *grad_input;       // Gradients w.r.t. this layer's input (to upstream)
+    Real          *grad_Wagg, *grad_Wroot;
 
-    // scratch buffer
+    // scratch buffer that layers can share between them so only they only needs to be allocated once
     Real     *tls_dWroot;
     Real     *tls_dWagg;
     uint32_t *tls_adj;
     Real     *grad_scatter;
-
-    // timer names
-    const char *timer_dWroot;
-    const char *timer_dWagg;
-    const char *timer_dinput;
-    const char *timer_dneigh;
+    Real     *mean_scale;       // Scaling factors for mean aggregation (1/neighbor_count)
 } SageLayer;
 
 typedef struct {
@@ -107,9 +108,9 @@ typedef struct {
     Real *grad_input;
 } LogSoftLayer;
 
-#define SAGE_NET_CREATE(conf, d) sage_net_create((conf), sizeof(conf)/sizeof(conf[0]), (d))
-SageNet* sage_net_create(LayerConf *conf, size_t count, Dataset *ds);
-SageLayer* sage_layer_create(uint32_t num_nodes, uint32_t num_edges, Edges edges, size_t in_dim, size_t out_dim);
+#define SAGE_NET_CREATE(conf, d, flow) sage_net_create((conf), sizeof(conf)/sizeof(conf[0]), (d), (flow))
+SageNet* sage_net_create(LayerConf *conf, size_t count, Dataset *ds, FlowDirection flow);
+SageLayer* sage_layer_create(uint32_t num_nodes, uint32_t num_edges, Edges edges, size_t in_dim, size_t out_dim, FlowDirection flow);
 ReluLayer* relu_layer_create(uint32_t num_nodes, size_t dim);
 L2NormLayer* l2norm_layer_create(uint32_t num_nodes, size_t dim);
 LinearLayer* linear_layer_create(uint32_t num_nodes, size_t in_dim, size_t out_dim);

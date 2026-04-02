@@ -4,6 +4,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "core.h"
+
 typedef enum {
     SPLIT_TRAIN,
     SPLIT_VALID,
@@ -32,7 +34,9 @@ typedef struct {
             uint32_t *row_idx;  // [num_edges]
         };
     };
-    uint8_t *self_loop;
+    uint8_t *self_loop;      // O(1) lookup for if node has self loops
+    Real    *inv_in_degree;  // 1/deg_in(v), for source_to_target aggregation
+    Real    *inv_out_degree; // 1/deg_out(v), for target_to_source aggregation
 } Edges;
 
 typedef struct {

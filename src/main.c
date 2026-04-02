@@ -271,7 +271,7 @@ int main(int argc, char** argv)
     arch[n++] = SAGE(flags.channels, num_classes);
     arch[n++] = LOGSOFT(num_classes);
 
-    SageNet *net = SAGE_NET_CREATE(arch, ds_train);
+    SageNet *net = SAGE_NET_CREATE(arch, ds_train, SOURCE_TO_TARGET);
     sage_net_info(net);
 
     LogSoftLayer *log_prob_layer = (LogSoftLayer *)net->layers[net->num_layers - 1].ctx;

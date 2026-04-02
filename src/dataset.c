@@ -223,6 +223,54 @@ static uint8_t *detect_self_loops(RawEdges raw_edges, uint32_t num_nodes)
     return self_loop;
 }
 
+typedef enum {
+    IN_DEGREE,
+    OUT_DEGREE,
+} DegreeKind;
+
+static Real *get_inv_degree(RawEdges raw_edges, uint32_t num_nodes, DegreeKind degree_kind)
+{
+    Real *inv_degree = cache_aligned_alloc(num_nodes * sizeof(*inv_degree));
+    uint32_t *degree_count = cache_aligned_alloc(num_nodes * sizeof(*degree_count));
+
+#pragma omp parallel for
+    for (size_t i = 0; i < num_nodes; i++)
+    {
+        degree_count[i] = 0;
+    }
+
+    uint32_t *endpoints = NULL;
+    if (degree_kind == IN_DEGREE)
+    {
+        endpoints = raw_edges.u;
+    }
+    else if (degree_kind == OUT_DEGREE)
+    {
+        endpoints = raw_edges.v;
+    }
+    else
+    {
+        ERROR("Missing DegreeKind");
+    }
+
+#pragma omp parallel for
+    for (size_t i = 0; i < raw_edges.count; i++)
+    {
+        #pragma omp atomic
+        degree_count[endpoints[i]] += 1;
+    }
+
+#pragma omp parallel for
+    for (size_t i = 0; i < num_nodes; i++)
+    {
+        inv_degree[i] = 1.0 / degree_count[i];
+    }
+
+    free(degree_count);
+    return inv_degree;
+}
+
+
 Dataset* dataset_load(char const* dataset, char const* data_dir, EdgeFormat format, bool to_symmetric)
 {
     double t = omp_get_wtime();
@@ -257,6 +305,9 @@ Dataset* dataset_load(char const* dataset, char const* data_dir, EdgeFormat form
     RawEdges raw_edges = load_edges(bin_path);
 
     ds->edges.self_loop = detect_self_loops(raw_edges, ds->num_nodes);
+    ds->edges.inv_in_degree = get_inv_degree(raw_edges, ds->num_nodes, IN_DEGREE);
+    ds->edges.inv_out_degree = get_inv_degree(raw_edges, ds->num_nodes, OUT_DEGREE);
+
     if (to_symmetric || ds_info->undirected)
     {
         symmetrize_edges(&raw_edges);
@@ -367,30 +418,44 @@ Dataset *dataset_split(Dataset *base, Split split)
     uint32_t *node_map = cache_aligned_alloc(base->num_nodes * sizeof(*node_map));
     build_node_mapping(node_map, base->num_nodes, split_idx, split_size);
 
-    // Filter and remap edges
-    // Worst case: every edge survives
-    ds->edges.src = cache_aligned_alloc(base->num_edges * sizeof(*ds->edges.src));
-    ds->edges.dst = cache_aligned_alloc(base->num_edges * sizeof(*ds->edges.dst));
+    // Count number of edges in the split
+    // We do this in two passes since realloc might break cache allignment
     uint32_t edge_count = 0;
-    for (uint32_t i = 0; i < base->num_edges; i++) {
+    for (uint32_t i = 0; i < base->num_edges; i++)
+    {
         uint32_t src = node_map[base->edges.src[i]];
         uint32_t dst = node_map[base->edges.dst[i]];
-        if (src != INVALID_IDX && dst != INVALID_IDX) {
-            ds->edges.src[edge_count] = src;
-            ds->edges.dst[edge_count] = dst;
+        if (src != INVALID_IDX && dst != INVALID_IDX)
+        {
             edge_count++;
         }
     }
-    // Shrink to actual size
-    ds->edges.src = realloc(ds->edges.src, edge_count * sizeof(*ds->edges.src));
-    ds->edges.dst = realloc(ds->edges.dst, edge_count * sizeof(*ds->edges.dst));
+    ds->edges.src = cache_aligned_alloc(edge_count * sizeof(*ds->edges.src));
+    ds->edges.dst = cache_aligned_alloc(edge_count * sizeof(*ds->edges.dst));
+    uint32_t edge_idx = 0;
+    for (uint32_t i = 0; i < base->num_edges; i++)
+    {
+        uint32_t src = node_map[base->edges.src[i]];
+        uint32_t dst = node_map[base->edges.dst[i]];
+        if (src != INVALID_IDX && dst != INVALID_IDX)
+        {
+            ds->edges.src[edge_idx] = src;
+            ds->edges.dst[edge_idx] = dst;
+            edge_idx++;
+        }
+    }
+
+    // Transfer base's self loop
+    RawEdges raw_edges = { .u = ds->edges.src, .v = ds->edges.dst, .count = edge_count };
+    ds->edges.self_loop = detect_self_loops(raw_edges, split_size);
+    ds->edges.inv_in_degree = get_inv_degree(raw_edges, split_size, IN_DEGREE);
+    ds->edges.inv_out_degree = get_inv_degree(raw_edges, split_size, OUT_DEGREE);
 
     ds->num_nodes = split_size;
     ds->num_edges  = edge_count;
 
     free(node_map);
     free(split_idx);
-
 
     printf("Split OGB-ARXIV [%s] in %.2fs\n", split_name[split], omp_get_wtime() - t);
     return ds;
