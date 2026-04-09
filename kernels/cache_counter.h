@@ -11,9 +11,13 @@ typedef struct {
 } cache_counter_t;
 
 cache_counter_t cache_counter_init(void);
+cache_counter_t *cache_counter_init_all(void);
 void cache_counter_start(cache_counter_t* counter);
+void cache_counter_start_all(cache_counter_t* counter);
 void cache_counter_stop(cache_counter_t* counter);
+void cache_counter_stop_all(cache_counter_t* counter);
 void cache_counter_close(cache_counter_t* counter);
+void cache_counter_close_all(cache_counter_t* counter);
 void cache_counter_print(cache_counter_t counter);
 void cache_counter_get_cache_misses(cache_counter_t* counter, long long* cache_misses_local, long long* cache_misses_remote);
 uint64_t cache_counter_get_bytes_loaded(cache_counter_t* counter);

@@ -45,6 +45,7 @@ typedef struct {
     bool          run;
     bool          slurm;
     Flag_List_Mut partitions;
+    char*         script;
 
     char*         dataset;
     char*         data_dir;
@@ -969,6 +970,26 @@ const char* get_config_suffix(void)
     return nob_temp_strdup(sb.items);
 }
 
+const char *parse_sbatch_job_name(const char *script)
+{
+    Nob_String_Builder sb = {0};
+    if (!nob_read_entire_file(script, &sb)) return NULL;
+    nob_sb_append_null(&sb);
+
+    const char *needle = "#SBATCH --job-name=";
+    char *p = strstr(sb.items, needle);
+    if (!p) return NULL;
+    p += strlen(needle);
+
+    char quote = 0;
+    if (*p == '"' || *p == '\'') { quote = *p; p++; }
+
+    const char *start = p;
+    while (*p && *p != '\n' && *p != ' ' && *p != quote) p++;
+
+    return nob_temp_sprintf("%.*s", (int)(p - start), start);
+}
+
 int submit_slurm(void)
 {
     if (!nob_mkdir_if_not_exists("logs/")) return 1;
@@ -991,22 +1012,29 @@ int submit_slurm(void)
     char date_string[20];
     strftime(date_string, sizeof(date_string), "%Y%m%d-%H%M%S", local_time);
 
+    const char *script = flags.script ? flags.script : "run_benchmark.sbatch";
+    const char *job_name = flags.script ? parse_sbatch_job_name(script) : NULL;
+
     int ret = 0;
     for (size_t i = 0; i < count; i++) {
         nob_cmd_append(&cmd, "sbatch", "-p", parts[i]);
-        nob_cmd_append(&cmd, nob_temp_sprintf("--export=BENCHMARK_TARGET=%s,BENCHMARK_CONFIG=%s,BENCHMARK_MACROS=%s",
-                                              flags.target, config, macros_str.items));
-        nob_cmd_append(&cmd, "-J", nob_temp_sprintf("%s-%s", flags.target, config));
-        nob_cmd_append(&cmd, "-o", nob_temp_sprintf("logs/%s-%s-%s-%s.out",
-                                                    date_string, parts[i], flags.target, config));
+        if (!flags.script) {
+            nob_cmd_append(&cmd, nob_temp_sprintf("--export=BENCHMARK_TARGET=%s,BENCHMARK_CONFIG=%s,BENCHMARK_MACROS=%s",
+                                                  flags.target, config, macros_str.items));
+            nob_cmd_append(&cmd, "-J", nob_temp_sprintf("%s-%s", flags.target, config));
+        }
+        const char *label = job_name ? job_name : nob_temp_sprintf("%s-%s", flags.target, config);
+        nob_cmd_append(&cmd, "-o", nob_temp_sprintf("logs/%s-%s-%s.out",
+                                                        date_string, parts[i], job_name));
+        nob_cmd_append(&cmd, script);
         nob_cmd_append(&cmd, "--exclusive");
         nob_cmd_append(&cmd, "run_benchmark.sbatch");
 
         if (!nob_cmd_run(&cmd)) {
-            nob_log(NOB_ERROR, "Submitting %s to %s", flags.target, parts[i]);
+            nob_log(NOB_ERROR, "Failed to submit %s to %s", script, parts[i]);
             ret = 1;
         } else {
-            nob_log(NOB_INFO, "Submitting %s to %s", flags.target, parts[i]);
+            nob_log(NOB_INFO, "Submitted %s to %s", script, parts[i]);
         }
     }
 
@@ -1072,6 +1100,7 @@ int main(int argc, char** argv)
     flag_bool_var(&flags.run,            "run",          false,     "Run after building");
     flag_bool_var(&flags.slurm,          "slurm",        false,     "Submit job to Slurm");
     flag_list_mut_var(&flags.partitions, "p",                       "Partition(s) to submit to (or 'list', 'all', 'aarch64', 'x86_64')");
+    flag_str_var(&flags.script, "script", NULL, "Sbatch script to submit (e.g., adhoc.sh)");
 
     flag_str_var(&flags.dataset,         "dataset",      "arxiv",   "Dataset to use (arxiv, products, papers100M)");
     flag_str_var(&flags.data_dir,        "data-dir",     "./data",  "Directory for downloading and reading datasets");

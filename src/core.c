@@ -2,6 +2,8 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <omp.h>
+
 #include "core.h"
 
 static long get_cache_line_size(void)
@@ -42,7 +44,7 @@ void *cache_aligned_alloc(size_t size)
 
 void real_zero_out(Real *a, size_t n)
 {
-    if (n < PARALLEL_ZERO_THRESHOLD)
+    if (n < PARALLEL_ZERO_THRESHOLD || omp_in_parallel())
     {
         memset(a, 0, n * sizeof(Real));
     }

@@ -23,65 +23,88 @@
 // to have symmetric edges, making it an undirected graph. GraphSAGE paper also uses undirected
 // citation graph dataset for their experiments.
 
-void aggregate(SageLayer *const l)
+static void aggregate_coo(uint32_t *nodes, uint32_t *peers, Real *inv_degree, SageLayer *l)
 {
-    TIMER_FUNC();
-
     uint32_t  num_nodes  = l->num_nodes;
     uint32_t  in_dim     = l->in_dim;
-    Real     *inv_degree = NULL;
-    uint32_t *match      = NULL;
-    uint32_t *neighbor   = NULL;
 
-    if (l->flow == SOURCE_TO_TARGET) // e.g. paper src cites i
-    {
-        match = l->edges.dst;
-        neighbor = l->edges.src;
-        inv_degree = l->edges.inv_in_degree;
-    }
-    else if (l->flow == TARGET_TO_SOURCE) // e.g. paper i cites dst
-    {
-        match = l->edges.src;
-        neighbor = l->edges.dst;
-        inv_degree = l->edges.inv_out_degree;
-    }
-    else
-    {
-        ERROR("SageLayer is missing flow direction");
-    }
-
+    real_zero_out(l->agg, num_nodes * in_dim);
 
 #pragma omp parallel
     {
-        int tid = omp_get_thread_num();
-        uint32_t *tid_adj = l->tls_adj + tid * num_nodes;
-
 #pragma omp for
         for (size_t i = 0; i < num_nodes; i++)
         {
             Real scale = inv_degree[i];
             if (scale == 0.0) continue;
 
-            uint32_t neigh_count = 0;
+            Real *ag_row = &l->agg[i * in_dim];
             for (uint32_t e = 0; e < l->num_edges; e++)
             {
-                if (i == match[e])
+                if (i == nodes[e])
                 {
-                    tid_adj[neigh_count++] = neighbor[e];
+                    Real *input_row = &l->input[peers[e] * in_dim];
+                    for (size_t j = 0; j < in_dim; j++)
+                    {
+                        ag_row[j] += input_row[j] * scale;
+                    }
                 }
-            }
-
-            Real *ag_row = &l->agg[i * in_dim];
-            for (size_t j = 0; j < in_dim; j++)
-            {
-                Real sum = 0.0;
-                for (size_t k = 0; k < neigh_count; k++)
-                {
-                    sum += l->input[tid_adj[k] * in_dim + j];
-                }
-                ag_row[j] = sum * scale;
             }
         }
+    }
+}
+
+static void aggregate_cs(uint32_t *ptr, uint32_t *idx, Real *inv_degree, SageLayer *l)
+{
+    ERROR("Not implemented");
+}
+
+static void aggregate(SageLayer *const l)
+{
+    TIMER_FUNC();
+    Real *inv_degree = NULL;
+    uint32_t *nodes = NULL, *peers = NULL;
+
+    if (l->flow = FLOW_NONE)
+    {
+        ERROR("SageLayer is missing flow direction");
+    }
+
+    if (l->edges.format == EDGE_COO)
+    {
+        if (l->flow == SOURCE_TO_TARGET) // e.g. paper src cites i
+        {
+            nodes = l->edges.dst;
+            peers = l->edges.src;
+            inv_degree = l->edges.inv_in_degree;
+        }
+        else if (l->flow == TARGET_TO_SOURCE) // e.g. paper i cites dst
+        {
+            nodes = l->edges.src;
+            peers = l->edges.dst;
+            inv_degree = l->edges.inv_out_degree;
+        }
+        aggregate_coo(nodes, peers, inv_degree, l);
+    }
+    else if (l->edges.format == EDGE_CSR)
+    {
+        if (l->form == SOURCE_TO_TARGET)
+        {
+            ERROR("CSR can't be used with SOURCE_TO_TARGET flow");
+        }
+        aggregate_cs(l->edges.row_ptr, l->edges.col_idx, l->edges.inv_out_degree, l);
+    }
+    else if (l->edges.format == EDGE_CSC)
+    {
+        if (l->form == TARGET_TO_SOURCE)
+        {
+            ERROR("CSC can't be used with TARGET_TO_SOURCE flow");
+        }
+        aggregate_cs(l->edges.col_ptr, l->edges.row_idx, l->edges.inv_in_degree, l);
+    }
+    else
+    {
+        ERROR("Unknown EdgeForamt was given: %d", l->edges.format);
     }
 }
 

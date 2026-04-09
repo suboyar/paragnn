@@ -68,10 +68,16 @@ typedef __m128   __m128r;
 #ifndef ERROR
 #define ERROR(fmt, ...) do {                                            \
         fflush(stdout);                                                 \
+        fprintf(stderr, "%s:%d: error: %s: " fmt "\n", __FILE__, __LINE__, __func__, ##__VA_ARGS__); \
+        abort();                                                        \
+    } while(0)
+#endif
+
+#ifndef OMP_ERROR
+#define OMP_ERROR(fmt, ...)                                             \
         _Pragma("omp critical")                                         \
         {                                                               \
-            fprintf(stderr, "%s:%d: error: %s: " fmt "\n", __FILE__, __LINE__, __func__, ##__VA_ARGS__); \
-            abort();                                                    \
+            ERROR((fmt), ##__VA_ARGS__);                                \
         }                                                               \
     } while(0)
 #endif

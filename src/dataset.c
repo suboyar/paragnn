@@ -23,9 +23,9 @@ static const char *split_name[] = {
 
 EdgeFormat parse_edge_format(const char* str)
 {
-    if (strncmp(str, "coo", 3) == 0) return EDGE_COO;
-    if (strncmp(str, "csr", 3) == 0)return EDGE_CSR;
-    if (strncmp(str, "csc", 3) == 0) return EDGE_CSC;
+    if (strcmp(str, "coo") == 0) return EDGE_COO;
+    if (strcmp(str, "csr") == 0)return EDGE_CSR;
+    if (strcmp(str, "csc") == 0) return EDGE_CSC;
     ERROR("Not a valid edge format: %s", str);
 }
 
@@ -409,6 +409,7 @@ Dataset *dataset_split(Dataset *base, Split split)
     ds->num_features = base->num_features;
     ds->num_classes  = base->num_classes;
     ds->num_nodes = split_size;
+    ds->edges.format = base->edges.format;
 
     // Gather features
     ds->nodes = cache_aligned_alloc(ds->num_nodes * ds->num_features * sizeof(*ds->nodes));

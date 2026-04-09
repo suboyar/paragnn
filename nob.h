@@ -1029,7 +1029,7 @@ NOBDEF bool nob_cmd_run_opt(Nob_Cmd *cmd, Nob_Cmd_Opt opt)
     Nob_Fd fdout = NOB_INVALID_FD;
     Nob_Fd fderr = NOB_INVALID_FD;
     Nob_Fd *opt_fdin  = NULL;
-    Nob_Fd *opt_fdout = NULL;
+    Nob_Fd *opt_ofdout = NULL;
     Nob_Fd *opt_fderr = NULL;
 
     size_t max_procs = opt.max_procs > 0 ? opt.max_procs : (size_t) nob_nprocs() + 1;

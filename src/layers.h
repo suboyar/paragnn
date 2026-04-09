@@ -58,11 +58,8 @@ typedef struct {
     Real          *grad_Wagg, *grad_Wroot;
 
     // scratch buffer that layers can share between them so only they only needs to be allocated once
-    Real     *tls_dWroot;
-    Real     *tls_dWagg;
-    uint32_t *tls_adj;
+    Real     *tls_dW; // layout: [dWroot_row0][dWagg_row0][dWroot_row1][dWagg_row1]...
     Real     *grad_scatter;
-    Real     *mean_scale;       // Scaling factors for mean aggregation (1/neighbor_count)
 } SageLayer;
 
 typedef struct {

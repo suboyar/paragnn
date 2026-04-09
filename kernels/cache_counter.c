@@ -5,6 +5,7 @@
 #include <sys/syscall.h>         /* Definition of SYS_* constants */
 #include <sys/ioctl.h>
 #include <unistd.h>
+#include <omp.h>
 
 #include <errno.h>
 #include <stdbool.h>
@@ -178,6 +179,21 @@ cache_counter_t cache_counter_init(void)
     return counter;
 }
 
+cache_counter_t *cache_counter_init_all(void)
+{
+    int omp_num_threads = omp_get_max_threads();
+    cache_counter_t *thread_counters = malloc(omp_num_threads * sizeof(cache_counter_t));
+    if (!thread_counters) ERROR("Could not allocate thread_counters");
+
+#pragma omp parallel
+    {
+        int tid = omp_get_thread_num();
+        thread_counters[tid] = cache_counter_init();
+    }
+
+    return thread_counters;
+}
+
 void cache_counter_start(cache_counter_t* counter)
 {
     if (counter->l3_miss_local.available) {
@@ -193,6 +209,14 @@ void cache_counter_start(cache_counter_t* counter)
     if (counter->l3_miss_generic.available) {
         ioctl(counter->l3_miss_generic.fd, PERF_EVENT_IOC_RESET, 0);
         ioctl(counter->l3_miss_generic.fd, PERF_EVENT_IOC_ENABLE, 0);
+    }
+}
+
+void cache_counter_start_all(cache_counter_t* counters)
+{
+    #pragma omp parallel
+    {
+        cache_counter_start(&counters[omp_get_thread_num()]);
     }
 }
 
@@ -228,6 +252,14 @@ void cache_counter_stop(cache_counter_t* counter)
     }
 }
 
+void cache_counter_stop_all(cache_counter_t* counters)
+{
+    #pragma omp parallel
+    {
+        cache_counter_stop(&counters[omp_get_thread_num()]);
+    }
+}
+
 void cache_counter_close(cache_counter_t* counter)
 {
     if (counter->l3_miss_local.available) {
@@ -240,6 +272,14 @@ void cache_counter_close(cache_counter_t* counter)
 
     if (counter->l3_miss_generic.available) {
         close(counter->l3_miss_generic.fd);
+    }
+}
+
+void cache_counter_close_all(cache_counter_t* counters)
+{
+    #pragma omp parallel
+    {
+        cache_counter_close(&counters[omp_get_thread_num()]);
     }
 }
 
@@ -261,7 +301,7 @@ void cache_counter_print(cache_counter_t counter)
     }
 }
 
-static long get_cache_line_size()
+static long get_cache_line_size(void)
 {
     long size;
 

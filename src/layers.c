@@ -31,14 +31,10 @@ static void sage_alloc_node_buffers(SageLayer *l, uint32_t num_nodes)
     l->grad_input   = cache_aligned_alloc(num_nodes * l->in_dim * sizeof(Real));
     l->grad_Wagg    = cache_aligned_alloc(l->in_dim * l->out_dim * sizeof(Real));
     l->grad_Wroot   = cache_aligned_alloc(l->in_dim * l->out_dim * sizeof(Real));
-    l->mean_scale   = cache_aligned_alloc(num_nodes * sizeof(Real));
-    l->tls_dWroot   = cache_aligned_alloc(nthreads * l->in_dim * l->out_dim * sizeof(Real));
-    l->tls_dWagg    = cache_aligned_alloc(nthreads * l->in_dim * l->out_dim * sizeof(Real));
-    l->tls_adj      = cache_aligned_alloc(nthreads * num_nodes * sizeof(uint32_t));
+    l->tls_dW       = cache_aligned_alloc(2 * nthreads * l->in_dim * l->out_dim * sizeof(Real));
     l->grad_scatter = cache_aligned_alloc(num_nodes * l->in_dim * sizeof(Real));
 
-    if (!l->output || !l->agg || !l->grad_input ||
-        !l->grad_Wagg || !l->grad_Wroot || !l->mean_scale)
+    if (!l->output || !l->agg || !l->grad_input || !l->grad_Wagg || !l->grad_Wroot || !l->tls_dW || !l->grad_scatter)
     {
         ERROR("Could not allocate SageLayer buffers");
     }
@@ -82,10 +78,7 @@ static void sage_free_node_buffers(SageLayer *l)
     free(l->grad_input);   l->grad_input   = NULL;
     free(l->grad_Wagg);    l->grad_Wagg    = NULL;
     free(l->grad_Wroot);   l->grad_Wroot   = NULL;
-    free(l->mean_scale);   l->mean_scale   = NULL;
-    free(l->tls_dWroot);   l->tls_dWroot   = NULL;
-    free(l->tls_dWagg);    l->tls_dWagg    = NULL;
-    free(l->tls_adj);      l->tls_adj      = NULL;
+    free(l->tls_dW);       l->tls_dW       = NULL;
     free(l->grad_scatter); l->grad_scatter = NULL;
 }
 
