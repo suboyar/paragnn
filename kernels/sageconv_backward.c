@@ -956,7 +956,7 @@ int main(void)
             printf("\r\033[KRun: %s", funcs[i].name);
             fflush(stdout);
         }
-        for (size_t j = 0; j < 10; j++)
+        for (size_t j = 0; j < 100; j++)
         {
             if (isatty(STDOUT_FILENO))
             {

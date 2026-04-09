@@ -992,13 +992,21 @@ const char *parse_sbatch_job_name(const char *script)
 
 int submit_slurm(void)
 {
-    if (!nob_mkdir_if_not_exists("logs/")) return 1;
+    const char *config = get_config_suffix();
+    time_t now = time(NULL);
+    struct tm *local_time = localtime(&now);
+    char date_string[20];
+    strftime(date_string, sizeof(date_string), "%Y%m%d-%H%M%S", local_time);
+    const char *script = flags.script ? flags.script : "run_benchmark.sbatch";
+    const char *job_name = flags.script ? parse_sbatch_job_name(script) : NULL;
+    const char *label = job_name ? job_name : nob_temp_sprintf("%s-%s", flags.target, config);
+    const char *log_dir = nob_temp_sprintf("logs/%s/%s", date_string, label);
+    if (!mkdir_recursive(log_dir)) return 1;
 
     size_t count;
     const char **parts = resolve_partitions(&count);
     if (!parts) return 1;
 
-    const char *config = get_config_suffix();
 
     Nob_String_Builder macros_str = {0};
     for (size_t i = 0; i < flags.macros.count; i++) {
@@ -1006,14 +1014,6 @@ int submit_slurm(void)
         nob_sb_append_cstr(&macros_str, nob_temp_sprintf("-D %s", flags.macros.items[i]));
     }
     if (macros_str.count == 0) nob_sb_append_null(&macros_str);
-
-    time_t now = time(NULL);
-    struct tm *local_time = localtime(&now);
-    char date_string[20];
-    strftime(date_string, sizeof(date_string), "%Y%m%d-%H%M%S", local_time);
-
-    const char *script = flags.script ? flags.script : "run_benchmark.sbatch";
-    const char *job_name = flags.script ? parse_sbatch_job_name(script) : NULL;
 
     int ret = 0;
     for (size_t i = 0; i < count; i++) {
@@ -1023,9 +1023,7 @@ int submit_slurm(void)
                                                   flags.target, config, macros_str.items));
             nob_cmd_append(&cmd, "-J", nob_temp_sprintf("%s-%s", flags.target, config));
         }
-        const char *label = job_name ? job_name : nob_temp_sprintf("%s-%s", flags.target, config);
-        nob_cmd_append(&cmd, "-o", nob_temp_sprintf("logs/%s-%s-%s.out",
-                                                        date_string, parts[i], job_name));
+        nob_cmd_append(&cmd, "-o", nob_temp_sprintf("%s/%s.out", log_dir, parts[i]));
         nob_cmd_append(&cmd, script);
         nob_cmd_append(&cmd, "--exclusive");
         nob_cmd_append(&cmd, "run_benchmark.sbatch");
