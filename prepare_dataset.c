@@ -153,20 +153,27 @@ void parse_edges(char *input, size_t input_size, char *output)
     }
 }
 
-size_t gz_decompress(const char* file_path, char **buf)
+size_t gz_decompress(const char* file_path, uint8_t **buf)
 {
-    gzFile file = gzopen(file_path, "rb");
-    if (!file)
+    gzFile file = NULL;
+    size_t len = 0;
+    size_t cap = 1 << 20;
+    int success = 0;
+
+    *buf = NULL;
+
+    if (!(file = gzopen(file_path, "rb")))
     {
-        fprintf(stderr, "gzopen failed: %s\n", strerror(errno));
-        *buf = NULL;
-        return 0;
+        nob_log(NOB_ERROR, "gzopen failed: %s", strerror(errno));
+        goto cleanup;
     }
 
-    size_t cap = 1 << 20;
-    size_t len = 0;
     *buf = malloc(cap);
-
+    if (!buf)
+    {
+        nob_log(NOB_ERROR, "malloc failed: %s", strerror(errno));
+        goto cleanup;
+    }
 
     while (1)
     {
@@ -178,23 +185,34 @@ size_t gz_decompress(const char* file_path, char **buf)
         if (len == cap)
         {
             cap *= 2;
-            *buf = realloc(*buf, cap);
+            uint8_t *tmp = realloc(*buf, cap);
+            if (!tmp)
+            {
+                nob_log(NOB_ERROR, "realloc failed: %s", strerror(errno));
+                goto cleanup;
+            }
+            *buf = tmp;
         }
     }
 
-    int err = 0;
-    const char *error_string = "";
-    int ret = gzeof(file);
-    if (!ret)
+    if (!gzeof(file))
     {
-        error_string = gzerror(file, &err);
-        fprintf(stderr, "gzread failed: %s\n", error_string);
+        int err;
+        const char *msg = gzerror(file, &err);
+        nob_log(NOB_ERROR, "gzread failed: %s", msg);
+        goto cleanup;
+    }
+
+    success = 1;
+
+cleanup:
+    if (file) gzclose(file);
+    if (!success)
+    {
         free(*buf);
         *buf = NULL;
-        gzclose(file);
-        return 0;
+        len = 0;
     }
-    gzclose(file);
     return len;
 }
 
@@ -218,7 +236,7 @@ bool process_csv_gz(const char *csv_gz_path, const char *bin_path, size_t out_si
     nob_log(NOB_INFO, "Processing %s", bin_path);
     // Input
     char *input;
-    size_t input_size = gz_decompress(csv_gz_path, &input);
+    size_t input_size = gz_decompress(csv_gz_path, (uint8_t**)&input);
     if (input == NULL) return false;
 
     if (kind == PARSE_SPLIT)
@@ -481,19 +499,17 @@ int main(int argc, char **argv)
 
     if (!dataset || !datadir)
     {
-        fprintf(stderr, "Error: both -dataset and -datadir are required\n");
+        nob_log(NOB_ERROR, "both -dataset and -datadir are required");
         usage(argv[0]);
         return 1;
     }
 
     if (str_to_dataset_kind(dataset) == DATASET_INVALID)
     {
-        fprintf(stderr, "Error: '%s' is an invalid dataset\n", dataset);
+        nob_log(NOB_ERROR, "'%s' is an invalid dataset", dataset);
         usage(argv[0]);
         return 1;
     }
-
-    printf("dataset: %s, datadir: %s\n", dataset, datadir);
 
     return prepare_dataset(dataset, datadir);
 }
