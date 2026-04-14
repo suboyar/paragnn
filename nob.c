@@ -58,21 +58,6 @@ Flags flags = {0};
 Nob_Cmd cmd = {0};
 Nob_Procs procs = {0};
 
-static const char *path_join(const char *dir, const char *file)
-{
-    size_t dir_len = strlen(dir);
-    if (dir[dir_len-1] != '/')
-        return nob_temp_sprintf("%s/%s", dir, file);
-    else
-        return nob_temp_sprintf("%s%s", dir, file);
-}
-
-size_t ptrlen(void **arr) {
-    size_t n = 0;
-    while (arr[n]) n++;
-    return n;
-}
-
 void list_datasets(void)
 {
     printf("Available datasets:\n");
@@ -100,7 +85,7 @@ int prepare_dataset()
 
     nob_cmd_append(&cmd, bin_path, "-dataset", flags.dataset, "-datadir", flags.datadir);
     if (!nob_cmd_run(&cmd)) return EXIT_FAILURE;
-    exit(0);
+    return 1;
 }
 
 #define STRINGS(...) { \
@@ -338,14 +323,8 @@ int build_target(Target* t)
                           t->out_dir    ? t->out_dir : BUILD_FOLDER;
 
     // Ensure trailing slash
-    size_t len = strlen(out_dir);
-    if (len > 0 && out_dir[len-1] != '/') {
-        out_dir = nob_temp_sprintf("%s/", out_dir); // TODO: use path_join
-    }
-
     if (!nob_mkdir_recursive(out_dir)) return 1;
-
-    const char* exec_path = nob_temp_sprintf("%s%s", out_dir, t->name); // TODO: use path_join
+    const char* exec_path = nob_path_join_temp(out_dir, t->name);
 
     // Compile all source files
     const char** dst_paths = nob_temp_alloc(t->srcs.count * sizeof(char*));
@@ -565,7 +544,7 @@ int submit_slurm(void)
     const char *script = flags.script ? flags.script : "run_benchmark.sbatch";
     const char *job_name = flags.script ? parse_sbatch_job_name(script) : NULL;
     const char *label = job_name ? job_name : nob_temp_sprintf("%s-%s", flags.target, config);
-    const char *log_dir = nob_temp_sprintf("logs/%s/%s", date_string, label); // TODO: use path_join
+    const char *log_dir = nob_temp_sprintf("logs/%s/%s", date_string, label);
     if (!nob_mkdir_recursive(log_dir)) return 1;
 
     size_t count;
@@ -588,7 +567,7 @@ int submit_slurm(void)
                                                   flags.target, config, macros_str.items));
             nob_cmd_append(&cmd, "-J", nob_temp_sprintf("%s-%s", flags.target, config));
         }
-        nob_cmd_append(&cmd, "-o", nob_temp_sprintf("%s/%s.out", log_dir, parts[i])); // TODO: use path_join
+        nob_cmd_append(&cmd, "-o", nob_temp_sprintf("%s/%s.out", log_dir, parts[i]));
         nob_cmd_append(&cmd, script);
         nob_cmd_append(&cmd, "--exclusive");
         nob_cmd_append(&cmd, "run_benchmark.sbatch");
@@ -623,8 +602,7 @@ int etags(void)
     nob_cmd_append(&cmd, "(");
     for (size_t i = 0; i < NOB_ARRAY_LEN(folders); i++) {
         if (i > 0) nob_cmd_append(&cmd, "-o");
-        nob_cmd_append(&cmd, "-ipath",
-                       nob_temp_sprintf("*/%s*", folders[i])); // TODO: use path_join?
+        nob_cmd_append(&cmd, "-ipath", nob_temp_sprintf("*/%s*", folders[i]));
     }
     nob_cmd_append(&cmd, ")");
 

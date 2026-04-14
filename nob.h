@@ -551,6 +551,7 @@ NOBDEF void nob_temp_rewind(size_t checkpoint);
 // Given any path returns the last part of that path.
 // "/path/to/a/file.c" -> "file.c"; "/path/to/a/directory" -> "directory"
 NOBDEF const char *nob_path_name(const char *path);
+NOBDEF const char *nob_path_join_temp(const char *path, const char *tail);
 NOBDEF bool nob_rename(const char *old_path, const char *new_path);
 NOBDEF int nob_needs_rebuild(const char *output_path, const char **input_paths, size_t input_paths_count);
 NOBDEF int nob_needs_rebuild1(const char *output_path, const char *input_path);
@@ -1895,6 +1896,53 @@ NOBDEF const char *nob_path_name(const char *path)
 #endif // _WIN32
 }
 
+NOBDEF const char *nob_path_join_temp(const char *path, const char *tail)
+{
+    size_t path_len = strlen(path);
+    size_t tail_len = strlen(tail);
+    bool need_slash = path_len > 0 && path[path_len - 1] != '/';
+
+    char *buf = nob_temp_alloc(path_len + need_slash + tail_len + 1);
+    memcpy(buf, path, path_len);
+    if (need_slash) buf[path_len] = '/';
+    memcpy(buf + path_len + need_slash, tail, tail_len);
+    buf[path_len + need_slash + tail_len] = '\0';
+    return buf;
+}
+
+NOBDEF const char *nob_path_join_tempv(const char *first, ...)
+{
+    size_t total = strlen(first);
+
+    va_list args;
+    va_start(args, first);
+    for (;;) {
+        const char *seg = va_arg(args, const char *);
+        if (!seg) break;
+        total += 1 + strlen(seg); // slash + segment
+    }
+    va_end(args);
+
+    char *buf = nob_temp_alloc(total + 1);
+    size_t len = strlen(first);
+    memcpy(buf, first, len);
+
+    va_start(args, first);
+    for (;;) {
+        const char *seg = va_arg(args, const char *);
+        if (!seg) break;
+        if (len > 0 && buf[len - 1] != '/') buf[len++] = '/';
+        size_t seg_len = strlen(seg);
+        memcpy(buf + len, seg, seg_len);
+        len += seg_len;
+    }
+    va_end(args);
+
+    buf[len] = '\0';
+
+    return buf;
+}
+
 NOBDEF bool nob_rename(const char *old_path, const char *new_path)
 {
     nob_log(NOB_INFO, "renaming %s -> %s", old_path, new_path);
@@ -2326,6 +2374,8 @@ NOBDEF int closedir(DIR *dirp)
         #define temp_save nob_temp_save
         #define temp_rewind nob_temp_rewind
         #define path_name nob_path_name
+        #define path_join_temp nob_path_join_temp
+        #define path_join_tempv nob_path_join_tempv
         // NOTE: rename(2) is widely known POSIX function. We never wanna collide with it.
         // #define rename nob_rename
         #define needs_rebuild nob_needs_rebuild
@@ -2354,6 +2404,12 @@ NOBDEF int closedir(DIR *dirp)
 #endif // NOB_STRIP_PREFIX_GUARD_
 
 /*
+   My additions:
+   (2026-04-14)
+       - Add nob_mkdir_recursive()
+       - Add nob_path_join_temp()
+       - Add nob_path_join_tempv()
+
    Revision history:
 
      1.23.0 (2025-08-22) Introduce new API for running commands (by @rexim, @programmerlexi, @0x152a)
