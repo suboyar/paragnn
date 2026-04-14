@@ -890,6 +890,43 @@ NOBDEF bool nob_mkdir_if_not_exists(const char *path)
     return true;
 }
 
+NOBDEF bool nob_mkdir_recursive(const char *path)
+{
+    if (path == NULL || path[0] == '\0')
+    {
+        nob_log(NOB_ERROR, "cannot create directory from empty path");
+        return false;
+    }
+
+    struct stat st;
+    bool already_exists = (stat(path, &st) == 0 && S_ISDIR(st.st_mode));
+    if (already_exists) return true;
+
+    Nob_String_View sv = nob_sv_from_cstr(path);
+    Nob_String_Builder sb = {0};
+
+    while (sv.count > 0)
+    {
+        Nob_String_View dir = nob_sv_chop_by_delim(&sv, '/');
+        if (dir.count == 0) continue;
+
+        nob_sb_appendf(&sb, "%s/", nob_temp_sv_to_cstr(dir));
+        int result = mkdir(sb.items, 0755);
+        if (result < 0 && errno != EEXIST)
+        {
+            nob_log(NOB_ERROR, "could not create directory `%s`: %s", sb.items, strerror(errno));
+            return false;
+        }
+    }
+
+    if (!already_exists)
+    {
+        nob_log(NOB_INFO, "Created directory %s", path);
+    }
+
+    return true;
+}
+
 NOBDEF bool nob_copy_file(const char *src_path, const char *dst_path)
 {
     nob_log(NOB_INFO, "copying %s -> %s", src_path, dst_path);
@@ -2229,6 +2266,7 @@ NOBDEF int closedir(DIR *dirp)
         #define FILE_OTHER NOB_FILE_OTHER
         #define File_Type Nob_File_Type
         #define mkdir_if_not_exists nob_mkdir_if_not_exists
+        #define mkdir_recursive nob_mkdir_recursive
         #define copy_file nob_copy_file
         #define copy_directory_recursively nob_copy_directory_recursively
         #define read_entire_dir nob_read_entire_dir

@@ -4,12 +4,14 @@ arxiv/
 asm/
 .cache/
 
+.gdb_history
 main
 *.o
 nob
 nob.old
 arxiv.zip
 compile_commands.json
-nob-aarch64
-nob-x86_64
+nob-*
 .nob-*.lock
+prepare_dataset
+TAGS
