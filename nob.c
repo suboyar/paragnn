@@ -1,3 +1,6 @@
+#include <getopt.h>
+#include <unistd.h>
+
 #define NOB_EXPERIMENTAL_DELETE_OLD
 #define NOB_IMPLEMENTATION
 #define NOB_WARN_DEPRECATED
@@ -17,10 +20,6 @@
                    "-Werror=strict-prototypes",                         \
                    "-Werror=incompatible-pointer-types") // Maybe re-add -Wno-unknown-pragmas?
 
-#define FLAG_IMPLEMENTATION
-#define FLAG_PUSH_DASH_DASH_BACK
-#include "flag.h"
-
 #define DATASET_INFO_IMPLEMENTATION
 #include "dataset_info.h"
 
@@ -28,44 +27,90 @@
 #define SRC_FOLDER   "src/"
 #define KERNEL_FOLDER "kernels/"
 
+enum {
+    OK        = 0,
+    ERR       = 1,
+    ERR_USAGE = 2,
+};
+
 typedef struct {
-    char*         target;
-    bool          release;
-    bool          debug;
-    bool          asan;
-    bool          omp_off;
-    bool          asm_output;
-    char*         out_dir;
-    Flag_List_Mut macros;
+    char **items;
+    size_t count;
+    size_t capacity;
+} Strings;
 
-    bool          run;
-    bool          slurm;
-    Flag_List_Mut partitions;
-    char*         script;
+typedef struct {
+    char*   target;
+    bool    release;
+    bool    debug;
+    bool    asan;
+    bool    omp_off;
+    bool    asm_output;
+    char*   out_dir;
+    Strings macros;
 
-    char*         dataset;
-    char*         datadir;
+    bool    run;
+    bool    slurm;
+    Strings partitions;
+    char*   script;
 
-    bool          etags;
-    bool          help;
-    bool          clean;
+    char*   dataset;
+    char*   datadir;
 
-    int           rest_argc;
-    char**        rest_argv;
+    bool    etags;
+    bool    help;
+    bool    clean;
+
+    int     rest_argc;
+    char**  rest_argv;
 } Flags;
 
-Flags flags = {0};
-Nob_Cmd cmd = {0};
-Nob_Procs procs = {0};
+enum {
+    // w/ shorthands
+    OPT_TARGET = 't',
+    OPT_RELEASE = 'r',
+    OPT_DEBUG = 'g',
+    OPT_ASAN = 'a',
+    OPT_OMP_OFF = 'o',
+    OPT_ASM = 'S',
+    OPT_HELP = 'h',
+    // w/o shorthands
+    OPT_OUTDIR = 256,  // above ASCII
+    OPT_MACRO,
+    OPT_RUN,
+    OPT_SLURM,
+    OPT_PARTITION,
+    OPT_SCRIPT,
+    OPT_DATASET,
+    OPT_DATADIR,
+    OPT_ETAGS,
+    OPT_CLEAN,
+};
 
-void list_datasets(void)
-{
-    printf("Available datasets:\n");
-    for (size_t i = 0; i < NOB_ARRAY_LEN(ds_infos); i++)
-    {
-        printf("  %s\n", ds_infos[i].name);
-    }
-}
+static struct option long_options[] = {
+    {"target",  required_argument, NULL, OPT_TARGET},
+    {"release", no_argument,       NULL, OPT_RELEASE},
+    {"debug",   no_argument,       NULL, OPT_DEBUG},
+    {"asan",    no_argument,       NULL, OPT_ASAN},
+    {"omp-off", no_argument,       NULL, OPT_OMP_OFF},
+    {"S",       no_argument,       NULL, OPT_ASM},
+    {"o",       required_argument, NULL, OPT_OUTDIR},
+    {"D",       required_argument, NULL, OPT_MACRO},
+    {"run",     no_argument,       NULL, OPT_RUN},
+    {"slurm",   no_argument,       NULL, OPT_SLURM},
+    {"p",       required_argument, NULL, OPT_PARTITION},
+    {"script",  required_argument, NULL, OPT_SCRIPT},
+    {"dataset", required_argument, NULL, OPT_DATASET},
+    {"datadir", required_argument, NULL, OPT_DATADIR},
+    {"etags",   no_argument,       NULL, OPT_ETAGS},
+    {"help",    no_argument,       NULL, OPT_HELP},
+    {"clean",   no_argument,       NULL, OPT_CLEAN},
+    {0,         0,                 0,    0}
+};
+
+Flags     flags = {0};
+Nob_Cmd   cmd   = {0};
+Nob_Procs procs = {0};
 
 int prepare_dataset()
 {
@@ -84,23 +129,17 @@ int prepare_dataset()
     }
 
     nob_cmd_append(&cmd, bin_path, "-dataset", flags.dataset, "-datadir", flags.datadir);
-    if (!nob_cmd_run(&cmd)) return EXIT_FAILURE;
-    return 1;
-}
-
-#define STRINGS(...) { \
-    .items = (const char*[]){__VA_ARGS__}, \
-    .count = sizeof((const char*[]){__VA_ARGS__}) / sizeof(const char*), \
-    .capacity = 0 \
+    if (!nob_cmd_run(&cmd)) return ERR;
+    return OK;
 }
 
 // Strings are meant to be stored on stack, and are not
 // supposed to be a /Dynamic Array/
-typedef struct {
-    const char **items;
-    size_t count;
-    size_t capacity;
-} Strings;
+#define STRS_STATIC(...) { \
+    .items = (char*[]){__VA_ARGS__}, \
+    .count = sizeof((char*[]){__VA_ARGS__}) / sizeof(char*), \
+    .capacity = 0 \
+}
 
 typedef struct {
     const char* name;
@@ -114,7 +153,7 @@ typedef struct {
 Target targets[] = {
     {
         .name = "paragnn",
-        .srcs = STRINGS(
+        .srcs = STRS_STATIC(
             SRC_FOLDER"main.c",
             SRC_FOLDER"core.c",
             SRC_FOLDER"gnn.c",
@@ -127,11 +166,11 @@ Target targets[] = {
             SRC_FOLDER"linalg/gemm.c",
             SRC_FOLDER"timer.c",
             ),
-        .libs = STRINGS("-lm", "-lopenblas"),
+        .libs = STRS_STATIC("-lm", "-lopenblas"),
     },
     {
         .name = "sageconv_backward",
-        .srcs = STRINGS(
+        .srcs = STRS_STATIC(
             KERNEL_FOLDER"sageconv_backward.c",
             SRC_FOLDER"core.c",
             SRC_FOLDER"dataset.c",
@@ -139,82 +178,36 @@ Target targets[] = {
             SRC_FOLDER"timer.c",
             KERNEL_FOLDER"cache_counter.c",
             ),
-        .libs = STRINGS("-lm", "-lopenblas"),
+        .libs = STRS_STATIC("-lm", "-lopenblas"),
     },
     {
         .name = "tsmm_tn",
-        .srcs = STRINGS(
+        .srcs = STRS_STATIC(
             SRC_FOLDER"timer.c",
             KERNEL_FOLDER"cache_counter.c",
             KERNEL_FOLDER"tsmm_tn.c",
             SRC_FOLDER"linalg/gemm.c",
             ),
-        .libs = STRINGS("-lm", "-lopenblas"),
+        .libs = STRS_STATIC("-lm", "-lopenblas"),
     },
     {
         .name = "aggregate",
-        .srcs = STRINGS(
+        .srcs = STRS_STATIC(
             SRC_FOLDER"timer.c",
             SRC_FOLDER"dataset.c",
             KERNEL_FOLDER"cache_counter.c",
             KERNEL_FOLDER"aggregate.c",
             ),
-        .libs = STRINGS("-lm"),
+        .libs = STRS_STATIC("-lm"),
     },
-
 };
-
-typedef enum {
-    NO_DEFAULT = 0,
-    DEFAULT,
-} Default;
-
-typedef struct {
-    const char *name;
-    const char *desc;
-    const char *arch;
-    Default is_default;
-} Partition;
-
-static const Partition partitions[] =  {
-    {"defq",     "DP AMD EPYC 7601 32-Core Processor SMT2 128 threads (Zen1)", "x86-64",  NO_DEFAULT},
-    {"armq",     "DP Cavium ThunderX2 CN9980 SMT4 256 threads",                "aarch64", NO_DEFAULT},
-    {"huaq",     "DP Huawei Kunpeng920-6426 no-HT 128 cores",                  "aarch64", NO_DEFAULT},
-    {"milanq",   "DP AMD EPYC 7763 64-Core Processor SMT2 256 threads (Zen3)", "x86-64",  DEFAULT},
-    {"fpgaq",    "DP AMD EPYC 7413 24-Core Processor SMT2 96 threads (Zen3)",  "x86-64",  DEFAULT},
-    {"genoaxq",  "DP AMD EPYC Genoa-X 9684X 96-Core (SMT2) (Zen4)",            "x86-64",  DEFAULT},
-    {"xeonmaxq", "DP Intel XeonMax 9480 56-core (SMT2 144)",                   "x86-64",  DEFAULT},
-    {"rome16q",  "SP AMD EPYC 7302P 16-Core Processor SMT2 32 threads (Zen2)", "x86-64",  NO_DEFAULT},
-    {"gh200q",   "Nvidia Grace Hopper GH200 APU 72-core cpu",                  "aarch64", DEFAULT},
-    {"habanaq",  "DP Intel Xeon Scalable Platinum 8360Y",                      "x86-64",  DEFAULT},
-};
-
-void list_partitions(void)
-{
-    printf("Valid partitions (* = default):\n");
-    for (size_t i = 0; i < NOB_ARRAY_LEN(partitions); i++) {
-        printf("  %c %-10s %-7s  %s\n",
-               partitions[i].is_default ? '*' : ' ',
-               partitions[i].name,
-               partitions[i].arch,
-               partitions[i].desc);
-
-    }
-}
-
-bool partition_is_valid(const char* name)
-{
-
-    for (size_t i = 0; i < NOB_ARRAY_LEN(partitions); i++) {
-        if (strcmp(partitions[i].name, name) == 0) return true;
-    }
-    return false;
-}
 
 Target* find_target(const char* name)
 {
-    for (size_t i = 0; i < NOB_ARRAY_LEN(targets); i++) {
-        if (strcmp(targets[i].name, name) == 0) {
+    for (size_t i = 0; i < NOB_ARRAY_LEN(targets); i++)
+    {
+        if (strcmp(targets[i].name, name) == 0)
+        {
             return &targets[i];
         }
     }
@@ -224,9 +217,9 @@ Target* find_target(const char* name)
 void list_targets(void)
 {
     printf("Available targets:\n");
-    for (size_t i = 0; i < NOB_ARRAY_LEN(targets); i++) {
-        printf("  %s%s\n", targets[i].name,
-               i == 0 ? " (default)" : "");
+    for (size_t i = 0; i < NOB_ARRAY_LEN(targets); i++)
+    {
+        printf("  %s%s\n", targets[i].name, i == 0 ? " (default)" : "");
     }
 }
 
@@ -271,7 +264,8 @@ const char* get_artifact_path(const char* out_dir, const char* src_path)
 
     // Strip .c extension
     size_t len = sv.count;
-    if (len > 2 && sv.data[len-2] == '.' && sv.data[len-1] == 'c') {
+    if (len > 2 && sv.data[len-2] == '.' && sv.data[len-1] == 'c')
+    {
         len -= 2;
     }
 
@@ -290,7 +284,8 @@ void append_common_flags(BuildPhase phase)
     nob_cc_error_flags(&cmd);
     nob_cmd_append(&cmd, "-I"SRC_FOLDER);
 
-    if (flags.debug) {
+    if (flags.debug)
+    {
         nob_cmd_append(&cmd, "-ggdb", "-g3", "-gdwarf-2");
     }
 
@@ -298,9 +293,12 @@ void append_common_flags(BuildPhase phase)
     nob_cmd_append(&cmd, "-DUSE_DOUBLE");
     nob_cmd_append(&cmd, "-march=native");
 
-    if (flags.release) {
+    if (flags.release)
+    {
         nob_cmd_append(&cmd, "-O3", "-DNDEBUG", "-ffast-math");
-    } else {
+    }
+    else
+    {
         nob_cmd_append(&cmd, "-Og");
     }
 
@@ -309,21 +307,31 @@ void append_common_flags(BuildPhase phase)
         nob_cmd_append(&cmd, "-fsanitize=address", "-fno-omit-frame-pointer");
     }
 
-    if (phase == COMPILING && flags.omp_off) {
+    if (phase == COMPILING && flags.omp_off)
+    {
         nob_cmd_append(&cmd, "-Wno-unknown-pragmas");
-    } else {
+    }
+    else
+    {
         nob_cmd_append(&cmd, "-fopenmp");
     }
 }
 
-int build_target(Target* t)
+int build()
 {
+    Target* t = find_target(flags.target);
+    if (t == NULL)
+    {
+        fprintf(stderr, "Error: unknown target: %s", flags.target);
+        return ERR_USAGE;
+    }
+
     // Determine output directory
     const char* out_dir = flags.out_dir ? flags.out_dir :
                           t->out_dir    ? t->out_dir : BUILD_FOLDER;
 
     // Ensure trailing slash
-    if (!nob_mkdir_recursive(out_dir)) return 1;
+    if (!nob_mkdir_recursive(out_dir)) return ERR;
     const char* exec_path = nob_path_join_temp(out_dir, t->name);
 
     // Compile all source files
@@ -336,7 +344,8 @@ int build_target(Target* t)
     }
 
     printf("[>>>] Compiling\n");
-    for (size_t i = 0; i < t->srcs.count; i++) {
+    for (size_t i = 0; i < t->srcs.count; i++)
+    {
         const char* src = t->srcs.items[i];
         const char* dst = get_artifact_path(out_dir, src);
         dst_paths[i] = dst;
@@ -349,8 +358,7 @@ int build_target(Target* t)
         }
 
         if (flags.release && t->release_macros.items)
-        {
-            for (size_t i = 0; i < t->release_macros.count; i++)
+        {            for (size_t i = 0; i < t->release_macros.count; i++)
             {
                 bool overwrite = false;
                 for (size_t j = 0; j < flags.macros.count; j++)
@@ -366,31 +374,36 @@ int build_target(Target* t)
             }
         }
 
-        for (size_t j = 0; j < flags.macros.count; j++) {
+        for (size_t j = 0; j < flags.macros.count; j++)
+        {
             nob_cmd_append(&cmd, nob_temp_sprintf("-D%s", flags.macros.items[j]));
         }
 
         nob_cc_output(&cmd, dst);
 
-        if (flags.asm_output) {
+        if (flags.asm_output)
+        {
             nob_cmd_append(&cmd, "-S", src);
             nob_cmd_append(&cmd, "-fverbose-asm");
-        } else {
+        }
+        else
+        {
             nob_cmd_append(&cmd, "-c", src);
         }
 
-        if (!nob_cmd_run
-            (&cmd, .async = &procs)) {
-            nob_log(NOB_ERROR, "Failed to compile %s", src);
-            return 1;
+        if (!nob_cmd_run(&cmd, .async = &procs))
+        {
+            fprintf(stderr, "Error: failed to compile %s", src);
+            return ERR;
         }
     }
 
-    if (!nob_procs_flush(&procs)) return 1;
+    if (!nob_procs_flush(&procs)) return ERR;
 
-    if (flags.asm_output) {
+    if (flags.asm_output)
+    {
         nob_log(NOB_INFO, "Assembly files written to %s", out_dir);
-        return 0;
+        return OK;
     }
 
     // Link
@@ -401,100 +414,177 @@ int build_target(Target* t)
 
     nob_cc_output(&cmd, exec_path);
 
-    for (size_t i = 0; i < t->srcs.count; i++) {
+    for (size_t i = 0; i < t->srcs.count; i++)
+    {
         nob_cc_inputs(&cmd, dst_paths[i]);
     }
 
-    for (size_t i = 0; i < t->libs.count; i++) {
+    for (size_t i = 0; i < t->libs.count; i++)
+    {
         nob_cmd_append(&cmd, t->libs.items[i]);
     }
 
-    if (!nob_cmd_run(&cmd)) return 1;
+    if (!nob_cmd_run(&cmd)) return ERR;
 
     nob_log(NOB_INFO, "Successfully compiled: %s", exec_path);
 
     // Run if requested
-    if (flags.run) {
+    if (flags.run)
+    {
         nob_cmd_append(&cmd, exec_path);
-        for (int i = 0; i < flags.rest_argc; i++) {
+        for (int i = 0; i < flags.rest_argc; i++)
+        {
             nob_cmd_append(&cmd, flags.rest_argv[i]);
         }
         if (flags.dataset) nob_cmd_append(&cmd, "-dataset", flags.dataset);
         if (flags.datadir) nob_cmd_append(&cmd, "-datadir", flags.datadir);
-        if (!nob_cmd_run(&cmd)) return 1;
+        if (!nob_cmd_run(&cmd)) return ERR;
     }
 
-    return 0;
+    return OK;
 }
 
-const char** resolve_partitions(size_t *count)
+typedef enum {
+    L3_PMU_NO = 0,
+    L3_PMU_YES,
+} L3MissPMU;
+
+typedef struct {
+    const char *name;
+    const char *desc;
+    const char *arch;
+    L3MissPMU   l3_miss_pmu;
+} Partition;
+
+static const Partition partitions[] =  {
+    {"defq",     "DP AMD EPYC 7601 32-Core Processor SMT2 128 threads (Zen1)", "x86-64",  L3_PMU_NO},
+    {"armq",     "DP Cavium ThunderX2 CN9980 SMT4 256 threads",                "aarch64", L3_PMU_NO},
+    {"huaq",     "DP Huawei Kunpeng920-6426 no-HT 128 cores",                  "aarch64", L3_PMU_NO},
+    {"milanq",   "DP AMD EPYC 7763 64-Core Processor SMT2 256 threads (Zen3)", "x86-64",  L3_PMU_YES},
+    {"fpgaq",    "DP AMD EPYC 7413 24-Core Processor SMT2 96 threads (Zen3)",  "x86-64",  L3_PMU_YES},
+    {"genoaxq",  "DP AMD EPYC Genoa-X 9684X 96-Core (SMT2) (Zen4)",            "x86-64",  L3_PMU_YES},
+    {"xeonmaxq", "DP Intel XeonMax 9480 56-core (SMT2 144)",                   "x86-64",  L3_PMU_YES},
+    {"rome16q",  "SP AMD EPYC 7302P 16-Core Processor SMT2 32 threads (Zen2)", "x86-64",  L3_PMU_NO},
+    {"gh200q",   "Nvidia Grace Hopper GH200 APU 72-core cpu",                  "aarch64", L3_PMU_YES},
+    {"habanaq",  "DP Intel Xeon Scalable Platinum 8360Y",                      "x86-64",  L3_PMU_YES},
+};
+
+void list_partitions(void)
 {
-    static const char* result[NOB_ARRAY_LEN(partitions)];
-    *count = 0;
+    printf("Valid partitions (* = has L3 miss PMU):\n");
+    for (size_t i = 0; i < NOB_ARRAY_LEN(partitions); i++)
+    {
+        printf("  %c %-10s %-7s  %s\n",
+               partitions[i].l3_miss_pmu ? '*' : ' ',
+               partitions[i].name,
+               partitions[i].arch,
+               partitions[i].desc);
+
+    }
+}
+
+bool partition_is_valid(const char* name)
+{
+
+    for (size_t i = 0; i < NOB_ARRAY_LEN(partitions); i++)
+    {
+        if (strcmp(partitions[i].name, name) == 0) return true;
+    }
+    return false;
+}
+
+size_t resolve_partitions(const char** parts)
+{
+    *parts = nob_temp_alloc(NOB_ARRAY_LEN(partitions));
+    size_t count = 0;
 
     // No partitions specified: default to bench
-    if (flags.partitions.count == 0) {
-        for (size_t i = 0; i < NOB_ARRAY_LEN(partitions); i++) {
-            if (partitions[i].is_default) result[(*count)++] = partitions[i].name;
+    if (flags.partitions.count == 0)
+    {
+        for (size_t i = 0; i < NOB_ARRAY_LEN(partitions); i++)
+        {
+            if (partitions[i].l3_miss_pmu) parts[count++] = partitions[i].name;
         }
-        return result;
+        return count;
     }
 
-    if (strcmp(flags.partitions.items[0], "all") == 0) {
-        for (size_t i = 0; i < NOB_ARRAY_LEN(partitions); i++) {
-            result[(*count)++] = partitions[i].name;
+    if (strcmp(flags.partitions.items[0], "all") == 0)
+    {
+        for (size_t i = 0; i < NOB_ARRAY_LEN(partitions); i++)
+        {
+            parts[count++] = partitions[i].name;
         }
-        return result;
+        return count;
     }
 
-    if (strcmp(flags.partitions.items[0], "x86-64") == 0) {
-        for (size_t i = 0; i < NOB_ARRAY_LEN(partitions); i++) {
-            if (strcmp(partitions[i].arch, "x86-64") == 0) result[(*count)++] = partitions[i].name;
+    if (strcmp(flags.partitions.items[0], "pmu") == 0)
+    {
+        for (size_t i = 0; i < NOB_ARRAY_LEN(partitions); i++)
+        {
+            if (partitions[i].l3_miss_pmu) parts[count++] = partitions[i].name;
         }
-        return result;
+        return count;
     }
 
-    if (strcmp(flags.partitions.items[0], "aarch64") == 0) {
-        for (size_t i = 0; i < NOB_ARRAY_LEN(partitions); i++) {
-            if (strcmp(partitions[i].arch, "aarch64") == 0) result[(*count)++] = partitions[i].name;
+    if (strcmp(flags.partitions.items[0], "x86-64") == 0)
+    {
+        for (size_t i = 0; i < NOB_ARRAY_LEN(partitions); i++)
+        {
+            if (strcmp(partitions[i].arch, "x86-64") == 0) parts[count++] = partitions[i].name;
         }
-        return result;
+        return count;
+    }
+
+    if (strcmp(flags.partitions.items[0], "aarch64") == 0)
+    {
+        for (size_t i = 0; i < NOB_ARRAY_LEN(partitions); i++)
+        {
+            if (strcmp(partitions[i].arch, "aarch64") == 0) parts[count++] = partitions[i].name;
+        }
+        return count;
     }
 
     bool found_invalid = false;
     // Check if partitions where given as comma separated list
-    if (strchr(flags.partitions.items[0], ',')) {
+    if (strchr(flags.partitions.items[0], ','))
+    {
         char *p = flags.partitions.items[0], *tok;
-        while ((tok = strsep(&p, ","))) {
-            if (*tok) {
-                if (!partition_is_valid(tok)) {
+        while ((tok = strsep(&p, ",")))
+        {
+            if (*tok)
+            {
+                if (!partition_is_valid(tok))
+                {
                     nob_log(NOB_ERROR, "Unknown partition: %s", tok);
                     found_invalid = true;
-                } else {
-                    result[(*count)++] = tok;
+                }
+                else
+                {
+                    parts[count++] = tok;
                 }
             }
         }
-        goto leave;
+        goto error;
     }
 
-    for (size_t j = 0; j < flags.partitions.count; j++) {
+    for (size_t j = 0; j < flags.partitions.count; j++)
+    {
         const char *p = flags.partitions.items[j];
-        if (!partition_is_valid(p)) {
+        if (!partition_is_valid(p))
+        {
             nob_log(NOB_ERROR, "Unknown partition: %s", p);
             found_invalid = true;
-        } else {
-            result[(*count)++] = p;
+        }
+        else
+        {
+            parts[count++] = p;
         }
     }
 
-leave:
-    if (found_invalid) {
-        list_partitions();
-        return NULL;
-    }
+    return count;
 
-    return result;
+error:
+    return 0;
 }
 
 const char* get_config_suffix(void)
@@ -502,7 +592,8 @@ const char* get_config_suffix(void)
     if (flags.macros.count == 0) return "default";
 
     Nob_String_Builder sb = {0};
-    for (size_t i = 0; i < flags.macros.count; i++) {
+    for (size_t i = 0; i < flags.macros.count; i++)
+    {
         if (i > 0) nob_sb_append_cstr(&sb, "-");
         // Strip "USE_" prefix if present for brevity
         const char *m = flags.macros.items[i];
@@ -547,22 +638,28 @@ int submit_slurm(void)
     const char *log_dir = nob_temp_sprintf("logs/%s/%s", date_string, label);
     if (!nob_mkdir_recursive(log_dir)) return 1;
 
-    size_t count;
-    const char **parts = resolve_partitions(&count);
-    if (!parts) return 1;
-
+    const char **parts = NULL;
+    size_t count = resolve_partitions(parts);
+    if (count == 0)
+    {
+        fprintf(stderr, "Invalid partition was given\n");
+        return ERR_USAGE;
+    }
 
     Nob_String_Builder macros_str = {0};
-    for (size_t i = 0; i < flags.macros.count; i++) {
+    for (size_t i = 0; i < flags.macros.count; i++)
+    {
         if (i > 0) nob_sb_append_cstr(&macros_str, " ");
         nob_sb_append_cstr(&macros_str, nob_temp_sprintf("-D %s", flags.macros.items[i]));
     }
     if (macros_str.count == 0) nob_sb_append_null(&macros_str);
 
     int ret = 0;
-    for (size_t i = 0; i < count; i++) {
+    for (size_t i = 0; i < count; i++)
+    {
         nob_cmd_append(&cmd, "sbatch", "-p", parts[i]);
-        if (!flags.script) {
+        if (!flags.script)
+        {
             nob_cmd_append(&cmd, nob_temp_sprintf("--export=BENCHMARK_TARGET=%s,BENCHMARK_CONFIG=%s,BENCHMARK_MACROS=%s",
                                                   flags.target, config, macros_str.items));
             nob_cmd_append(&cmd, "-J", nob_temp_sprintf("%s-%s", flags.target, config));
@@ -572,10 +669,13 @@ int submit_slurm(void)
         nob_cmd_append(&cmd, "--exclusive");
         nob_cmd_append(&cmd, "run_benchmark.sbatch");
 
-        if (!nob_cmd_run(&cmd)) {
+        if (!nob_cmd_run(&cmd))
+        {
             nob_log(NOB_ERROR, "Failed to submit %s to %s", script, parts[i]);
             ret = 1;
-        } else {
+        }
+        else
+        {
             nob_log(NOB_INFO, "Submitted %s to %s", script, parts[i]);
         }
     }
@@ -586,8 +686,9 @@ int submit_slurm(void)
 int clean(void)
 {
     nob_log(NOB_INFO, "Cleaning build artifacts...");
-    nob_delete_file(BUILD_FOLDER);
-    return 0;
+    bool success = nob_delete_file(BUILD_FOLDER);
+    if (!success) return ERR;
+    return OK;
 }
 
 int etags(void)
@@ -600,7 +701,8 @@ int etags(void)
     nob_cmd_append(&cmd, "find", ".", "-type", "f");
 
     nob_cmd_append(&cmd, "(");
-    for (size_t i = 0; i < NOB_ARRAY_LEN(folders); i++) {
+    for (size_t i = 0; i < NOB_ARRAY_LEN(folders); i++)
+    {
         if (i > 0) nob_cmd_append(&cmd, "-o");
         nob_cmd_append(&cmd, "-ipath", nob_temp_sprintf("*/%s*", folders[i]));
     }
@@ -608,19 +710,45 @@ int etags(void)
 
     nob_cmd_append(&cmd, "(", "-name", "*.[ch]", ")");
     nob_cmd_append(&cmd, "-exec", "etags", "--declarations", "{}", "+");
-    if (!nob_cmd_run(&cmd)) return 1;
-    return 0;
+    if (!nob_cmd_run(&cmd)) return ERR;
+    return OK;
 }
 
-void usage(FILE* stream)
+void usage(const char *progname)
 {
-    fprintf(stream, "Usage: ./nob [OPTIONS] [--] [ARGS]\n\n");
-    fprintf(stream, "OPTIONS:\n");
-    flag_print_options(stream);
-    fprintf(stream, "\nDATASETS:\n");
-    list_datasets();
-    fprintf(stream, "\nTARGETS:\n");
+    fprintf(stderr,
+            "Usage: %s [OPTIONS] [--] [ARGS]\n"
+            "\n"
+            "Build options:\n"
+            "  -t, -target NAME   Build target (default: %s)\n"
+            "  -r, -release       Build in release mode\n"
+            "  -g, -debug         Build in debug mode (default if neither specified)\n"
+            "  -a, -asan          Enable AddressSanitizer\n"
+            "  -o, -omp-off       Don't compile with -fopenmp\n"
+            "  -S                 Produce assembly instead of object files\n"
+            "  -o DIR             Output directory\n"
+            "  -D MACRO[=VAL]     Define macro, repeatable\n"
+            "\n"
+            "Run options:\n"
+            "  -run               Run after building\n"
+            "  -slurm             Submit job to Slurm\n"
+            "  -p PARTITION       Partition(s), repeatable (or 'list', 'all', 'pmu', 'aarch64', 'x86-64')\n"
+            "  -script FILE       Sbatch script to submit (e.g., adhoc.sh)\n"
+            "\n"
+            "Data options:\n"
+            "  -dataset NAME      Dataset {arxiv, products, papers100M} (default: %s)\n"
+            "  -datadir PATH      Data directory (default: %s)\n"
+            "\n"
+            "Other:\n"
+            "  -etags             Generate etags\n"
+            "  -clean             Clean build artifacts\n"
+            "  -h, -help          Print this help message\n"
+            "\n"
+            "Targets:\n",
+            progname, flags.target, flags.dataset, flags.datadir);
     list_targets();
+    fprintf(stderr, "\nPartitions:\n");
+    list_partitions();
 }
 
 int main(int argc, char** argv)
@@ -629,91 +757,75 @@ int main(int argc, char** argv)
     NOB_GO_REBUILD_URSELF(argc, argv);
 #endif
 
-    flag_str_var(&flags.target,          "target",       "paragnn", "Build target (see list below)");
-    flag_bool_var(&flags.release,        "release",      false,     "Build in release mode");
-    flag_bool_var(&flags.debug,          "debug",        false,     "Build in debug mode (default)");
-    flag_bool_var(&flags.asan,           "asan",         false,     "Enable AddressSanitizer");
-    flag_bool_var(&flags.omp_off,        "omp-off",      false,     "Don't compile with -fopenmp");
-    flag_bool_var(&flags.asm_output,     "S",            false,     "Produce assembly instead of object files");
-    flag_str_var(&flags.out_dir,         "o",            NULL,      "Output directory");
-    flag_list_mut_var(&flags.macros,     "D",                       "Define macro (e.g., -D SIMD_ENABLED)");
+    // Defaults
+    flags.target  = "paragnn";
+    flags.dataset = "arxiv";
+    flags.datadir = "./data";
 
-    flag_bool_var(&flags.run,            "run",          false,     "Run after building");
-    flag_bool_var(&flags.slurm,          "slurm",        false,     "Submit job to Slurm");
-    flag_list_mut_var(&flags.partitions, "p",                       "Partition(s) to submit to (or 'list', 'all', 'aarch64', 'x86_64')");
-    flag_str_var(&flags.script, "script", NULL, "Sbatch script to submit (e.g., adhoc.sh)");
-
-    flag_str_var(&flags.dataset,         "dataset",      "arxiv",   "Dataset to use (arxiv, products, papers100M)");
-    flag_str_var(&flags.datadir,         "datadir",      "./data",  "Directory for downloading and reading datasets");
-
-    flag_bool_var(&flags.clean,          "clean",        false,     "Clean build artifacts");
-    flag_bool_var(&flags.etags,          "etags",        false,     "Genereate etags");
-    flag_bool_var(&flags.help,           "help",         false,     "Print this help message");
-
-    if (!flag_parse(argc, argv)) {
-        usage(stderr);
-        flag_print_error(stderr);
-        return 1;
-    }
-
-    if (flags.help) {
-        usage(stdout);
-        return 0;
-    }
-
-    if (strcmp(flags.dataset, "list") == 0)
+    int opt;
+    while ((opt = getopt_long_only(argc, argv, "t:rgaoSh", long_options, NULL)) != -1)
     {
-        list_datasets();
-        return 0;
-    }
-    if (str_to_dataset_kind(flags.dataset) == DATASET_INVALID)
-    {
-        nob_log(NOB_ERROR, "Given dataset is not valid: %s", flags.dataset);
-        list_datasets();
-        return 1;
+        switch (opt)
+        {
+        case OPT_TARGET:    flags.target     = optarg; break;
+        case OPT_RELEASE:   flags.release    = true;   break;
+        case OPT_DEBUG:     flags.debug      = true;   break;
+        case OPT_ASAN:      flags.asan       = true;   break;
+        case OPT_OMP_OFF:   flags.omp_off    = true;   break;
+        case OPT_ASM:       flags.asm_output = true;   break;
+        case OPT_OUTDIR:    flags.out_dir    = optarg; break;
+        case OPT_MACRO:     nob_da_append(&flags.macros, optarg);     break;
+        case OPT_RUN:       flags.run        = true;   break;
+        case OPT_SLURM:     flags.slurm      = true;   break;
+        case OPT_PARTITION: nob_da_append(&flags.partitions, optarg); break;
+        case OPT_SCRIPT:    flags.script     = optarg; break;
+        case OPT_DATASET:   flags.dataset    = optarg; break;
+        case OPT_DATADIR:   flags.datadir    = optarg; break;
+        case OPT_ETAGS:     flags.etags      = true;   break;
+        case OPT_CLEAN:     flags.clean      = true;   break;
+        case OPT_HELP:
+            usage(argv[0]);
+            return OK;
+        default:
+            usage(argv[0]);
+            return ERR;
+        }
     }
 
-    // Handle rest args
-    argc = flag_rest_argc();
-    argv = flag_rest_argv();
-    if (argc > 0 && strcmp(argv[0], "--") == 0) {
-        argv++;
-        argc--;
-    }
-    flags.rest_argc = argc;
-    flags.rest_argv = argv;
+    flags.rest_argc = argc - optind;
+    flags.rest_argv = argv + optind;
 
     // Default to debug if neither specified
     if (!flags.release && !flags.debug) {
         flags.debug = true;
     }
 
-    // Commands
-    if (flags.clean) {
-        return clean();
+    // Default to debug if neither specified
+    if (!flags.release && !flags.debug)
+    {
+        flags.debug = true;
     }
 
-    if (flags.etags) {
-        return etags();
-    }
-
-    if (flags.partitions.count > 0 && strcmp(flags.partitions.items[0], "list") == 0) {
+    if (flags.partitions.count > 0 && strcmp(flags.partitions.items[0], "list") == 0)
+    {
         list_partitions();
-        return 0;
+        return OK;
     }
 
-    if (flags.slurm) {
-        return submit_slurm();
+    // Commands
+    int rc;
+    if (flags.clean) {rc = clean();}
+    else if (flags.etags) {rc = etags();}
+    else
+    {
+        rc = prepare_dataset();
+        if (rc == OK)
+        {
+            if (flags.slurm) {rc = submit_slurm();}
+            else {rc = build();}
+        }
     }
 
-    // Build target
-    Target* t = find_target(flags.target);
-    if (t == NULL) {
-        nob_log(NOB_ERROR, "Unknown target: %s", flags.target);
-        list_targets();
-        return 1;
-    }
-
-    if (prepare_dataset() == EXIT_FAILURE) return EXIT_FAILURE;
-    return build_target(t);
+    if (rc == ERR_USAGE) usage(argv[0]);
+    return rc != OK;  // exit 0 or 1 to the shell
 }

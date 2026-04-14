@@ -443,10 +443,10 @@ int prepare_dataset(char *dataset, char *datadir)
 }
 
 static struct option long_options[] = {
-    { "dataset", required_argument, NULL, 'd'},
-    { "datadir", required_argument, NULL, 'D'},
-    { "help",    no_argument,       NULL, 'h'},
-    {0,          0,                 0,     0}
+    {"dataset", required_argument, NULL, 'd'},
+    {"datadir", required_argument, NULL, 'D'},
+    {"help",    no_argument,       NULL, 'h'},
+    {0,         0,                 0,     0}
 };
 
 void usage(const char *progname)
