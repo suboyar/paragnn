@@ -293,18 +293,33 @@ void sageconv_backward_v3(SageLayer *const l)
  */
 
 #if !defined(SAGE_NODE_BLOCK)
-    #if defined(__znver3__) || defined(__neoverse_v2__) || defined(__sapphirerapids__)
-        #define SAGE_NODE_BLOCK 8
-    #elif defined(__znver4__)
+    // genoaxq
+    #if defined(__znver4__) // TBD
         #error "Optimal __znver4__ SAGE_NODE_BLOCK value needs to be found"
+    // milanq, fpgaq
+    #elif defined(__znver3__) // milanq prefers 8, fpgaq prefers 4; difference is negligible
+        #define SAGE_NODE_BLOCK 4
+    // rome16q
     #elif defined(__znver2__)
         #define SAGE_NODE_BLOCK 4
+    // defq
+    #elif defined(__znver1__) // TBD
+        #error "Optimal __znver1__ SAGE_NODE_BLOCK value needs to be found"
+    // xeonmaxq
+    #elif defined(__sapphirerapids__) // TBD
+        #error "Optimal __sapphirerapids__ SAGE_NODE_BLOCK value needs to be found"
+    // habanaq
+    #elif defined(__icelake_server__)
+        #define SAGE_NODE_BLOCK 8
+    // gh200q
+    #elif defined(__neoverse_v2__)
+        #define SAGE_NODE_BLOCK 8
+    // armq
     #elif defined(__thunderx2__)
-        #define SAGE_NODE_BLOCK 16
+        #define SAGE_NODE_BLOCK 8
+    // huaq
     #elif defined(__kunpeng_920__)
         #error "Optimal __kunpeng_920__ SAGE_NODE_BLOCK value needs to be found"
-    #elif defined(__icelake_server__) // habanaq
-        #error "Optimal __icelake_server__ SAGE_NODE_BLOCK value needs to be found"
     #else
         #define SAGE_NODE_BLOCK 2
     #endif
@@ -844,8 +859,8 @@ int main(void)
 
     bool to_symmetric = true;
     Dataset *ds = dataset_load("arxiv", "./data", EDGE_COO, to_symmetric);
-    // Dataset *ds_train = dataset_split(ds, SPLIT_TRAIN);
-    // ds = ds_train;
+    Dataset *ds_train = dataset_split(ds, SPLIT_TRAIN);
+    ds = ds_train;
     printf("num nodes: %u\n", ds->num_nodes);
 
     // Sentetic data
@@ -860,13 +875,10 @@ int main(void)
     l->grad_output = grad_output;
 
     BenchFunc funcs[] = {
-#if defined(FULL_TEST)
         // BENCH_FUNC(sageconv_backward_v1),
-        BENCH_FUNC(sageconv_backward_v2),
-        BENCH_FUNC(sageconv_backward_v3),
-#endif
+        // BENCH_FUNC(sageconv_backward_v2),
+        // BENCH_FUNC(sageconv_backward_v3),
         BENCH_FUNC(sageconv_backward_v4),
-        // BENCH_FUNC(sageconv_backward_v5),
     };
 
     if (!skip_validation)
@@ -956,7 +968,7 @@ int main(void)
             printf("\r\033[KRun: %s", funcs[i].name);
             fflush(stdout);
         }
-        for (size_t j = 0; j < 100; j++)
+        for (size_t j = 0; j < 50; j++)
         {
             if (isatty(STDOUT_FILENO))
             {
@@ -1004,4 +1016,6 @@ int main(void)
     timer_print();
     timer_export_csv("stdout");
     cache_counter_close_all(thread_counters);
+
+    printf("MIN_V4=%f\n", timer_get_time("sageconv_backward_v4", TIMER_MIN_TIME));
 }
