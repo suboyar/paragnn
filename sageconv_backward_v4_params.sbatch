@@ -5,7 +5,6 @@
 #SBATCH --ntasks=1
 #SBATCH --exclusive
 
-
 if [ "`uname -m`" = "x86_64" ];
 then
     module purge
