@@ -14,17 +14,8 @@ set -x
 TARGET=${BENCHMARK_TARGET:-paragnn}
 COMPDIR=build/$SLURM_JOB_PARTITION/$TARGET
 EXEC=$COMPDIR/${TARGET}
-ARCH=$(uname -m)
-LOCKFILE=".nob-$ARCH.lock"
-NOB="./nob-$ARCH"
-(
-    flock -x 200
-    if [[ ! -f $NOB ]] || [[ nob.c -nt $NOB ]]; then
-        gcc -ggdb -DNOB_NO_REBUILD -o "$NOB" nob.c
-    fi
-) 200>"$LOCKFILE"
-
-echo "Compiling $TARGET (${BENCHMARK_CONFIG:-default})"
+TAG=$SLURM_JOB_PARTITION ./bootstrap.sh
+NOB="./nob-$SLURM_JOB_PARTITION"
 $NOB -release -target $TARGET -o $COMPDIR $BENCHMARK_MACROS
 
 # 1 socket without smt

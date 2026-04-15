@@ -70,12 +70,12 @@ enum {
     OPT_TARGET = 't',
     OPT_RELEASE = 'r',
     OPT_DEBUG = 'g',
+    OPT_OUTDIR = 'o',
     OPT_ASAN = 'a',
-    OPT_OMP_OFF = 'o',
     OPT_ASM = 'S',
     OPT_HELP = 'h',
     // w/o shorthands
-    OPT_OUTDIR = 256,  // above ASCII
+    OPT_OMP_OFF = 256,  // above ASCII
     OPT_MACRO,
     OPT_RUN,
     OPT_SLURM,
@@ -112,8 +112,43 @@ Flags     flags = {0};
 Nob_Cmd   cmd   = {0};
 Nob_Procs procs = {0};
 
+typedef enum {
+    CPU_UNKNOWN,
+    CPU_ARM_NEOVERSE_V2,
+    CPU_ARM_THUNDERX2,
+    CPU_ARM_KUNPENG_920,
+} CPUVendor;
+
+char const* arch_macro_name[] = {
+    [CPU_UNKNOWN] = NULL,
+    [CPU_ARM_NEOVERSE_V2] = "__neoverse_v2__",
+    [CPU_ARM_THUNDERX2] = "__thunderx2__",
+    [CPU_ARM_KUNPENG_920] = "__kunpeng_920__",
+};
+
+static CPUVendor detect_cpu_vendor(void)
+{
+#if defined(__aarch64__) || defined(__arm__)
+    // ref: https://developer.arm.com/documentation/107771/0102/AArch64-registers/AArch64-Identification-registers-summary/MIDR-EL1--Main-ID-Register
+    uint64_t midr;
+    __asm__ __volatile__("mrs %0, midr_el1" : "=r"(midr));
+
+    uint8_t implementer = (midr >> 24) & 0xFF;
+    uint16_t part_num = (midr >> 4) & 0xFFF;
+
+    // eX3 has only these ARM CPUs, and I don't think they will add any new ones
+    // before I finish my thesis. So this should be enough.
+
+    if (implementer == 0x41 && part_num == 0xD4F) return CPU_ARM_NEOVERSE_V2;
+    if (implementer == 0x43 && part_num == 0x0AF) return CPU_ARM_THUNDERX2;
+    if (implementer == 0x48 && part_num == 0xD01) return CPU_ARM_KUNPENG_920;
+#endif
+    return CPU_UNKNOWN;
+}
+
 int prepare_dataset()
 {
+    int rc = ERR;
     char *bin_path = "./prepare_dataset";
     char *src_path = "./prepare_dataset.c";
     if (nob_needs_rebuild1(bin_path, src_path))
@@ -122,15 +157,24 @@ int prepare_dataset()
         nob_cc(&cmd);
         nob_cc_flags(&cmd);
         nob_cc_error_flags(&cmd);
-        nob_cmd_append(&cmd, "-march=native", "-O3", "-fopenmp", "-lz");
+        nob_cmd_append(&cmd, "-O3", "-fopenmp", "-lz");
+        // XXX: building with -march=native on Kunpeng-920 expands to wrong extensions on eX3 for gcc15
+        if (detect_cpu_vendor() == CPU_ARM_KUNPENG_920)
+            nob_cmd_append(&cmd, "-march=armv8.2-a+dotprod+crc+crypto+fp16fml");
+        else
+            nob_cmd_append(&cmd, "-march=native");
         nob_cc_output(&cmd, bin_path);
         nob_cc_inputs(&cmd, src_path);
-        if (!nob_cmd_run(&cmd)) return EXIT_FAILURE;
+        if (!nob_cmd_run(&cmd)) goto exit;
     }
 
     nob_cmd_append(&cmd, bin_path, "-dataset", flags.dataset, "-datadir", flags.datadir);
-    if (!nob_cmd_run(&cmd)) return ERR;
-    return OK;
+    if (!nob_cmd_run(&cmd)) goto exit;
+    rc = OK;
+
+exit:
+    nob_temp_reset();
+    return rc;
 }
 
 // Strings are meant to be stored on stack, and are not
@@ -223,54 +267,13 @@ void list_targets(void)
     }
 }
 
-typedef enum {
-    CPU_UNKNOWN,
-    CPU_ARM_NEOVERSE_V2,
-    CPU_ARM_THUNDERX2,
-    CPU_ARM_KUNPENG_920,
-} CPUVendor;
-
-char const* arch_macro_name[] = {
-    [CPU_UNKNOWN] = NULL,
-    [CPU_ARM_NEOVERSE_V2] = "__neoverse_v2__",
-    [CPU_ARM_THUNDERX2] = "__thunderx2__",
-    [CPU_ARM_KUNPENG_920] = "__kunpeng_920__",
-};
-
-static CPUVendor detect_cpu_vendor(void)
-{
-#if defined(__aarch64__) || defined(__arm__)
-    // ref: https://developer.arm.com/documentation/107771/0102/AArch64-registers/AArch64-Identification-registers-summary/MIDR-EL1--Main-ID-Register
-    uint64_t midr;
-    __asm__ __volatile__("mrs %0, midr_el1" : "=r"(midr));
-
-    uint8_t implementer = (midr >> 24) & 0xFF;
-    uint16_t part_num = (midr >> 4) & 0xFFF;
-
-    // eX3 has only these ARM CPUs, and I don't think they will add any new ones
-    // before I finish my thesis. So this should be enough.
-
-    if (implementer == 0x41 && part_num == 0xD4F) return CPU_ARM_NEOVERSE_V2;
-    if (implementer == 0x43 && part_num == 0x0AF) return CPU_ARM_THUNDERX2;
-    if (implementer == 0x48 && part_num == 0xD01) return CPU_ARM_KUNPENG_920;
-#endif
-    return CPU_UNKNOWN;
-}
-
 const char* get_artifact_path(const char* out_dir, const char* src_path)
 {
-    const char* base = nob_path_name(src_path);
-    Nob_String_View sv = nob_sv_from_cstr(base);
-
-    // Strip .c extension
-    size_t len = sv.count;
-    if (len > 2 && sv.data[len-2] == '.' && sv.data[len-1] == 'c')
-    {
-        len -= 2;
-    }
-
+    const char *base = nob_path_name(src_path);
+    const char *dot = strrchr(base, '.');
+    int name_len = dot ? (int)(dot - base) : (int)strlen(base);
     const char *ext = flags.asm_output ? ".s" : ".o";
-    return nob_temp_sprintf("%s%.*s%s", out_dir, (int)len, sv.data, ext); // TODO: use path_join?
+    return nob_path_join_temp(out_dir, nob_temp_sprintf("%.*s%s", name_len, base, ext));
 }
 
 typedef enum {
@@ -291,11 +294,15 @@ void append_common_flags(BuildPhase phase)
 
     // TODO: Remove this
     nob_cmd_append(&cmd, "-DUSE_DOUBLE");
-    nob_cmd_append(&cmd, "-march=native");
 
     if (flags.release)
     {
         nob_cmd_append(&cmd, "-O3", "-DNDEBUG", "-ffast-math");
+        // XXX: building with -march=native on Kunpeng-920 expands to wrong extensions on eX3 for gcc15
+        if (detect_cpu_vendor() == CPU_ARM_KUNPENG_920)
+            nob_cmd_append(&cmd, "-march=armv8.2-a+dotprod+crc+crypto+fp16fml");
+        else
+            nob_cmd_append(&cmd, "-march=native");
     }
     else
     {
@@ -322,7 +329,7 @@ int build()
     Target* t = find_target(flags.target);
     if (t == NULL)
     {
-        fprintf(stderr, "Error: unknown target: %s", flags.target);
+        nob_log(NOB_ERROR, "unknown target: %s", flags.target);
         return ERR_USAGE;
     }
 
@@ -495,7 +502,6 @@ bool partition_is_valid(const char* name)
 
 size_t resolve_partitions(const char** parts)
 {
-    *parts = nob_temp_alloc(NOB_ARRAY_LEN(partitions));
     size_t count = 0;
 
     // No partitions specified: default to bench
@@ -505,7 +511,7 @@ size_t resolve_partitions(const char** parts)
         {
             if (partitions[i].l3_miss_pmu) parts[count++] = partitions[i].name;
         }
-        return count;
+        goto exit;
     }
 
     if (strcmp(flags.partitions.items[0], "all") == 0)
@@ -514,7 +520,7 @@ size_t resolve_partitions(const char** parts)
         {
             parts[count++] = partitions[i].name;
         }
-        return count;
+        goto exit;
     }
 
     if (strcmp(flags.partitions.items[0], "pmu") == 0)
@@ -523,7 +529,7 @@ size_t resolve_partitions(const char** parts)
         {
             if (partitions[i].l3_miss_pmu) parts[count++] = partitions[i].name;
         }
-        return count;
+        goto exit;
     }
 
     if (strcmp(flags.partitions.items[0], "x86-64") == 0)
@@ -532,7 +538,7 @@ size_t resolve_partitions(const char** parts)
         {
             if (strcmp(partitions[i].arch, "x86-64") == 0) parts[count++] = partitions[i].name;
         }
-        return count;
+        goto exit;
     }
 
     if (strcmp(flags.partitions.items[0], "aarch64") == 0)
@@ -541,10 +547,9 @@ size_t resolve_partitions(const char** parts)
         {
             if (strcmp(partitions[i].arch, "aarch64") == 0) parts[count++] = partitions[i].name;
         }
-        return count;
+        goto exit;
     }
 
-    bool found_invalid = false;
     // Check if partitions where given as comma separated list
     if (strchr(flags.partitions.items[0], ','))
     {
@@ -556,7 +561,8 @@ size_t resolve_partitions(const char** parts)
                 if (!partition_is_valid(tok))
                 {
                     nob_log(NOB_ERROR, "Unknown partition: %s", tok);
-                    found_invalid = true;
+                    count = 0;
+                    goto exit;
                 }
                 else
                 {
@@ -564,7 +570,7 @@ size_t resolve_partitions(const char** parts)
                 }
             }
         }
-        goto error;
+        goto exit;
     }
 
     for (size_t j = 0; j < flags.partitions.count; j++)
@@ -573,18 +579,18 @@ size_t resolve_partitions(const char** parts)
         if (!partition_is_valid(p))
         {
             nob_log(NOB_ERROR, "Unknown partition: %s", p);
-            found_invalid = true;
+            count = 0;
+            goto exit;
         }
         else
         {
             parts[count++] = p;
         }
+        goto exit;
     }
 
+exit:
     return count;
-
-error:
-    return 0;
 }
 
 const char* get_config_suffix(void)
@@ -625,27 +631,51 @@ const char *parse_sbatch_job_name(const char *script)
     return nob_temp_sprintf("%.*s", (int)(p - start), start);
 }
 
-int submit_slurm(void)
+const char *capture_cmd(const char *command)
+{
+    FILE *fp = popen(command, "r");
+    if (!fp) return NULL;
+    char buf[128] = {0};
+    if (!fgets(buf, sizeof(buf), fp)) { pclose(fp); return NULL; }
+    pclose(fp);
+    char *nl = strchr(buf, '\n');
+    if (nl) *nl = '\0';
+    return nob_temp_strdup(buf);
+}
+
+const char *make_timestamp(void)
+{
+    time_t now = time(NULL);
+    struct tm *t = localtime(&now);
+    char *ts = nob_temp_alloc(20);
+    strftime(ts, 20, "%Y%m%dT%H%M%S", t);
+    return ts;
+}
+
+// Build a label like "paragnn" or "paragnn-tsmm" depending on config
+const char *make_label(void)
 {
     const char *config = get_config_suffix();
-    time_t now = time(NULL);
-    struct tm *local_time = localtime(&now);
-    char date_string[20];
-    strftime(date_string, sizeof(date_string), "%Y%m%d-%H%M%S", local_time);
+    if (strcmp(config, "default") == 0) return flags.target;
+    return nob_temp_sprintf("%s-%s", flags.target, config);
+}
+
+int submit_slurm(const char *partition)
+{
+    int rc = ERR;
+
+    const char *hash = capture_cmd("git rev-parse --short HEAD");
+    const char *ts_hash = nob_temp_sprintf("%s-%s", make_timestamp(), hash ? hash : "unknown");
+
     const char *script = flags.script ? flags.script : "run_benchmark.sbatch";
-    const char *job_name = flags.script ? parse_sbatch_job_name(script) : NULL;
-    const char *label = job_name ? job_name : nob_temp_sprintf("%s-%s", flags.target, config);
-    const char *log_dir = nob_temp_sprintf("logs/%s/%s", date_string, label);
-    if (!nob_mkdir_recursive(log_dir)) return 1;
+    const char *label = flags.script ? parse_sbatch_job_name(script) : make_label();
 
-    const char **parts = NULL;
-    size_t count = resolve_partitions(parts);
-    if (count == 0)
-    {
-        fprintf(stderr, "Invalid partition was given\n");
-        return ERR_USAGE;
-    }
+    const char *state = getenv("XDG_STATE_HOME");
+    const char *base = state ? state : nob_path_join_temp(getenv("HOME"), ".local/state");
+    const char *log_dir = nob_path_join_tempv(base, "paragnn/sbatch-logs", label, ts_hash, NULL);
+    if (!nob_mkdir_recursive(log_dir)) goto exit;
 
+    const char *config = get_config_suffix();
     Nob_String_Builder macros_str = {0};
     for (size_t i = 0; i < flags.macros.count; i++)
     {
@@ -655,32 +685,75 @@ int submit_slurm(void)
     if (macros_str.count == 0) nob_sb_append_null(&macros_str);
 
     int ret = 0;
-    for (size_t i = 0; i < count; i++)
+    nob_cmd_append(&cmd, "sbatch", "-p", partition);
+    if (!flags.script)
     {
-        nob_cmd_append(&cmd, "sbatch", "-p", parts[i]);
-        if (!flags.script)
-        {
-            nob_cmd_append(&cmd, nob_temp_sprintf("--export=BENCHMARK_TARGET=%s,BENCHMARK_CONFIG=%s,BENCHMARK_MACROS=%s",
-                                                  flags.target, config, macros_str.items));
-            nob_cmd_append(&cmd, "-J", nob_temp_sprintf("%s-%s", flags.target, config));
-        }
-        nob_cmd_append(&cmd, "-o", nob_temp_sprintf("%s/%s.out", log_dir, parts[i]));
-        nob_cmd_append(&cmd, script);
-        nob_cmd_append(&cmd, "--exclusive");
-        nob_cmd_append(&cmd, "run_benchmark.sbatch");
+        nob_cmd_append(&cmd, nob_temp_sprintf("--export=BENCHMARK_TARGET=%s,BENCHMARK_CONFIG=%s,BENCHMARK_MACROS=%s",
+                                              flags.target, config, macros_str.items));
+        nob_cmd_append(&cmd, "-J", nob_temp_sprintf("%s-%s", flags.target, config));
+    }
+    nob_cmd_append(&cmd, "-o", nob_temp_sprintf("%s/%s.out", log_dir, partition));
+    nob_cmd_append(&cmd, "-e", nob_temp_sprintf("%s/%s.err", log_dir, partition));
+    nob_cmd_append(&cmd, "--exclusive");
+    nob_cmd_append(&cmd, script);
 
-        if (!nob_cmd_run(&cmd))
-        {
-            nob_log(NOB_ERROR, "Failed to submit %s to %s", script, parts[i]);
-            ret = 1;
-        }
-        else
-        {
-            nob_log(NOB_INFO, "Submitted %s to %s", script, parts[i]);
-        }
+    if (!nob_cmd_run(&cmd))
+    {
+        nob_log(NOB_ERROR, "Failed to submit %s to %s", script, partition);
+        goto exit;
+    }
+    else
+    {
+        nob_log(NOB_INFO, "Submitted %s to %s", script, partition);
     }
 
-    return ret;
+    rc = OK;
+exit:
+    return rc;
+}
+
+int slurm_via_worktree(void)
+{
+    int rc = ERR;
+    const char *hash = capture_cmd("git rev-parse --short HEAD");
+    if (!hash) hash = "unknown";
+
+    const char *ts = make_timestamp();
+    const char *label = make_label();
+    const char *ts_hash = nob_temp_sprintf("%s-%s", ts, hash);
+    const char *wt_path_common = nob_path_join_tempv("../wt/", label, ts_hash, NULL);
+
+    const char *selected_partitions[NOB_ARRAY_LEN(partitions)] = {0};
+    size_t count = resolve_partitions(selected_partitions);
+    if (count == 0)
+    {
+        rc = ERR_USAGE;
+        goto exit;
+    }
+
+    for (size_t i = 0; i < count; i++)
+    {
+        const char *wt_path = nob_path_join_temp(wt_path_common, selected_partitions[i]);
+        nob_cmd_append(&cmd, "git", "worktree", "add", "--detach", wt_path, "HEAD");
+        if (!nob_cmd_run(&cmd)) goto exit;
+
+        const char *original_dir = nob_get_current_dir_temp();
+        if (!nob_set_current_dir(wt_path)) goto exit;
+
+        size_t checkpoint = nob_temp_save();
+        rc = submit_slurm(selected_partitions[i]);
+        nob_temp_rewind(checkpoint);
+
+        nob_set_current_dir(original_dir);
+        if (rc != OK) goto exit;
+        nob_log(NOB_INFO, "Worktree: %s", wt_path);
+    }
+
+    rc = OK;
+
+exit:
+    nob_temp_reset();
+    return rc;
 }
 
 int clean(void)
@@ -693,6 +766,8 @@ int clean(void)
 
 int etags(void)
 {
+    int rc = ERR;
+
     const char *folders[] = { SRC_FOLDER, KERNEL_FOLDER };
 
     nob_log(NOB_INFO, "Generating etags...");
@@ -710,8 +785,12 @@ int etags(void)
 
     nob_cmd_append(&cmd, "(", "-name", "*.[ch]", ")");
     nob_cmd_append(&cmd, "-exec", "etags", "--declarations", "{}", "+");
-    if (!nob_cmd_run(&cmd)) return ERR;
-    return OK;
+    if (!nob_cmd_run(&cmd)) goto exit;
+    rc = OK;
+
+exit:
+    nob_temp_reset();
+    return rc;
 }
 
 void usage(const char *progname)
@@ -724,14 +803,14 @@ void usage(const char *progname)
             "  -r, -release       Build in release mode\n"
             "  -g, -debug         Build in debug mode (default if neither specified)\n"
             "  -a, -asan          Enable AddressSanitizer\n"
-            "  -o, -omp-off       Don't compile with -fopenmp\n"
             "  -S                 Produce assembly instead of object files\n"
             "  -o DIR             Output directory\n"
             "  -D MACRO[=VAL]     Define macro, repeatable\n"
+            "  -omp-off           Don't compile with -fopenmp\n"
             "\n"
             "Run options:\n"
             "  -run               Run after building\n"
-            "  -slurm             Submit job to Slurm\n"
+            "  -slurm             Submit job to Slurm (creates a git worktree snapshot; commit first)\n"
             "  -p PARTITION       Partition(s), repeatable (or 'list', 'all', 'pmu', 'aarch64', 'x86-64')\n"
             "  -script FILE       Sbatch script to submit (e.g., adhoc.sh)\n"
             "\n"
@@ -763,7 +842,7 @@ int main(int argc, char** argv)
     flags.datadir = "./data";
 
     int opt;
-    while ((opt = getopt_long_only(argc, argv, "t:rgaoSh", long_options, NULL)) != -1)
+    while ((opt = getopt_long_only(argc, argv, "t:o:rgaSh", long_options, NULL)) != -1)
     {
         switch (opt)
         {
@@ -806,6 +885,12 @@ int main(int argc, char** argv)
         flags.debug = true;
     }
 
+    if (strcmp(flags.target, "list") == 0)
+    {
+        list_targets();
+        return OK;
+    }
+
     if (flags.partitions.count > 0 && strcmp(flags.partitions.items[0], "list") == 0)
     {
         list_partitions();
@@ -821,7 +906,7 @@ int main(int argc, char** argv)
         rc = prepare_dataset();
         if (rc == OK)
         {
-            if (flags.slurm) {rc = submit_slurm();}
+            if (flags.slurm) {rc = slurm_via_worktree();}
             else {rc = build();}
         }
     }

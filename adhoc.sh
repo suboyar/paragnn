@@ -9,15 +9,15 @@
 if [ "`uname -m`" = "x86_64" ];
 then
     module purge
-    module load gcc/cu1281/15.2.0 --silent
-    module load openblas/dynamic/0.3.30 --silent
+    module load gcc/cu1281/15.2.0
+    module load openblas/dynamic/0.3.30
 elif [ "`uname -m`" = "aarch64" ];
 then
     unset LOADEDMODULES
     unset _LMFILES_
     module purge
-    module load gcc/cu1302/15.2.0 --silent
-    module load openblas/dynamic/0.3.30 --silent
+    module load gcc/cu1302/15.2.0
+    module load openblas/dynamic/0.3.30
 fi
 
 set -euo pipefail
