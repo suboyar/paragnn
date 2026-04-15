@@ -893,6 +893,8 @@ NOBDEF bool nob_mkdir_if_not_exists(const char *path)
 
 NOBDEF bool nob_mkdir_recursive(const char *path)
 {
+    bool success = false;
+
     if (path == NULL || path[0] == '\0')
     {
         nob_log(NOB_ERROR, "cannot create directory from empty path");
@@ -906,18 +908,26 @@ NOBDEF bool nob_mkdir_recursive(const char *path)
     Nob_String_View sv = nob_sv_from_cstr(path);
     Nob_String_Builder sb = {0};
 
+    // For absolute paths
+    if (path[0] == '/') nob_sb_append_cstr(&sb, "/");
+
     while (sv.count > 0)
     {
         Nob_String_View dir = nob_sv_chop_by_delim(&sv, '/');
         if (dir.count == 0) continue;
 
-        nob_sb_appendf(&sb, "%s/", nob_temp_sv_to_cstr(dir));
+        nob_sb_append_buf(&sb, dir.data, dir.count);
+        nob_da_append(&sb, '/');
+        nob_sb_append_null(&sb);
+
         int result = mkdir(sb.items, 0755);
         if (result < 0 && errno != EEXIST)
         {
             nob_log(NOB_ERROR, "could not create directory `%s`: %s", sb.items, strerror(errno));
-            return false;
+            goto exit;
         }
+
+        sb.count--;  // pop the null so next iteration appends after the '/'
     }
 
     if (!already_exists)
@@ -925,7 +935,11 @@ NOBDEF bool nob_mkdir_recursive(const char *path)
         nob_log(NOB_INFO, "Created directory %s", path);
     }
 
-    return true;
+    success = true;
+
+exit:
+    nob_sb_free(sb);
+    return success;
 }
 
 NOBDEF bool nob_copy_file(const char *src_path, const char *dst_path)
@@ -1789,8 +1803,8 @@ NOBDEF char *nob_temp_sprintf(const char *format, ...)
 NOBDEF void nob_temp_reset(void)
 {
     nob_temp_size = 0;
-}
 
+}
 NOBDEF size_t nob_temp_save(void)
 {
     return nob_temp_size;
