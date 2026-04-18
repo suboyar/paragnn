@@ -201,6 +201,13 @@ void timer_disable(void)
     timer_enabled = false;
 }
 
+void timer_reset(void)
+{
+    memset(entries, 0, sizeof(entries));
+    reg.count = 0;
+    timer_stack.depth = 0;
+}
+
 TimerEntry* __timer_scope_push(const char* name)
 {
     if (!timer_enabled) return NULL;

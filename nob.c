@@ -216,6 +216,9 @@ Target targets[] = {
         .name = "sageconv_backward",
         .srcs = STRS_STATIC(
             KERNEL_FOLDER"sageconv_backward.c",
+            KERNEL_FOLDER"sageconv_backward_common.c",
+            KERNEL_FOLDER"sageconv_backward_gemm_tn.c",
+            KERNEL_FOLDER"sageconv_backward_fused.c",
             SRC_FOLDER"core.c",
             SRC_FOLDER"dataset.c",
             SRC_FOLDER"layers.c",

@@ -44,6 +44,7 @@ void timer_record(const char* name, double elapsed, TimerEntry* entry);
 void timer_record_parallel(const char* name, double* elapsed, int nthreads);
 void timer_enable(void);
 void timer_disable(void);
+void timer_reset(void);
 void timer_record_counters(const char* name, uint64_t flops, uint64_t l3_local, uint64_t l3_remote, uint64_t bytes_loaded);
 double timer_get_time(const char* name, enum TimerMetric metric);
 void timer_print(void);
