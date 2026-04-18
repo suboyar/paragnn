@@ -4,8 +4,6 @@
 #include <unistd.h>
 #include <cblas.h>
 
-#include <immintrin.h>
-
 #include "cache_counter.h"
 #include "core.h"
 #include "dataset.h"
@@ -18,6 +16,9 @@
 #define NTIMES 100
 #endif
 
+#ifndef DIMS
+#define DIMS 256, 512, 1024
+#endif
 
 static inline void fill_uniform(Real *restrict x, size_t n)
 {
@@ -77,14 +78,14 @@ void benchmark(size_t in_dim, size_t out_dim, Dataset *ds)
     size_t num_nodes = l->num_nodes;
 
     BenchFunc funcs[] = {
-        BENCH_FUNC(sageconv_backward_gemm_tn_v1),
+        // BENCH_FUNC(sageconv_backward_gemm_tn_v1),
         BENCH_FUNC(sageconv_backward_gemm_tn_v2),
-        BENCH_FUNC(sageconv_backward_gemm_tn_v3),
-        BENCH_FUNC(sageconv_backward_gemm_tn_v4),
-        BENCH_FUNC(sageconv_backward_gemm_tn_blas),
+        // BENCH_FUNC(sageconv_backward_gemm_tn_v3),
+        // BENCH_FUNC(sageconv_backward_gemm_tn_v4),
+        // BENCH_FUNC(sageconv_backward_gemm_tn_blas),
 
-        BENCH_FUNC(sageconv_backward_fused_v1),
-        BENCH_FUNC(sageconv_backward_fused_v2),
+        // BENCH_FUNC(sageconv_backward_fused_v1),
+        // BENCH_FUNC(sageconv_backward_fused_v2),
     };
 
 #if !defined(SKIP_VALID)
@@ -234,8 +235,10 @@ void benchmark(size_t in_dim, size_t out_dim, Dataset *ds)
     timer_print();
     // timer_export_csv("stdout");
     cache_counter_close_all(thread_counters);
-    timer_reset();
 
+    printf("MIN_TIME=%f\n", timer_get_time("sageconv_backward_gemm_tn_v2", TIMER_MIN_TIME));
+
+    timer_reset();
     free(input);
     sage_layer_free(&l);
 }
@@ -249,25 +252,11 @@ int main(void)
     Dataset *ds_train = dataset_split(ds, SPLIT_TRAIN);
     ds = ds_train;
     printf("num nodes: %u\n", ds->num_nodes);
-    size_t in_dim, out_dim;
 
-#if !defined(SKIP_256)
-    in_dim = 256, out_dim = 256;
-    printf("in_dim: %zu, out_dim: %zu\n", in_dim, out_dim);
-    benchmark(in_dim, out_dim, ds);
-#endif // SKIP_256
-
-#if !defined(SKIP_512)
-    in_dim = 512, out_dim = 512;
-    printf("in_dim: %zu, out_dim: %zu\n", in_dim, out_dim);
-    benchmark(in_dim, out_dim, ds);
-#endif // SKIP_512
-
-#if !defined(SKIP_1024)
-    in_dim = 1024, out_dim = 1024;
-    printf("in_dim: %zu, out_dim: %zu\n", in_dim, out_dim);
-    benchmark(in_dim, out_dim, ds);
-#endif // SKIP_1024
-
-    // printf("MIN_V4=%f\n", timer_get_time("sageconv_backward_v4", TIMER_MIN_TIME));
+    static const size_t dims[] = { DIMS };
+    for (size_t i = 0; i < sizeof(dims)/sizeof(dims[0]); i++)
+    {
+        printf("in_dim: %zu, out_dim: %zu\n", dims[i], dims[i]);
+        benchmark(dims[i], dims[i], ds);
+    }
 }
