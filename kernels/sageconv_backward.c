@@ -80,8 +80,8 @@ void benchmark(size_t in_dim, size_t out_dim, Dataset *ds)
     BenchFunc funcs[] = {
         // BENCH_FUNC(sageconv_backward_gemm_tn_v1),
         // BENCH_FUNC(sageconv_backward_gemm_tn_v2),
-        BENCH_FUNC(sageconv_backward_gemm_tn_v3),
-        // BENCH_FUNC(sageconv_backward_gemm_tn_v4),
+        // BENCH_FUNC(sageconv_backward_gemm_tn_v3),
+        BENCH_FUNC(sageconv_backward_gemm_tn_v4),
         // BENCH_FUNC(sageconv_backward_gemm_tn_blas),
 
         // BENCH_FUNC(sageconv_backward_fused_v1),
@@ -236,7 +236,7 @@ void benchmark(size_t in_dim, size_t out_dim, Dataset *ds)
     // timer_export_csv("stdout");
     cache_counter_close_all(thread_counters);
 
-    printf("MIN_TIME=%f\n", timer_get_time("sageconv_backward_gemm_tn_v3", TIMER_MIN_TIME));
+    printf("MIN_TIME=%f\n", timer_get_time("sageconv_backward_gemm_tn_v4", TIMER_MIN_TIME));
 
     timer_reset();
     free(input);
