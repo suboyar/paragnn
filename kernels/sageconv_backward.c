@@ -247,6 +247,18 @@ int main(void)
 {
     srand(0);
 
+    // openblas_set_num_threads(omp_get_max_threads());
+    int openblas_num_threads = openblas_get_num_threads();
+    int omp_num_threads = omp_get_max_threads();
+    if (openblas_num_threads == 1)
+    {
+        fprintf(stderr, "Error: OpenBLAS thread count is 1. Set OPENBLAS_NUM_THREADS or call openblas_set_num_threads()\n");
+        return 1;
+    }
+
+    printf("OpenBLAS config: %s\n", openblas_get_config());
+    printf("Using %d threads(omp) and %d threads(openblas)\n", omp_num_threads, openblas_num_threads);
+
     bool to_symmetric = true;
     Dataset *ds = dataset_load("arxiv", "./data", EDGE_COO, to_symmetric);
     Dataset *ds_train = dataset_split(ds, SPLIT_TRAIN);
