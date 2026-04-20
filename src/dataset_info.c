@@ -1,31 +1,8 @@
-#ifndef DATASET_INFO_H
-#define DATASET_INFO_H
-
 #include <stdbool.h>
+#include <string.h>
+#include "dataset_info.h"
 
-typedef enum { FMT_CSV_GZ, FMT_NPY } RawFormat;
-
-typedef enum {
-    DATASET_ARXIV,
-    DATASET_PRODUCTS,
-    DATASET_PAPERS100M,
-    DATASET_INVALID,
-} DatasetKind;
-
-typedef struct {
-    const char *name;
-    const char *url;
-    const char *dir_name; // folder name inside the zip
-    const char *split_name; // name of the folder withing split/ folder
-    uint32_t    num_nodes;
-    uint32_t    num_features;
-    uint32_t    num_classes;
-    uint32_t    num_edges;
-    bool        undirected;
-    RawFormat   raw_format;
-} DatasetInfo;
-
-DatasetInfo ds_infos[] = {
+const DatasetInfo ds_infos[] = {
     [DATASET_ARXIV] = {
         .name         = "arxiv",
         .url          = "https://snap.stanford.edu/ogb/data/nodeproppred/arxiv.zip",
@@ -65,7 +42,7 @@ DatasetInfo ds_infos[] = {
 };
 
 
-static inline DatasetKind str_to_dataset_kind(const char *str)
+DatasetKind str_to_dataset_kind(const char *str)
 {
     if (strncmp("arxiv", str, 5) == 0)
         return DATASET_ARXIV;
@@ -76,5 +53,3 @@ static inline DatasetKind str_to_dataset_kind(const char *str)
 
     return DATASET_INVALID;
 }
-
-#endif // DATASET_INFO_H

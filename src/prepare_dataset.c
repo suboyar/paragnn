@@ -12,7 +12,7 @@
 #include <zlib.h>
 
 #define NOB_IMPLEMENTATION
-#include "nob.h"
+#include "../nob.h"
 #include "dataset_info.h"
 
 Nob_Cmd cmd = {0};
@@ -82,12 +82,12 @@ static inline double parse_double(char** pp)
 }
 
 // This is specifically design to only be used for node indicies that aren't bigger
-// then 32bit value. It does not do any space checking or clean-up.
-static inline uint32_t parse_u32(char** pp)
+// then signed 64bit value. It does not do any space checking or clean-up.
+static inline int64_t parse_i64(char** pp)
 {
     char* p = *pp;
 
-    uint32_t val = 0;
+    int64_t val = 0;
     while (*p >= '0' && *p <= '9')
     {
         val = val * 10 + (*p++ - '0');
@@ -97,12 +97,12 @@ static inline uint32_t parse_u32(char** pp)
     return val;
 }
 
-void parse_feats(char *input, size_t input_size, char *output, uint32_t num_nodes, uint32_t num_features)
+void parse_feats(char *input, size_t input_size, char *output, int64_t num_nodes, int64_t num_features)
 {
     double *dest = (double *)output;
     char **line_starts = malloc((num_nodes + 1) * sizeof(char*));
     line_starts[0] = input;
-    size_t line = 1;
+    int64_t line = 1;
     for (char *p = input; p < input + input_size; p++)
     {
         if (*p == '\n' && line < num_nodes)
@@ -112,10 +112,10 @@ void parse_feats(char *input, size_t input_size, char *output, uint32_t num_node
     }
 
 #pragma omp parallel for
-    for (size_t i = 0; i < num_nodes; i++)
+    for (int64_t i = 0; i < num_nodes; i++)
     {
         char *p = line_starts[i];
-        for (size_t j = 0; j < num_features; j++)
+        for (int64_t j = 0; j < num_features; j++)
         {
             dest[i * num_features + j] = parse_double(&p);
             if (*p == ',') p++;
@@ -126,28 +126,28 @@ void parse_feats(char *input, size_t input_size, char *output, uint32_t num_node
 
 void parse_labels(char *input, size_t input_size, char *output)
 {
-    uint32_t *dest = (uint32_t *)output;
+    int64_t *dest = (int64_t *)output;
     char *p = input;
     char *end = input + input_size;
     size_t i = 0;
     while (p < end)
     {
-        dest[i++] = parse_u32(&p);
+        dest[i++] = parse_i64(&p);
         if (*p == '\n') p++;
     }
 }
 
 void parse_edges(char *input, size_t input_size, char *output)
 {
-    uint32_t *dest = (uint32_t *)output;
+    int64_t *dest = (int64_t *)output;
     char *p = input;
     char *end = input + input_size;
     size_t i = 0;
     while (p < end)
     {
-        dest[2 * i]     = parse_u32(&p);
+        dest[2 * i]     = parse_i64(&p);
         if (*p == ',') p++;
-        dest[2 * i + 1] = parse_u32(&p);
+        dest[2 * i + 1] = parse_i64(&p);
         if (*p == '\n') p++;
         i++;
     }
@@ -218,20 +218,20 @@ cleanup:
 
 void parse_splits(char *input, size_t input_size, char *output)
 {
-    uint32_t *dest = (uint32_t *)output;
+    int64_t *dest = (int64_t *)output;
     char *p = input;
     char *end = input + input_size;
     size_t i = 0;
     while (p < end)
     {
-        dest[i++] = parse_u32(&p);
+        dest[i++] = parse_i64(&p);
         if (*p == '\n') p++;
     }
 }
 
 typedef enum { PARSE_FEATS, PARSE_LABELS, PARSE_EDGES, PARSE_SPLIT} ParseKind;
 bool process_csv_gz(const char *csv_gz_path, const char *bin_path, size_t out_size,
-                    ParseKind kind, DatasetInfo *ds_info)
+                    ParseKind kind, const DatasetInfo *ds_info)
 {
     nob_log(NOB_INFO, "Processing %s", bin_path);
     // Input
@@ -246,7 +246,7 @@ bool process_csv_gz(const char *csv_gz_path, const char *bin_path, size_t out_si
             if (input[i] == '\n') count++;
         // handle missing trailing newline
         if (input_size > 0 && input[input_size - 1] != '\n') count++;
-        out_size = count * sizeof(uint32_t);
+        out_size = count * sizeof(int64_t);
     }
 
     // Output
@@ -326,22 +326,32 @@ bool process_npy(const char *npy_path, const char *bin_path, size_t out_size, si
     ftruncate(fd_out, out_size);
     char *output = mmap(NULL, out_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd_out, 0);
 
-    // f4 -> f8
-    if (hdr.type_char == 'f' && hdr.elem_size == 4 && dst_elem_size == 8)
-    {
-        float *s = (float*)src; double *d = (double*)output;
-        for (size_t i = 0; i < total; i++) d[i] = s[i];
-    }
     // i8 -> u4
-    else if (hdr.type_char == 'i' && hdr.elem_size == 8 && dst_elem_size == 4)
+    if (hdr.type_char == 'i' && hdr.elem_size == 8 && dst_elem_size == 4)
     {
-        int64_t *s = (int64_t*)src; uint32_t *d = (uint32_t*)output;
+        int64_t  *s = (int64_t*)src;
+        uint32_t *d = (uint32_t*)output;
         for (size_t i = 0; i < total; i++) d[i] = (uint32_t)s[i];
+    }
+    // i4 -> i8
+    else if (hdr.type_char == 'i' && hdr.elem_size == 4 && dst_elem_size == 8)
+    {
+        int32_t *s = (int32_t*)src;
+        int64_t *d = (int64_t*)output;
+        for (size_t i = 0; i < total; i++) d[i] = (int64_t)s[i];
+    }
+    // f4 -> f8
+    else if (hdr.type_char == 'f' && hdr.elem_size == 4 && dst_elem_size == 8)
+    {
+        float  *s = (float*)src;
+        double *d = (double*)output;
+        for (size_t i = 0; i < total; i++) d[i] = (double)s[i];
     }
     // f4 -> u4
     else if (hdr.type_char == 'f' && hdr.elem_size == 4 && dst_elem_size == 4)
     {
-        float *s = (float*)src; uint32_t *d = (uint32_t*)output;
+        float    *s = (float*)src;
+        uint32_t *d = (uint32_t*)output;
         for (size_t i = 0; i < total; i++) d[i] = (uint32_t)s[i];
     }
     else if (hdr.elem_size == dst_elem_size)
@@ -364,7 +374,7 @@ bool process_npy(const char *npy_path, const char *bin_path, size_t out_size, si
 
 int prepare_dataset(char *dataset, char *datadir)
 {
-    DatasetInfo *ds_info = &ds_infos[str_to_dataset_kind(dataset)];
+    const DatasetInfo *ds_info = &ds_infos[str_to_dataset_kind(dataset)];
     if (!nob_mkdir_recursive(datadir)) return EXIT_FAILURE;
 
     const char *zip_name = nob_path_name(ds_info->url);
@@ -408,9 +418,9 @@ int prepare_dataset(char *dataset, char *datadir)
     }
 
 
-    size_t feat_size = ds_info->num_nodes * ds_info->num_features * sizeof(double);
-    size_t label_size = ds_info->num_nodes * sizeof(uint32_t);
-    size_t edge_size = 2ULL * ds_info->num_edges * sizeof(uint32_t);
+    int64_t feat_size = ds_info->num_nodes * ds_info->num_features * sizeof(double);
+    int64_t label_size = ds_info->num_nodes * sizeof(int64_t);
+    int64_t edge_size = 2ULL * ds_info->num_edges * sizeof(int64_t);
     if (ds_info->raw_format == FMT_CSV_GZ)
     {
         // Data
@@ -445,9 +455,9 @@ int prepare_dataset(char *dataset, char *datadir)
 
         if (!process_npy(path_join(ds_path, "raw/data/node_feat.npy"), path_join(proc_path, "node-feat.bin"), feat_size, sizeof(double)))
             return EXIT_FAILURE;
-        if (!process_npy(path_join(ds_path, "raw/node-label/node_label.npy"), path_join(proc_path, "node-label.bin"), label_size, sizeof(uint32_t)))
+        if (!process_npy(path_join(ds_path, "raw/node-label/node_label.npy"), path_join(proc_path, "node-label.bin"), label_size, sizeof(int64_t)))
             return EXIT_FAILURE;
-        if (!process_npy(nob_temp_sprintf(ds_path, "raw/data/edge_index.npy"), nob_temp_sprintf(proc_path, "edge.bin"), edge_size, sizeof(uint32_t)))
+        if (!process_npy(path_join(ds_path, "raw/data/edge_index.npy"), path_join(proc_path, "edge.bin"), edge_size, sizeof(int64_t)))
             return EXIT_FAILURE;
     }
     else
@@ -478,6 +488,8 @@ void usage(const char *progname)
 
 int main(int argc, char **argv)
 {
+    int rc;
+
     char *dataset = NULL;
     char *datadir = NULL;
 
@@ -490,10 +502,12 @@ int main(int argc, char **argv)
         case 'D': datadir = optarg; break;
         case 'h':
             usage(argv[0]);
-            return 0;
+            rc = 0;
+            goto exit;
         default:
             usage(argv[0]);
-            return 1;
+            rc = 1;
+            goto exit;
         }
     }
 
@@ -501,15 +515,23 @@ int main(int argc, char **argv)
     {
         nob_log(NOB_ERROR, "both -dataset and -datadir are required");
         usage(argv[0]);
-        return 1;
+        rc = 1;
+        goto exit;
     }
+
+    datadir = nob_expand_path(datadir);
 
     if (str_to_dataset_kind(dataset) == DATASET_INVALID)
     {
         nob_log(NOB_ERROR, "'%s' is an invalid dataset", dataset);
         usage(argv[0]);
-        return 1;
+        rc = 1;
+        goto exit;
     }
 
-    return prepare_dataset(dataset, datadir);
+    rc = prepare_dataset(dataset, datadir);
+
+exit:
+    free(datadir);
+    return rc;
 }

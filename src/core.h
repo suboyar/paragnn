@@ -1,6 +1,7 @@
 #ifndef CORE_H
 #define CORE_H
 
+#include <stdlib.h>
 #include <stdio.h>
 #include <math.h>
 #include <cblas.h>
@@ -10,17 +11,25 @@
 
 #ifdef USE_DOUBLE
 #define Real      double
+#define REAL(x)   ((double)(x))
+#define REAL_MAX  DBL_MAX
 #define real_sqrt sqrt
 #define real_pow  pow
 #define real_fabs fabs
 #define real_fmax fmax
+#define real_exp  exp
+#define real_log  log
 #define cblas_rgemm cblas_dgemm
 #else
 #define Real      float
+#define REAL(x)   ((float)(x))
+#define REAL_MAX  FLT_MAX
 #define real_sqrt sqrtf
 #define real_pow  powf
 #define real_fabs fabsf
 #define real_fmax fmaxf
+#define real_exp  expf
+#define real_log  logf
 #define cblas_rgemm cblas_sgemm
 #endif
 

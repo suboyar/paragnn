@@ -20,9 +20,6 @@
                    "-Werror=strict-prototypes",                         \
                    "-Werror=incompatible-pointer-types") // Maybe re-add -Wno-unknown-pragmas?
 
-#define DATASET_INFO_IMPLEMENTATION
-#include "dataset_info.h"
-
 #define BUILD_FOLDER "build/"
 #define SRC_FOLDER   "src/"
 #define KERNEL_FOLDER "kernels/"
@@ -45,6 +42,7 @@ typedef struct {
     bool    debug;
     bool    asan;
     bool    omp_off;
+    bool    use_dbl;
     bool    asm_output;
     char*   out_dir;
     Strings macros;
@@ -76,6 +74,7 @@ enum {
     OPT_HELP = 'h',
     // w/o shorthands
     OPT_OMP_OFF = 256,  // above ASCII
+    OPT_DBL,
     OPT_MACRO,
     OPT_RUN,
     OPT_SLURM,
@@ -94,6 +93,7 @@ static struct option long_options[] = {
     {"asan",    no_argument,       NULL, OPT_ASAN},
     {"omp-off", no_argument,       NULL, OPT_OMP_OFF},
     {"S",       no_argument,       NULL, OPT_ASM},
+    {"double", no_argument,       NULL, OPT_DBL},
     {"o",       required_argument, NULL, OPT_OUTDIR},
     {"D",       required_argument, NULL, OPT_MACRO},
     {"run",     no_argument,       NULL, OPT_RUN},
@@ -146,37 +146,6 @@ static CPUVendor detect_cpu_vendor(void)
     return CPU_UNKNOWN;
 }
 
-int prepare_dataset()
-{
-    int rc = ERR;
-    char *bin_path = "./prepare_dataset";
-    char *src_path = "./prepare_dataset.c";
-    if (nob_needs_rebuild1(bin_path, src_path))
-    {
-        nob_log(NOB_INFO, "Building %s", nob_path_name(bin_path));
-        nob_cc(&cmd);
-        nob_cc_flags(&cmd);
-        nob_cc_error_flags(&cmd);
-        nob_cmd_append(&cmd, "-O3", "-fopenmp", "-lz");
-        // XXX: building with -march=native on Kunpeng-920 expands to wrong extensions on eX3 for gcc15
-        if (detect_cpu_vendor() == CPU_ARM_KUNPENG_920)
-            nob_cmd_append(&cmd, "-march=armv8.2-a+dotprod+crc+crypto+fp16fml");
-        else
-            nob_cmd_append(&cmd, "-march=native");
-        nob_cc_output(&cmd, bin_path);
-        nob_cc_inputs(&cmd, src_path);
-        if (!nob_cmd_run(&cmd)) goto exit;
-    }
-
-    nob_cmd_append(&cmd, bin_path, "-dataset", flags.dataset, "-datadir", flags.datadir);
-    if (!nob_cmd_run(&cmd)) goto exit;
-    rc = OK;
-
-exit:
-    nob_temp_reset();
-    return rc;
-}
-
 // Strings are meant to be stored on stack, and are not
 // supposed to be a /Dynamic Array/
 #define STRS_STATIC(...) { \
@@ -201,16 +170,23 @@ Target targets[] = {
             SRC_FOLDER"main.c",
             SRC_FOLDER"core.c",
             SRC_FOLDER"gnn.c",
+            SRC_FOLDER"gnn_naive.c",
+            SRC_FOLDER"matmul_naive.c",
             SRC_FOLDER"dataset.c",
+            SRC_FOLDER"dataset_info.c",
             SRC_FOLDER"layers.c",
             SRC_FOLDER"optim.c",
-            SRC_FOLDER"linalg/axpy.c",
-            SRC_FOLDER"linalg/copy.c",
-            SRC_FOLDER"linalg/scal.c",
-            SRC_FOLDER"linalg/gemm.c",
             SRC_FOLDER"timer.c",
             ),
         .libs = STRS_STATIC("-lm", "-lopenblas"),
+    },
+    {
+        .name = "prepare_dataset",
+        .srcs = STRS_STATIC(
+            SRC_FOLDER"prepare_dataset.c",
+            SRC_FOLDER"dataset_info.c",
+            ),
+        .libs = STRS_STATIC("-lz"),
     },
     {
         .name = "sageconv_backward",
@@ -224,16 +200,6 @@ Target targets[] = {
             SRC_FOLDER"layers.c",
             SRC_FOLDER"timer.c",
             KERNEL_FOLDER"cache_counter.c",
-            ),
-        .libs = STRS_STATIC("-lm", "-lopenblas"),
-    },
-    {
-        .name = "tsmm_tn",
-        .srcs = STRS_STATIC(
-            SRC_FOLDER"timer.c",
-            KERNEL_FOLDER"cache_counter.c",
-            KERNEL_FOLDER"tsmm_tn.c",
-            SRC_FOLDER"linalg/gemm.c",
             ),
         .libs = STRS_STATIC("-lm", "-lopenblas"),
     },
@@ -295,8 +261,10 @@ void append_common_flags(BuildPhase phase)
         nob_cmd_append(&cmd, "-ggdb", "-g3", "-gdwarf-2");
     }
 
-    // TODO: Remove this
-    nob_cmd_append(&cmd, "-DUSE_DOUBLE");
+    if (flags.use_dbl)
+    {
+        nob_cmd_append(&cmd, "-DUSE_DOUBLE");
+    }
 
     if (flags.release)
     {
@@ -327,12 +295,12 @@ void append_common_flags(BuildPhase phase)
     }
 }
 
-int build()
+int build(const char *target_str, bool run)
 {
-    Target* t = find_target(flags.target);
+    Target* t = find_target(target_str);
     if (t == NULL)
     {
-        nob_log(NOB_ERROR, "unknown target: %s", flags.target);
+        nob_log(NOB_ERROR, "unknown target: %s", target_str);
         return ERR_USAGE;
     }
 
@@ -439,7 +407,7 @@ int build()
     nob_log(NOB_INFO, "Successfully compiled: %s", exec_path);
 
     // Run if requested
-    if (flags.run)
+    if (run)
     {
         nob_cmd_append(&cmd, exec_path);
         for (int i = 0; i < flags.rest_argc; i++)
@@ -452,6 +420,28 @@ int build()
     }
 
     return OK;
+}
+
+int prepare_dataset()
+{
+    int rc = ERR;
+
+    rc = build("prepare_dataset", false);
+    if (rc != OK)
+    {
+        nob_log(NOB_ERROR, "Could not build 'prepare_dataset'");
+        goto exit;
+    }
+
+    const char *bin_dir = flags.out_dir ? flags.out_dir : BUILD_FOLDER;
+    const char* bin_path = nob_path_join_temp(bin_dir, "prepare_dataset");
+    nob_cmd_append(&cmd, bin_path, "-dataset", flags.dataset, "-datadir", flags.datadir);
+    if (!nob_cmd_run(&cmd)) goto exit;
+    rc = OK;
+
+exit:
+     nob_temp_reset();
+    return rc;
 }
 
 typedef enum {
@@ -808,6 +798,7 @@ void usage(const char *progname)
             "  -a, -asan          Enable AddressSanitizer\n"
             "  -S                 Produce assembly instead of object files\n"
             "  -o DIR             Output directory\n"
+            "  -double            Use double precision\n"
             "  -D MACRO[=VAL]     Define macro, repeatable\n"
             "  -omp-off           Don't compile with -fopenmp\n"
             "\n"
@@ -838,11 +829,12 @@ int main(int argc, char** argv)
 #ifndef NOB_NO_REBUILD
     NOB_GO_REBUILD_URSELF(argc, argv);
 #endif
+    int rc;
 
     // Defaults
     flags.target  = "paragnn";
     flags.dataset = "arxiv";
-    flags.datadir = "./data";
+    flags.datadir = "~/D1/paragnn-dataset";
 
     int opt;
     while ((opt = getopt_long_only(argc, argv, "t:o:rgaSh", long_options, NULL)) != -1)
@@ -855,6 +847,7 @@ int main(int argc, char** argv)
         case OPT_ASAN:      flags.asan       = true;   break;
         case OPT_OMP_OFF:   flags.omp_off    = true;   break;
         case OPT_ASM:       flags.asm_output = true;   break;
+        case OPT_DBL:       flags.use_dbl    = true;   break;
         case OPT_OUTDIR:    flags.out_dir    = optarg; break;
         case OPT_MACRO:     nob_da_append(&flags.macros, optarg);     break;
         case OPT_RUN:       flags.run        = true;   break;
@@ -867,15 +860,19 @@ int main(int argc, char** argv)
         case OPT_CLEAN:     flags.clean      = true;   break;
         case OPT_HELP:
             usage(argv[0]);
-            return OK;
+            rc = OK;
+            goto exit;
         default:
             usage(argv[0]);
-            return ERR;
+            rc = ERR;
+            goto exit;
         }
     }
 
     flags.rest_argc = argc - optind;
     flags.rest_argv = argv + optind;
+
+    flags.datadir = nob_expand_path(flags.datadir);
 
     // Default to debug if neither specified
     if (!flags.release && !flags.debug) {
@@ -891,17 +888,16 @@ int main(int argc, char** argv)
     if (strcmp(flags.target, "list") == 0)
     {
         list_targets();
-        return OK;
+        rc = OK;
     }
 
     if (flags.partitions.count > 0 && strcmp(flags.partitions.items[0], "list") == 0)
     {
         list_partitions();
-        return OK;
+        rc = OK;
     }
 
     // Commands
-    int rc;
     if (flags.clean) {rc = clean();}
     else if (flags.etags) {rc = etags();}
     else
@@ -910,10 +906,12 @@ int main(int argc, char** argv)
         if (rc == OK)
         {
             if (flags.slurm) {rc = slurm_via_worktree();}
-            else {rc = build();}
+            else {rc = build(flags.target, flags.run);}
         }
     }
 
     if (rc == ERR_USAGE) usage(argv[0]);
+
+exit:
     return rc != OK;  // exit 0 or 1 to the shell
 }

@@ -10,11 +10,10 @@
 
 // SGD optimizer
 
-static inline
-void sgd_step(SGD *restrict sgd, double *restrict param, const double *restrict grad, size_t n)
+static inline void sgd_step(SGD *restrict sgd, Real *restrict param, const Real *restrict grad, int64_t n)
 {
 #pragma omp parallel for simd
-    for (size_t i = 0; i < n; i++)
+    for (int64_t i = 0; i < n; i++)
     {
         param[i] -= sgd->lr * grad[i];
     }
@@ -24,7 +23,7 @@ void sgd_update(SGD *sgd, SageNet *net)
 {
     TIMER_FUNC();
 
-    for (size_t i = 0; i < net->num_layers; i++)
+    for (int64_t i = 0; i < net->num_layers; i++)
     {
         Layer layer = net->layers[i];
         if (layer.type == LAYER_SAGE)
@@ -43,7 +42,7 @@ void sgd_update(SGD *sgd, SageNet *net)
     }
 }
 
-SGD* sgd_create(double lr)
+SGD* sgd_create(Real lr)
 {
     SGD *sgd = malloc(sizeof(*sgd));
     if (!sgd) ERROR("Could not allocate SGD");
@@ -61,50 +60,50 @@ void sgd_free(SGD **sgd)
 // ADAM optimizer
 
 // __attribute__((optimize("unroll-loops")))
-static void adam_step(AdamState *restrict s, double *restrict param, const double *restrict grad, size_t n)
+static void adam_step(AdamState *restrict s, Real *restrict param, const Real *restrict grad, int64_t n)
 {
     s->t++;
     s->beta1_t *= s->beta1;
     s->beta2_t *= s->beta2;
-    const double bc = sqrt(1.0 - s->beta2_t) / (1.0 - s->beta1_t);
-    const double lr_t = s->lr * bc;
+    const Real bc = real_sqrt((REAL(1.0) - s->beta2_t) / (REAL(1.0) - s->beta1_t));
+    const Real lr_t = s->lr * bc;
 #pragma omp parallel for simd
-    for (size_t i = 0; i < n; i++)
+    for (int64_t i = 0; i < n; i++)
     {
-        const double g = grad[i];
+        const Real g = grad[i];
         s->m[i] = s->beta1 * s->m[i] + s->beta1_comp * g;
         s->v[i] = s->beta2 * s->v[i] + s->beta2_comp * g * g;
-        param[i] -=  lr_t * s->m[i] / (sqrt(s->v[i]) + s->epsilon);
+        param[i] -=  lr_t * s->m[i] / (real_sqrt(s->v[i]) + s->epsilon);
     }
 }
 
-static void adam_state_reset(AdamState *s, size_t n, double lr)
+static void adam_state_reset(AdamState *s, int64_t n, Real lr)
 {
     memset(s->m, 0, n * sizeof(*s->m));
     memset(s->v, 0, n * sizeof(*s->v));
     s->t          = 0;
     s->lr         = lr;
-    s->beta1      = 0.9;
-    s->beta2      = 0.999;
-    s->epsilon    = 1e-8;
-    s->beta1_comp = 1.0 - s->beta1;
-    s->beta2_comp = 1.0 - s->beta2;
-    s->beta1_t    = 1.0;
-    s->beta2_t    = 1.0;
+    s->beta1      = REAL(0.9);
+    s->beta2      = REAL(0.999);
+    s->epsilon    = REAL(1e-8);
+    s->beta1_comp = REAL(1.0) - s->beta1;
+    s->beta2_comp = REAL(1.0) - s->beta2;
+    s->beta1_t    = REAL(1.0);
+    s->beta2_t    = REAL(1.0);
 }
 
-static AdamState *adam_state_create(size_t n, double lr)
+static AdamState *adam_state_create(int64_t n, Real lr)
 {
     AdamState *s  = malloc(sizeof(*s));
     if (!s) ERROR("Could not allocate AdamState");
     s->kind       = OPTIM_ADAM;
-    s->m          = cache_aligned_alloc(n*sizeof(double));
-    s->v          = cache_aligned_alloc(n*sizeof(double));
+    s->m          = cache_aligned_alloc(n*sizeof(Real));
+    s->v          = cache_aligned_alloc(n*sizeof(Real));
     adam_state_reset(s, n, lr);
 
     // First touch
-    double *dummy_grad = calloc(n, sizeof(*dummy_grad));
-    double *dummy_param = calloc(n, sizeof(*dummy_param));
+    Real *dummy_grad = calloc(n, sizeof(*dummy_grad));
+    Real *dummy_param = calloc(n, sizeof(*dummy_param));
     if (!dummy_grad || !dummy_param) ERROR("Could not allocate dummy arrays");
     adam_step(s, dummy_param, dummy_grad, n);
     free(dummy_grad);
@@ -116,13 +115,13 @@ static AdamState *adam_state_create(size_t n, double lr)
     return s;
 }
 
-Adam* adam_create(SageNet *net, double lr)
+Adam* adam_create(SageNet *net, Real lr)
 {
     Adam *adam = malloc(sizeof(*adam));
     if (!adam) ERROR("Could not allocate Adam");
 
-    size_t count = 0;
-    for (size_t i = 0; i < net->num_layers; i++)
+    int64_t count = 0;
+    for (int64_t i = 0; i < net->num_layers; i++)
     {
         switch (net->layers[i].type)
         {
@@ -136,8 +135,8 @@ Adam* adam_create(SageNet *net, double lr)
     adam->states = malloc(count * sizeof(*adam->states));
 
     // Allocate a state for each parameter matrix
-    size_t s = 0;
-    for (size_t i = 0; i < net->num_layers; i++) {
+    int64_t s = 0;
+    for (int64_t i = 0; i < net->num_layers; i++) {
         Layer layer = net->layers[i];
         if (layer.type == LAYER_SAGE)
         {
@@ -158,8 +157,8 @@ Adam* adam_create(SageNet *net, double lr)
 
 void adam_update(Adam *adam, SageNet *net)
 {
-    size_t s = 0;
-    for (size_t i = 0; i < net->num_layers; i++)
+    int64_t s = 0;
+    for (int64_t i = 0; i < net->num_layers; i++)
     {
         Layer layer = net->layers[i];
         if (layer.type == LAYER_SAGE)
@@ -188,7 +187,7 @@ static void adam_state_free(AdamState **s)
 
 void adam_free(Adam **adam)
 {
-    for (size_t i = 0; i < (*adam)->num_states; i++)
+    for (int64_t i = 0; i < (*adam)->num_states; i++)
     {
         adam_state_free(&(*adam)->states[i]);
     }
@@ -198,7 +197,7 @@ void adam_free(Adam **adam)
 }
 
 // General interface
-Optim *optim_create(OptimKind kind, SageNet *net, double lr)
+Optim *optim_create(OptimKind kind, SageNet *net, Real lr)
 {
     Optim *optim = NULL;
     switch(kind)

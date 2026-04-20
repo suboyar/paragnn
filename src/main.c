@@ -1,16 +1,20 @@
 #define _GNU_SOURCE
+#include <float.h>
 #include <math.h>
+#include <getopt.h>
 #include <sched.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <time.h>
+#include <unistd.h>
 
 #include <omp.h>
 #include <cblas.h>
 
 #include "core.h"
+#include "dataset_info.h"
 #include "timer.h"
 #include "layers.h"
 #include "gnn.h"
@@ -20,52 +24,34 @@
 #define NOB_IMPLEMENTATION
 #include "../nob.h"
 
-#define FLAG_IMPLEMENTATION
-const int flag_push_dash_DASH_BACK;
-#include "../flag.h"
-
 // Default values
-#define EPOCHS 100
-#define LAYERS 4
-#define CHANNELS 256
-#define LR 0.01
-#define EDGES "coo"
-#define CSV_NAME NULL
-#define DATASET "arxiv"
-#define DATA_DIR NULL
-#define QUICK false
-#define EARLY_STOP false
+#define DEFAULT_EPOCHS      100
+#define DEFAULT_LAYERS      4
+#define DEFAULT_CHANNELS    256
+#define DEFAULT_LR          REAL(0.01)
+#define DEFAULT_DATASET     "arxiv"
+#define DEFAULT_DATADIR     "~/D1/paragnn-dataset"
+#define DEFAULT_CSV         "stdout"
 
-typedef struct {
-    bool quick;
-    bool early_stop;
-    size_t epochs;
-    size_t layers;
-    size_t channels;
-    double lr;
-    char *edges;
-    char *csv_name;
-    char *dataset;
-    char *data_dir;
-} Flags;
-
-static Flags flags = {0};
-
-
-void usage(FILE *stream)
-{
-    fprintf(stream, "Usage: ./paragnn [OPTIONS]\n");
-    fprintf(stream, "OPTIONS:\n");
-    flag_print_options(stream);
-}
+static uint64_t     epochs      = DEFAULT_EPOCHS;
+static uint64_t     layers      = DEFAULT_LAYERS;
+static uint64_t     channels    = DEFAULT_CHANNELS;
+static Real         lr          = DEFAULT_LR;
+static EdgeFormat   edge_format = EDGE_COMPRESSED;
+static bool         quick       = false;
+static bool         early_stop  = false;
+static FILE        *csv_fd      = NULL; // Set in main, since stdout ins't compile-time constant
+static DatasetKind  dataset     = DATASET_ARXIV;
+static char        *datadir     = NULL; // Set in main, since it might need to be expanded
 
 void print_config(void)
 {
     const char *partition = getenv("SLURM_JOB_PARTITION");
     const int omp_threads = omp_get_max_threads();
 
+    printf("Real precision: %s\n", sizeof(Real) == sizeof(double) ? "DP" : "SP");
     printf("Config: epochs=%zu, lr=%g, layers=%zu, hidden=%zu, data=%s\n",
-           flags.epochs, flags.lr, flags.layers, flags.channels, flags.dataset);
+           epochs, lr, layers, channels, ds_infos[dataset].name);
 #if defined(USE_CBLAS)
     printf("Runtime: threads(OMP=%d, BLAS=%d), partition=%s\n",
            omp_threads, openblas_get_num_threads(), partition);
@@ -97,7 +83,7 @@ void inference(SageNet *net)
 {
     TIMER_FUNC();
 
-    for (size_t i = 0; i < net->num_layers; i++)
+    for (int64_t i = 0; i < net->num_layers; i++)
     {
         Layer layer = net->layers[i];
         switch(layer.type)
@@ -109,10 +95,10 @@ void inference(SageNet *net)
             relu((ReluLayer*)layer.ctx);
             break;
         case LAYER_L2NORM:
-            normalize((L2NormLayer*)layer.ctx);
+            l2norm((L2NormLayer*)layer.ctx);
             break;
-        case LAYER_LOGSOFT:
-            logsoft((LogSoftLayer*)layer.ctx);
+        case LAYER_LOGSOFTMAX:
+            logsoftmax((LogSoftmaxLayer*)layer.ctx);
             break;
         case LAYER_LINEAR:
             linear((LinearLayer*)layer.ctx);
@@ -132,20 +118,20 @@ void train(SageNet *net, Dataset *ds, Optim *optim, OptimKind kind)
         switch(layer.type)
         {
         case LAYER_SAGE:
-            sageconv_backward((SageLayer*)layer.ctx);
+            grad_sageconv((SageLayer*)layer.ctx);
             // sage_layer_update_weights((SageLayer*)layer.ctx, (float)lr);
             break;
         case LAYER_RELU:
-            relu_backward((ReluLayer*)layer.ctx);
+            grad_relu((ReluLayer*)layer.ctx);
             break;
         case LAYER_L2NORM:
-            normalize_backward((L2NormLayer*)layer.ctx);
+            grad_l2norm((L2NormLayer*)layer.ctx);
             break;
-        case LAYER_LOGSOFT:
-            cross_entropy_backward((LogSoftLayer*)layer.ctx, ds->labels);
+        case LAYER_LOGSOFTMAX:
+            grad_cross_entropy((LogSoftmaxLayer*)layer.ctx, ds->labels);
             break;
         case LAYER_LINEAR:
-            linear_backward((LinearLayer*)layer.ctx);
+            grad_linear((LinearLayer*)layer.ctx);
             // linear_layer_update_weights((LinearLayer*)layer.ctx, (float)lr);
             break;
         default:
@@ -174,8 +160,8 @@ void zero_grad(SageNet *net)
         case LAYER_LINEAR:
             linear_layer_zero_gradients((LinearLayer*)layer.ctx);
             break;
-        case LAYER_LOGSOFT:
-            logsoft_layer_zero_gradients((LogSoftLayer*)layer.ctx);
+        case LAYER_LOGSOFTMAX:
+            logsoft_layer_zero_gradients((LogSoftmaxLayer*)layer.ctx);
             break;
         default:
             ERROR("Unknown layer type %d", layer.type);
@@ -200,108 +186,196 @@ bool is_double_eq(double a, double b)
     return true;
 }
 
+enum {
+    // w/ shorthands
+    OPT_HELP = 'h',
+    // w/o shorthands
+    OPT_EPOCHS = 256,  // above ASCII
+    OPT_LAYERS,
+    OPT_CHANNELS,
+    OPT_LR,
+    OPT_DATASET,
+    OPT_DATADIR,
+    OPT_CSV,
+    OPT_COO,
+    OPT_QUICK,
+    OPT_EARLY_STOP,
+};
+
+static struct option long_options[] = {
+    {"epochs",     required_argument, NULL, OPT_EPOCHS},
+    {"layers",     required_argument, NULL, OPT_LAYERS},
+    {"channels",   required_argument, NULL, OPT_CHANNELS},
+    {"lr",         required_argument, NULL, OPT_LR},
+    {"dataset",    required_argument, NULL, OPT_DATASET},
+    {"datadir",    required_argument, NULL, OPT_DATADIR},
+    {"csv",        required_argument, NULL, OPT_CSV},
+    {"coo",        no_argument,       NULL, OPT_COO},
+    {"quick",      no_argument,       NULL, OPT_QUICK},
+    {"early_stop", no_argument,       NULL, OPT_EARLY_STOP},
+    {0,            0,                 0,    0}
+};
+
+void usage(const char *progname)
+{
+    fprintf(stderr,
+        "Usage: %s [OPTIONS]\n"
+        "\n"
+        "OPTIONS:\n"
+        "  --epochs N       Number of epochs        [" STRINGIFY(DEFAULT_EPOCHS) "]\n"
+        "  --layers N       Number of layers        [" STRINGIFY(DEFAULT_LAYERS) "]\n"
+        "  --channels N     Number of channels      [" STRINGIFY(DEFAULT_CHANNELS) "]\n"
+        "  --lr F           Learning rate           [" STRINGIFY(DEFAULT_LR) "]\n"
+        "  --dataset NAME   Dataset name            [" DEFAULT_DATASET "]\n"
+        "  --datadir PATH   Dataset directory       [" DEFAULT_DATADIR "]\n"
+        "  --csv FILE       CSV output (stdout/stderr/path) [" DEFAULT_CSV "]\n"
+        "  --coo            Use COO edge format     [off]\n"
+        "  --quick          Quick mode              [off]\n"
+        "  --early_stop     Enable early stopping   [off]\n"
+        "  -h, --help       Show this help\n",
+        progname);
+}
+
 int main(int argc, char** argv)
 {
-    // srand(time(NULL));
+
     srand(0);
-    nob_minimal_log_level = NOB_WARNING;
-    flag_str_var(&flags.dataset,     "dataset",    DATASET,    "Dataset to use (arxiv, products, papers100M)");
-    flag_str_var(&flags.data_dir,    "data-dir",   DATA_DIR,   "Directory of where OGBN datasets are stored");
-    flag_str_var(&flags.edges,       "edges",      EDGES,      "Edge storage format (coo, csr, csc)");
-    flag_bool_var(&flags.quick,      "quick",      QUICK,      "Use small model config for fast iteration");
-    flag_bool_var(&flags.early_stop, "early-stop", EARLY_STOP, "Stop training when loss stops decreasing");
-    flag_size_var(&flags.epochs,     "epochs",     EPOCHS,     "Number of training epochs");
-    flag_size_var(&flags.layers,     "layers",     LAYERS,     "Number of layers in the SageNet model");
-    flag_size_var(&flags.channels,   "channels",   CHANNELS,   "Number of hidden channels per layer");
-    flag_double_var(&flags.lr,       "lr",         LR,         "Learning rate for training");
-    flag_str_var(&flags.csv_name,    "csv",        CSV_NAME,   "Output path for timing CSV (use 'stdout' for console)");
 
-    if (!flag_parse(argc, argv))
+    int opt;
+    while ((opt = getopt_long_only(argc, argv, "h", long_options, NULL)) != -1)
     {
-        usage(stderr);
-        flag_print_error(stderr);
-        exit(1);
-    }
-    if (!flags.data_dir)
-    {
-        fprintf(stderr, "Error: You need to specify -data-dir\n");
-        usage(stderr);
-        exit(1);
+        switch (opt)
+        {
+        case OPT_EPOCHS: epochs = strtoull(optarg, NULL, 10); break;
+        case OPT_LAYERS: layers = strtoull(optarg, NULL, 10); break;
+        case OPT_CHANNELS: channels = strtoull(optarg, NULL, 10); break;
+        case OPT_LR: lr = strtoull(optarg, NULL, 10); break;
+        case OPT_DATASET:
+        {
+            dataset = str_to_dataset_kind(optarg);
+            if (dataset == DATASET_INVALID)
+            {
+                ERROR("Given dataset is not valid: %s", optarg);
+                usage(argv[0]);
+                return 1;
+            }
+            break;
+        }
+        case OPT_DATADIR: datadir = optarg; break;
+        case OPT_CSV:
+        {
+            if (strcmp("stdout", optarg) == 0)
+            {
+                csv_fd = stdout;
+            }
+            else if (strcmp("stderr", optarg) == 0)
+            {
+                csv_fd = stderr;
+            }
+            else
+            {
+                csv_fd = fopen(optarg, "w+");
+                if (!csv_fd)
+                {
+                    ERROR("Could not open file %s for csv export: %s", optarg, strerror(errno));
+                    usage(argv[0]);
+                    return 1;
+                }
+            }
+            break;
+        }
+        case OPT_QUICK:      quick       = true;     break;
+        case OPT_EARLY_STOP: early_stop  = true;     break;
+        case OPT_COO:        edge_format = EDGE_COO; break;
+        case OPT_HELP:
+            usage(argv[0]);
+            return 0;
+        default:
+            usage(argv[0]);
+            return 1;
+        }
     }
 
-    EdgeFormat edge_format = parse_edge_format(flags.edges);
-    if (flags.quick)
+    if (!datadir)
     {
-        if (flags.epochs == EPOCHS)     flags.epochs   = 10;
-        if (flags.layers == LAYERS)     flags.layers   = 2;
-        if (flags.channels == CHANNELS) flags.channels = 4;
+        datadir = DEFAULT_DATADIR;
     }
+    datadir = nob_expand_path(datadir);
+
+    if (quick)
+    {
+        if (epochs == DEFAULT_EPOCHS)     epochs   = 10;
+        if (layers == DEFAULT_LAYERS)     layers   = 2;
+        if (channels == DEFAULT_CHANNELS) channels = 4;
+    }
+
+    FlowDirection flow = SOURCE_TO_TARGET;
 
     openblas_set_num_threads(omp_get_max_threads());
     print_config();
 
     bool to_symmetric = true;
-    Dataset *ds = dataset_load(flags.dataset, flags.data_dir, edge_format, to_symmetric);
+    Dataset *ds = dataset_load(dataset, datadir, edge_format, to_symmetric, flow);
 
-    Dataset *ds_train = dataset_split(ds, SPLIT_TRAIN);
-    Dataset *ds_valid = dataset_split(ds, SPLIT_VALID);
-    Dataset *ds_test = dataset_split(ds, SPLIT_TEST);
+    Dataset *ds_train = dataset_split(ds, SPLIT_TRAIN, flow);
+    Dataset *ds_valid = dataset_split(ds, SPLIT_VALID, flow);
+    Dataset *ds_test = dataset_split(ds, SPLIT_TEST, flow);
     dataset_free(&ds);
 
-    size_t num_features = ds_train->num_features;
-    size_t num_classes = ds_train->num_classes;
-    size_t num_entries = (flags.layers - 1) * 3 + 2;
+    int64_t num_features = ds_train->num_features;
+    int64_t num_classes = ds_train->num_classes;
+    uint64_t num_entries = (layers - 1) * 3 + 2;
     LayerConf arch[num_entries];
     size_t n = 0;
 
     // First layer
-    arch[n++] = SAGE(num_features, flags.channels);
-    arch[n++] = RELU(flags.channels);
-    arch[n++] = L2NORM(flags.channels);
+    arch[n++] = SAGE(num_features, channels);
+    arch[n++] = RELU(channels);
+    arch[n++] = L2NORM(channels);
 
     // Intermediate layers
-    for (size_t i = 1; i < flags.layers - 1; i++)
+    for (size_t i = 1; i < layers - 1; i++)
     {
-        arch[n++] = SAGE(flags.channels, flags.channels);
-        arch[n++] = RELU(flags.channels);
-        arch[n++] = L2NORM(flags.channels);
+        arch[n++] = SAGE(channels, channels);
+        arch[n++] = RELU(channels);
+        arch[n++] = L2NORM(channels);
     }
 
     // Last layers
-    arch[n++] = SAGE(flags.channels, num_classes);
-    arch[n++] = LOGSOFT(num_classes);
+    arch[n++] = SAGE(channels, num_classes);
+    arch[n++] = LOGSOFTMAX(num_classes);
 
-    SageNet *net = SAGE_NET_CREATE(arch, ds_train, SOURCE_TO_TARGET);
+    SageNet *net = SAGE_NET_CREATE(arch, ds_train, flow);
     sage_net_info(net);
 
-    LogSoftLayer *log_prob_layer = (LogSoftLayer *)net->layers[net->num_layers - 1].ctx;
+    LogSoftmaxLayer *log_prob_layer = (LogSoftmaxLayer *)net->layers[net->num_layers - 1].ctx;
 
     OptimKind optim_kind = OPTIM_ADAM;
-    Optim *optim = optim_create(optim_kind, net, flags.lr);
+    Optim *optim = optim_create(optim_kind, net, lr);
 
     timer_enable();
-    double old_loss = DBL_MAX;
-    for (size_t epoch = 1; epoch <= flags.epochs; epoch++)
+    Real old_loss = REAL_MAX;
+    for (size_t epoch = 1; epoch <= epochs; epoch++)
     {
         TIMER_BLOCK("epoch", {
                 inference(net);
-                float loss = nll_loss(log_prob_layer, ds_train->labels);
-                if (flags.early_stop && old_loss < loss)
+                Real loss = nll_loss(log_prob_layer, ds_train->labels);
+                if (early_stop && old_loss < loss)
                 {
                     printf("Early stopping at epoch %zu/%zu: loss increased (%.6f -> %.6f)\n",
-                           epoch, flags.epochs, old_loss, loss);
+                           epoch, epochs, old_loss, loss);
                     break;
                 }
                 old_loss = loss;
-                float train_acc = accuracy(log_prob_layer, ds_train->labels);
+                Real train_acc = accuracy(log_prob_layer, ds_train->labels);
                 train(net, ds_train, optim, optim_kind);
                 printf("Epoch: %zu/%zu, Loss: %f, Train: %.2f%%\n",
-                       epoch, flags.epochs, loss, 100*train_acc);
+                       epoch, epochs, loss, 100*train_acc);
             });
     }
 
     timer_disable();
-    double val_acc, test_acc;
+    Real val_acc, test_acc;
     TIMER_BLOCK("valid-inference", {
             sage_net_bind(net, ds_valid);
             inference(net);
@@ -315,13 +389,14 @@ int main(int argc, char** argv)
     printf("Valid: %.2f%%, Test: %.2f%%\n", 100*val_acc, 100*test_acc);
 
     timer_print();
-    timer_export_csv(flags.csv_name);
+    timer_export_csv(csv_fd);
 
     optim_free(&optim, optim_kind);
     sage_net_free(&net);
     dataset_free(&ds_test);
     dataset_free(&ds_valid);
     dataset_free(&ds_train);
+    free(datadir);
     return 0;
 }
 

@@ -409,17 +409,15 @@ static void build_path(TimerEntry* e, char* buf, size_t buf_size)
     strncat(buf, e->name, buf_size - strlen(buf) - 1);
 }
 
-void timer_export_csv(const char *fname)
+void timer_export_csv(FILE *fd)
 {
-    if (!fname) return;
-    FILE *f = (strcmp(fname, "stdout") == 0) ? stdout : fopen(fname, "w+");
-    if (!f) ERROR("Could not open file %s for csv export: %s", fname, strerror(errno));
+    if (!fd) return;
 
     // +1 for / (slashes)
     char path[(TIMER_MAX_NAME_LEN+1)*TIMER_MAX_STACK_DEPTH];
 
-    if (f == stdout) fprintf(f, "\n--- CSV_OUTPUT_BEGIN ---\n");
-    fprintf(f, "name,parent,avg(s),total(s),min(s),max(s),calls,flops,gflop/s,l3_local,l3_remote,bytes_loaded,arith_intensity\n");
+    if (fd == stdout) fprintf(fd, "\n--- CSV_OUTPUT_BEGIN ---\n");
+    fprintf(fd, "name,parent,avg(s),total(s),min(s),max(s),calls,flops,gflop/s,l3_local,l3_remote,bytes_loaded,arith_intensity\n");
 
     for (size_t i = 0; i < reg.capacity; i++) {
         if (reg.entries[i].name != NULL && reg.entries[i].count > 0) {
@@ -428,24 +426,24 @@ void timer_export_csv(const char *fname)
             if (e->parent) build_path(e->parent, path, NOB_ARRAY_LEN(path));
 
             double avg = e->total_time / e->count;
-            fprintf(f, "%s,%s,%f,%f,%f,%f,%zu",
+            fprintf(fd, "%s,%s,%f,%f,%f,%f,%zu",
                     e->name, path, avg, e->total_time, e->min_time, e->max_time, e->count);
 
             if (e->flops > 0 || e->bytes_loaded > 0)
             {
                 double gflops = (e->min_time > 0) ? (e->flops / e->min_time) / 1e9 : 0;
                 double ai = (e->bytes_loaded > 0) ? e->flops / (double)e->bytes_loaded : 0;
-                fprintf(f, ",%lu,%.2f,%lu,%lu,%lu,%.2f",
+                fprintf(fd, ",%lu,%.2f,%lu,%lu,%lu,%.2f",
                         e->flops, gflops,
                         e->l3_local,
                         e->l3_remote,
                         e->bytes_loaded, ai);
             } else {
-                fprintf(f, ",,,,,,");
+                fprintf(fd, ",,,,,,");
             }
-            fprintf(f, "\n");
+            fprintf(fd, "\n");
         }
     }
 
-    if (f == stdout) fprintf(f, "--- CSV_OUTPUT_END ---\n");
+    if (fd == stdout) fprintf(fd, "--- CSV_OUTPUT_END ---\n");
 }

@@ -48,6 +48,6 @@ void timer_reset(void);
 void timer_record_counters(const char* name, uint64_t flops, uint64_t l3_local, uint64_t l3_remote, uint64_t bytes_loaded);
 double timer_get_time(const char* name, enum TimerMetric metric);
 void timer_print(void);
-void timer_export_csv(const char *fname);
+void timer_export_csv(FILE *fd);
 
 #endif // TIMER_H

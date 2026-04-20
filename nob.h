@@ -871,24 +871,68 @@ NOBDEF void nob__go_rebuild_urself(int argc, char **argv, const char *source_pat
 static size_t nob_temp_size = 0;
 static char nob_temp[NOB_TEMP_CAPACITY] = {0};
 
-NOBDEF bool nob_mkdir_if_not_exists(const char *path)
+NOBDEF char *nob_expand_path(const char *path)
 {
-#ifdef _WIN32
-    int result = _mkdir(path);
-#else
-    int result = mkdir(path, 0755);
-#endif
-    if (result < 0) {
-        if (errno == EEXIST) {
-            nob_log(NOB_INFO, "directory `%s` already exists", path);
-            return true;
+    if (path == NULL || path[0] == '\0') return NULL;
+
+    Nob_String_Builder sb = {0};
+
+    for (size_t i = 0; path[i]; )
+    {
+        if (i == 0 && path[i] == '~' && (path[1] == '/' || path[1] == '\0'))
+        {
+            const char *home = getenv("HOME");
+            if (home) nob_sb_append_cstr(&sb, home);
+            else      nob_da_append(&sb, '~');
+            i++;
         }
-        nob_log(NOB_ERROR, "could not create directory `%s`: %s", path, strerror(errno));
-        return false;
+        else if (path[i] == '$')
+        {
+            i++;
+            bool braced = (path[i] == '{');
+            if (braced) i++;
+            size_t start = i;
+            while (path[i] && (isalnum(path[i]) || path[i] == '_')) i++;
+            if (braced && path[i] == '}') i++;
+            size_t len = braced ? i - start - 1 : i - start;
+            char *name = malloc(len);
+            memcpy(name, path + start, len);
+            name[len] = '\0';
+            const char *val = getenv(name);
+            if (val) nob_sb_append_cstr(&sb, val);
+            free(name);
+        }
+        else
+        {
+            nob_da_append(&sb, path[i]);
+            i++;
+        }
     }
 
-    nob_log(NOB_INFO, "created directory `%s`", path);
-    return true;
+    nob_sb_append_null(&sb);
+    return sb.items;
+}
+
+NOBDEF bool nob_mkdir_if_not_exists(const char *path)
+{
+    bool success = false;
+
+    char *real_path = nob_expand_path(path);
+    int result = mkdir(real_path, 0755);
+    if (result < 0) {
+        if (errno == EEXIST) {
+            nob_log(NOB_INFO, "directory `%s` already exists", real_path);
+            goto exit;
+        }
+        nob_log(NOB_ERROR, "could not create directory `%s`: %s", real_path, strerror(errno));
+        goto exit;
+    }
+
+    nob_log(NOB_INFO, "created directory `%s`", real_path);
+    success = true;
+exit:
+    free(real_path);
+    return success;
 }
 
 NOBDEF bool nob_mkdir_recursive(const char *path)
@@ -901,15 +945,16 @@ NOBDEF bool nob_mkdir_recursive(const char *path)
         return false;
     }
 
+    char *real_path = nob_expand_path(path);
     struct stat st;
-    bool already_exists = (stat(path, &st) == 0 && S_ISDIR(st.st_mode));
+    bool already_exists = (stat(real_path, &st) == 0 && S_ISDIR(st.st_mode));
     if (already_exists) return true;
 
-    Nob_String_View sv = nob_sv_from_cstr(path);
+    Nob_String_View sv = nob_sv_from_cstr(real_path);
     Nob_String_Builder sb = {0};
 
-    // For absolute paths
-    if (path[0] == '/') nob_sb_append_cstr(&sb, "/");
+    // For absolute real paths
+    if (real_path[0] == '/') nob_sb_append_cstr(&sb, "/");
 
     while (sv.count > 0)
     {
@@ -932,12 +977,13 @@ NOBDEF bool nob_mkdir_recursive(const char *path)
 
     if (!already_exists)
     {
-        nob_log(NOB_INFO, "Created directory %s", path);
+        nob_log(NOB_INFO, "Created directory %s", real_path);
     }
 
     success = true;
 
 exit:
+    free(real_path);
     nob_sb_free(sb);
     return success;
 }
@@ -2327,6 +2373,7 @@ NOBDEF int closedir(DIR *dirp)
         #define FILE_SYMLINK NOB_FILE_SYMLINK
         #define FILE_OTHER NOB_FILE_OTHER
         #define File_Type Nob_File_Type
+        #define expand_path nob_expand_path
         #define mkdir_if_not_exists nob_mkdir_if_not_exists
         #define mkdir_recursive nob_mkdir_recursive
         #define copy_file nob_copy_file
@@ -2419,6 +2466,8 @@ NOBDEF int closedir(DIR *dirp)
 
 /*
    My additions:
+   (2026-04-20)
+       - Add nob_expand_path()
    (2026-04-14)
        - Add nob_mkdir_recursive()
        - Add nob_path_join_temp()
