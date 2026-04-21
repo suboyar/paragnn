@@ -5,6 +5,7 @@
 #include "dataset.h"
 #include "timer.h"
 
+#if 0
 static inline void fill_xavier_uniform(Real *x, int64_t in, int64_t out)
 {
     const Real limit = real_sqrt(REAL(6.0) / (in + out));
@@ -18,6 +19,21 @@ static inline void fill_xavier_uniform(Real *x, int64_t in, int64_t out)
         x[i] = limit * (REAL(2.0) * REAL(rand()) * recip_rand_max - REAL(1.0));
     }
 }
+#else
+static inline void fill_xavier_uniform(Real *x, int64_t in, int64_t out)
+{
+    const double limit = sqrt(6.0 / (in + out));
+    const double recip_rand_max = 1.0 / RAND_MAX;
+
+    // OpenMP can't be used here as rand() isn't thread-safe, variants that might
+    // be of interest are srand48_r or random_r. This can be looked more closely if this
+    // function ever takes more too much time.
+    for (int64_t i = 0; i < in * out; i++)
+    {
+        x[i] = (float)(limit * (2.0 * rand() * recip_rand_max - 1.0));
+    }
+}
+#endif
 
 // SAGE LAYER
 

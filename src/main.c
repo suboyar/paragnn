@@ -17,7 +17,8 @@
 #include "dataset_info.h"
 #include "timer.h"
 #include "layers.h"
-#include "gnn.h"
+#include "nn.h"
+#include "sageconv.h"
 #include "dataset.h"
 #include "optim.h"
 
@@ -47,20 +48,23 @@ static char        *datadir     = NULL; // Set in main, since it might need to b
 
 void print_config(void)
 {
-    const char *partition = getenv("SLURM_JOB_PARTITION");
-    const int omp_threads = omp_get_max_threads();
-
-    printf("Real precision: %s\n", sizeof(Real) == sizeof(double) ? "DP" : "SP");
-    printf("Config: epochs=%zu, lr=%g, layers=%zu, hidden=%zu, data=%s\n",
-           epochs, lr, layers, channels, ds_infos[dataset].name);
-#if defined(USE_CBLAS)
-    printf("Runtime: threads(OMP=%d, BLAS=%d), partition=%s\n",
-           omp_threads, openblas_get_num_threads(), partition);
-    printf("OpenBLAS: %s\n", openblas_get_config());
+#if defined(SAGECONV_NAIVE_IMPL)
+    const char *impl = "naive";
+#elif defined(SAGECONV_BLAS_IMPL)
+    const char *impl = "blas";
 #else
-    printf("Runtime: threads(OMP=%d, BLAS=off), partition=%s\n",
-           omp_threads, partition);
+    const char *impl = "tuned";
 #endif
+
+    printf("impl=%s prec=%s epochs=%zu lr=%g layers=%zu hidden=%zu data=%s "
+           "omp=%d blas=%d partition=%s\n"
+           "openblas: %s\n",
+           impl,
+           sizeof(Real) == sizeof(double) ? "dp" : "sp",
+           epochs, lr, layers, channels, ds_infos[dataset].name,
+           omp_get_max_threads(), openblas_get_num_threads(),
+           getenv("SLURM_JOB_PARTITION"),
+           openblas_get_config());
 }
 
 // TODO: Check out getrusage from <sys/resource.h>

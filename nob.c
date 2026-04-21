@@ -36,6 +36,18 @@ typedef struct {
     size_t capacity;
 } Strings;
 
+typedef enum {
+    NAIVE_IMPL,
+    BLAS_IMPL,
+    TUNED_IMPL,
+} Impl;
+
+// Default flag values
+#define DEFAULT_DATASET "arxiv"
+#define DEFAULT_TARGET  "paragnn"
+#define DEFAULT_DATADIR "~/D1/paragnn-dataset"
+#define DEFAULT_IMPL    BLAS_IMPL // TODO: change to tuned
+
 typedef struct {
     char*   target;
     bool    release;
@@ -46,6 +58,7 @@ typedef struct {
     bool    asm_output;
     char*   out_dir;
     Strings macros;
+    Impl impl;
 
     bool    run;
     bool    slurm;
@@ -65,15 +78,16 @@ typedef struct {
 
 enum {
     // w/ shorthands
-    OPT_TARGET = 't',
+    OPT_TARGET  = 't',
     OPT_RELEASE = 'r',
-    OPT_DEBUG = 'g',
-    OPT_OUTDIR = 'o',
-    OPT_ASAN = 'a',
-    OPT_ASM = 'S',
-    OPT_HELP = 'h',
+    OPT_DEBUG   = 'g',
+    OPT_OUTDIR  = 'o',
+    OPT_ASAN    = 'a',
+    OPT_ASM     = 'S',
+    OPT_IMPL    = 'i',
+    OPT_HELP    = 'h',
     // w/o shorthands
-    OPT_OMP_OFF = 256,  // above ASCII
+    OPT_OMP_OFF = 256,          // above ASCII
     OPT_DBL,
     OPT_MACRO,
     OPT_RUN,
@@ -93,9 +107,10 @@ static struct option long_options[] = {
     {"asan",    no_argument,       NULL, OPT_ASAN},
     {"omp-off", no_argument,       NULL, OPT_OMP_OFF},
     {"S",       no_argument,       NULL, OPT_ASM},
-    {"double", no_argument,       NULL, OPT_DBL},
+    {"double",  no_argument,       NULL, OPT_DBL},
     {"o",       required_argument, NULL, OPT_OUTDIR},
     {"D",       required_argument, NULL, OPT_MACRO},
+    {"impl",    required_argument, NULL, OPT_IMPL},
     {"run",     no_argument,       NULL, OPT_RUN},
     {"slurm",   no_argument,       NULL, OPT_SLURM},
     {"p",       required_argument, NULL, OPT_PARTITION},
@@ -169,8 +184,8 @@ Target targets[] = {
         .srcs = STRS_STATIC(
             SRC_FOLDER"main.c",
             SRC_FOLDER"core.c",
-            SRC_FOLDER"gnn.c",
-            SRC_FOLDER"gnn_naive.c",
+            SRC_FOLDER"nn.c",
+            SRC_FOLDER"sageconv.c",
             SRC_FOLDER"matmul_naive.c",
             SRC_FOLDER"dataset.c",
             SRC_FOLDER"dataset_info.c",
@@ -250,7 +265,7 @@ typedef enum {
     LINKING,
 } BuildPhase;
 
-void append_common_flags(BuildPhase phase)
+void append_common_flags(Target* t, BuildPhase phase)
 {
     nob_cc_flags(&cmd);
     nob_cc_error_flags(&cmd);
@@ -259,6 +274,13 @@ void append_common_flags(BuildPhase phase)
     if (flags.debug)
     {
         nob_cmd_append(&cmd, "-ggdb", "-g3", "-gdwarf-2");
+    }
+
+    if (strcmp("paragnn", t->name) == 0)
+    {
+        if (flags.impl == NAIVE_IMPL) nob_cmd_append(&cmd, "-DSAGECONV_NAIVE_IMPL");
+        if (flags.impl == BLAS_IMPL)  nob_cmd_append(&cmd, "-DSAGECONV_BLAS_IMPL");
+        if (flags.impl == TUNED_IMPL) nob_cmd_append(&cmd, "-DSAGECONV_TUNED_IMPL");
     }
 
     if (flags.use_dbl)
@@ -329,7 +351,7 @@ int build(const char *target_str, bool run)
         dst_paths[i] = dst;
 
         nob_cc(&cmd);
-        append_common_flags(COMPILING);
+        append_common_flags(t, COMPILING);
         if (cpu_vendor != CPU_UNKNOWN)
         {
             nob_cmd_append(&cmd, nob_temp_sprintf("-D%s", arch_macro_name[cpu_vendor]));
@@ -387,7 +409,7 @@ int build(const char *target_str, bool run)
     // Link
     printf("[>>>] Linking\n");
     nob_cc(&cmd);
-    append_common_flags(LINKING);
+    append_common_flags(t, LINKING);
     nob_cmd_append(&cmd, "-fopenmp");
 
     nob_cc_output(&cmd, exec_path);
@@ -832,12 +854,13 @@ int main(int argc, char** argv)
     int rc;
 
     // Defaults
-    flags.target  = "paragnn";
-    flags.dataset = "arxiv";
-    flags.datadir = "~/D1/paragnn-dataset";
+    flags.target  = DEFAULT_TARGET;
+    flags.dataset = DEFAULT_DATASET;
+    flags.datadir = DEFAULT_DATADIR;
+    flags.impl    = DEFAULT_IMPL;
 
     int opt;
-    while ((opt = getopt_long_only(argc, argv, "t:o:rgaSh", long_options, NULL)) != -1)
+    while ((opt = getopt_long_only(argc, argv, "t:o:rgaSi:h", long_options, NULL)) != -1)
     {
         switch (opt)
         {
@@ -845,6 +868,20 @@ int main(int argc, char** argv)
         case OPT_RELEASE:   flags.release    = true;   break;
         case OPT_DEBUG:     flags.debug      = true;   break;
         case OPT_ASAN:      flags.asan       = true;   break;
+        case OPT_IMPL:
+        {
+            if      (strcmp("naive", optarg)  == 0) flags.impl = NAIVE_IMPL;
+            else if (strcmp("blas", optarg)   == 0) flags.impl = BLAS_IMPL;
+            else if (strcmp("tunded", optarg) == 0) flags.impl = TUNED_IMPL;
+            else
+            {
+                nob_log(NOB_ERROR, "Invalid implentation was given: %s", optarg);
+                usage(argv[0]);
+                rc = ERR;
+                goto exit;
+            }
+            break;
+        }
         case OPT_OMP_OFF:   flags.omp_off    = true;   break;
         case OPT_ASM:       flags.asm_output = true;   break;
         case OPT_DBL:       flags.use_dbl    = true;   break;
