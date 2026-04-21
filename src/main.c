@@ -40,6 +40,7 @@ static Real         lr          = DEFAULT_LR;
 static EdgeFormat   edge_format = EDGE_COMPRESSED;
 static bool         quick       = false;
 static bool         early_stop  = false;
+static bool         loss_track  = false;
 static FILE        *csv_fd      = NULL; // Set in main, since stdout ins't compile-time constant
 static DatasetKind  dataset     = DATASET_ARXIV;
 static char        *datadir     = NULL; // Set in main, since it might need to be expanded
@@ -199,7 +200,8 @@ enum {
     OPT_CSV,
     OPT_COO,
     OPT_QUICK,
-    OPT_EARLY_STOP,
+    OPT_EARLYSTOP,
+    OPT_LOSSTRACK,
 };
 
 static struct option long_options[] = {
@@ -212,28 +214,30 @@ static struct option long_options[] = {
     {"csv",        required_argument, NULL, OPT_CSV},
     {"coo",        no_argument,       NULL, OPT_COO},
     {"quick",      no_argument,       NULL, OPT_QUICK},
-    {"early_stop", no_argument,       NULL, OPT_EARLY_STOP},
+    {"earlystop",  no_argument,       NULL, OPT_EARLYSTOP},
+    {"losstrack",  no_argument,       NULL, OPT_LOSSTRACK},
     {0,            0,                 0,    0}
 };
 
 void usage(const char *progname)
 {
     fprintf(stderr,
-        "Usage: %s [OPTIONS]\n"
-        "\n"
-        "OPTIONS:\n"
-        "  --epochs N       Number of epochs        [" STRINGIFY(DEFAULT_EPOCHS) "]\n"
-        "  --layers N       Number of layers        [" STRINGIFY(DEFAULT_LAYERS) "]\n"
-        "  --channels N     Number of channels      [" STRINGIFY(DEFAULT_CHANNELS) "]\n"
-        "  --lr F           Learning rate           [" STRINGIFY(DEFAULT_LR) "]\n"
-        "  --dataset NAME   Dataset name            [" DEFAULT_DATASET "]\n"
-        "  --datadir PATH   Dataset directory       [" DEFAULT_DATADIR "]\n"
-        "  --csv FILE       CSV output (stdout/stderr/path) [" DEFAULT_CSV "]\n"
-        "  --coo            Use COO edge format     [off]\n"
-        "  --quick          Quick mode              [off]\n"
-        "  --early_stop     Enable early stopping   [off]\n"
-        "  -h, --help       Show this help\n",
-        progname);
+            "Usage: %s [OPTIONS]\n"
+            "\n"
+            "OPTIONS:\n"
+            "  -epochs N       Number of epochs                [" STRINGIFY(DEFAULT_EPOCHS) "]\n"
+            "  -layers N       Number of layers                [" STRINGIFY(DEFAULT_LAYERS) "]\n"
+            "  -channels N     Number of channels              [" STRINGIFY(DEFAULT_CHANNELS) "]\n"
+            "  -lr F           Learning rate                   [" STRINGIFY(DEFAULT_LR) "]\n"
+            "  -dataset NAME   Dataset name                    [" DEFAULT_DATASET "]\n"
+            "  -datadir PATH   Dataset directory               [" DEFAULT_DATADIR "]\n"
+            "  -csv FILE       CSV output (stdout/stderr/path) [" DEFAULT_CSV "]\n"
+            "  -coo            Use COO edge format             [off]\n"
+            "  -quick          Quick mode                      [off]\n"
+            "  -earlystop      Enable early stopping           [off]\n"
+            "  -losstrack      Track loss of each epoch        [off]\n"
+            "  -h, -help       Show this help\n",
+            progname);
 }
 
 int main(int argc, char** argv)
@@ -285,7 +289,8 @@ int main(int argc, char** argv)
             break;
         }
         case OPT_QUICK:      quick       = true;     break;
-        case OPT_EARLY_STOP: early_stop  = true;     break;
+        case OPT_EARLYSTOP:  early_stop  = true;     break;
+        case OPT_LOSSTRACK:  loss_track  = true;     break;
         case OPT_COO:        edge_format = EDGE_COO; break;
         case OPT_HELP:
             usage(argv[0]);
@@ -355,6 +360,12 @@ int main(int argc, char** argv)
 
     timer_enable();
     Real old_loss = REAL_MAX;
+    Real *loss_hist = NULL;
+    size_t loss_hist_len = 0;
+    if (loss_track)
+    {
+        loss_hist = malloc(epochs * sizeof(*loss_hist));
+    }
     for (size_t epoch = 1; epoch <= epochs; epoch++)
     {
         TIMER_BLOCK("epoch", {
@@ -365,6 +376,10 @@ int main(int argc, char** argv)
                     printf("Early stopping at epoch %zu/%zu: loss increased (%.6f -> %.6f)\n",
                            epoch, epochs, old_loss, loss);
                     break;
+                }
+                if (loss_track)
+                {
+                    loss_hist[loss_hist_len++] = loss;
                 }
                 old_loss = loss;
                 Real train_acc = accuracy(log_prob_layer, ds_train->labels);
@@ -390,6 +405,14 @@ int main(int argc, char** argv)
 
     timer_print();
     timer_export_csv(csv_fd);
+    if (loss_track)
+    {
+        printf("Loss history:\n");
+        for (size_t i = 0; i < loss_hist_len; i++)
+        {
+            printf("%f%s", loss_hist[i], i < loss_hist_len-1 ? "," : "\n");
+        }
+    }
 
     optim_free(&optim, optim_kind);
     sage_net_free(&net);
