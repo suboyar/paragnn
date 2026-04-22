@@ -7,7 +7,6 @@
 #include "core.h"
 #include "dataset_info.h"
 #include "edges.h"
-#include "flow.h"
 
 typedef enum {
     SPLIT_TRAIN,
@@ -26,9 +25,8 @@ typedef struct {
     Edges    edges;
 } Dataset;
 
-EdgeFormat parse_edge_format(const char* str);
-Dataset* dataset_load(DatasetKind dataset, char const* data_dir, EdgeFormat format, bool to_symmetric, FlowDirection flow);
-Dataset *dataset_split(Dataset *base, Split split, FlowDirection flow);
+Dataset* dataset_load(DatasetKind dataset, char const *data_dir, EdgeFormat format);
+Dataset* dataset_split(Dataset *base, Split split);
 void dataset_free(Dataset **ds);
 
 #endif // DATASET_H_

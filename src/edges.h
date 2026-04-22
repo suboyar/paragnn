@@ -7,29 +7,36 @@
 
 typedef enum {
     EDGE_COO,
-    EDGE_COMPRESSED,
+    EDGE_CSX,
 } EdgeFormat;
 
 typedef struct {
     EdgeFormat format;
-    union {
-        struct { // EDGE_COO
-            int64_t *src;
-            int64_t *dst;
-        };
-        // EDGE_COMPRESSED orientation is determined by SageLayer.flow:
-        //   SOURCE_TO_TARGET: ptr groups by target, idx = sources (CSC-like)
-        //   TARGET_TO_SOURCE: ptr groups by source, idx = targets (CSR-like)
-        struct { // EDGE_COMPRESSED
-            int64_t *ptr;  // [num_nodes + 1]
-            int64_t *idx;  // [num_edges]
-        };
-    };
+
+    // COO
+    int64_t *src;
+    int64_t *dst;
+
+    // Orientation SageLayer.flow determens how they are used:
+    //   SOURCE_TO_TARGET:
+    //     Forward CSC: ptr_csc[target] -> sources
+    //     Backward CSR: ptr_csr[source] -> targets
+    //   TARGET_TO_SOURCE:
+    //     Forward CSR: ptr_csr[source] -> targets
+    //     Backward CSC: ptr_csc[target] -> sources
+
+    // CSR + CSC
+    int64_t *ptr_csr;  // [num_nodes + 1]
+    int64_t *idx_csr;  // [num_edges]
+    int64_t *ptr_csc;  // [num_nodes + 1]
+    int64_t *idx_csc;  // [num_edges]
+
     uint8_t *self_loop; // O(1) lookup for node self-loops, NULL if none exist
     // Which degree (inward or outward) this holds is determined by SageLayer.flow:
-    //   SOURCE_TO_TARGET: inv_degree[v] = 1/deg_in(v)
-    //   TARGET_TO_SOURCE: inv_degree[v] = 1/deg_out(v)
-    Real    *inv_degree;
+    //   SOURCE_TO_TARGET: inv_in_degree[v] = 1/deg_in(v)
+    //   TARGET_TO_SOURCE: inv_out_degree[v] = 1/deg_out(v)
+    Real    *inv_in_degree;
+    Real    *inv_out_degree;
 
     // Statistics
     float avg_self_loop;

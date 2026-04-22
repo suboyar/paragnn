@@ -26,7 +26,7 @@ static const char *split_name[] = {
 EdgeFormat parse_edge_format(const char* str)
 {
     if (strcmp(str, "coo") == 0)        return EDGE_COO;
-    if (strcmp(str, "compressed") == 0) return EDGE_COMPRESSED;
+    if (strcmp(str, "compressed") == 0) return EDGE_CSX;
     ERROR("Not a valid edge format: %s", str);
 }
 
@@ -97,7 +97,7 @@ static int64_t *load_labels(const char *file)
     struct stat sb;
     fstat(fd, &sb);
     int64_t* data = mmap(NULL, sb.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
-    int64_t count =  sb.st_size / sizeof(*data);
+    size_t count =  sb.st_size / sizeof(*data);
     int64_t *labels = cache_aligned_alloc(sb.st_size);
 #pragma omp parallel for
     for (size_t i = 0; i < count; i++)
@@ -130,7 +130,7 @@ static RawEdges load_edges(const char *file)
     int64_t *v = cache_aligned_alloc(count * sizeof(*v));
 
 #pragma omp parallel for
-    for (size_t i = 0; i < count; i++)
+    for (int64_t i = 0; i < count; i++)
     {
         u[i] = data[2*i];
         v[i] = data[2*i+1];
@@ -189,23 +189,52 @@ static void symmetrize_edges(RawEdges *raw)
     free(packed);
 }
 
-static uint8_t *detect_self_loops(RawEdges raw_edges, int64_t num_nodes)
+static uint8_t *detect_self_loops_coo(const int64_t *restrict nodes, const int64_t *restrict peers, int64_t num_nodes, int64_t num_edges)
 {
     uint8_t *self_loop = cache_aligned_alloc(num_nodes * sizeof(*self_loop));
+
 #pragma omp parallel for
-    for (size_t i = 0; i < num_nodes; i++)
+    for (int64_t i = 0; i < num_nodes; i++)
     {
         self_loop[i] = 0;
     }
 
     int64_t self_loop_count = 0;
 #pragma omp parallel for
-    for (size_t i = 0; i < raw_edges.count; i++)
+    for (int64_t i = 0; i < num_edges; i++)
     {
-        if (raw_edges.u[i] == raw_edges.v[i])
+        if (nodes[i] == peers[i])
         {
-            self_loop[raw_edges.u[i]] = 1;
+            self_loop[nodes[i]] = 1;
             self_loop_count++;
+        }
+    }
+
+    if (self_loop_count == 0)
+    {
+        free(self_loop);
+        self_loop = NULL;
+    }
+
+    return self_loop;
+}
+
+static uint8_t *detect_self_loops_crx(int64_t *ptr, int64_t *idx, int64_t num_nodes)
+{
+    uint8_t *self_loop = cache_aligned_alloc(num_nodes * sizeof(*self_loop));
+    int64_t self_loop_count = 0;
+#pragma omp parallel for
+    for (int64_t i = 0; i < num_nodes; i++)
+    {
+        self_loop[i] = 0;
+        for (int64_t j = ptr[i]; j < ptr[i+1]; j++)
+        {
+            if (idx[j] == i)
+            {
+                self_loop[i] = 1;
+                self_loop_count++;
+                break;
+            }
         }
     }
 
@@ -223,40 +252,38 @@ typedef enum {
     OUT_DEGREE,
 } DegreeKind;
 
-static Real *get_inv_degree(RawEdges raw_edges, int64_t num_nodes, DegreeKind degree_kind)
+static Real *get_inv_degree_coo(const int64_t *restrict nodes, const int64_t *restrict peers,
+                                int64_t num_nodes, int64_t num_edges, DegreeKind degree_kind)
 {
     Real *inv_degree = cache_aligned_alloc(num_nodes * sizeof(*inv_degree));
     int64_t *degree_count = cache_aligned_alloc(num_nodes * sizeof(*degree_count));
 
 #pragma omp parallel for
-    for (size_t i = 0; i < num_nodes; i++)
+    for (int64_t i = 0; i < num_nodes; i++)
     {
         degree_count[i] = 0;
+        inv_degree[i] = 0;
     }
 
-    int64_t *endpoints = NULL;
+    const int64_t *endpoints = NULL;
     if (degree_kind == IN_DEGREE)
     {
-        endpoints = raw_edges.u;
+        endpoints = peers;
     }
-    else if (degree_kind == OUT_DEGREE)
+    else // degree_kind == OUT_DEGREE
     {
-        endpoints = raw_edges.v;
-    }
-    else
-    {
-        ERROR("Missing DegreeKind");
+        endpoints = nodes;
     }
 
 #pragma omp parallel for
-    for (size_t i = 0; i < raw_edges.count; i++)
+    for (int64_t i = 0; i < num_edges; i++)
     {
         #pragma omp atomic
         degree_count[endpoints[i]] += 1;
     }
 
 #pragma omp parallel for
-    for (size_t i = 0; i < num_nodes; i++)
+    for (int64_t i = 0; i < num_nodes; i++)
     {
         inv_degree[i] = REAL(1.0) / degree_count[i];
     }
@@ -265,13 +292,79 @@ static Real *get_inv_degree(RawEdges raw_edges, int64_t num_nodes, DegreeKind de
     return inv_degree;
 }
 
+static Real *get_inv_degree_crx(int64_t *ptr, int64_t num_nodes)
+{
+    Real *inv_degree = cache_aligned_alloc(num_nodes * sizeof(*inv_degree));
 
-Dataset* dataset_load(DatasetKind dataset, char const* datadir, EdgeFormat format, bool to_symmetric, FlowDirection flow)
+#pragma omp parallel for
+    for (int64_t i = 0; i < num_nodes; i++)
+    {
+        inv_degree[i] = REAL(1.0) / (ptr[i+1] - ptr[i]);
+    }
+
+    return inv_degree;
+}
+
+enum CSX_TYPE {CSR, CSC};
+
+static void raw2crx(int64_t **ptr, int64_t **idx, RawEdges raw_edges, int64_t num_nodes, int64_t num_edges, enum CSX_TYPE csx_type)
+{
+    *ptr = cache_aligned_alloc((num_nodes+1) * sizeof(**ptr));
+    // NUMA first touch
+#pragma omp parallel for
+    for (int64_t i = 0; i < (num_nodes+1); i++)
+    {
+        (*ptr)[i] = 0;
+    }
+    *idx = malloc(num_edges * sizeof(**idx));
+#pragma omp parallel for
+    for (int64_t i = 0; i < num_edges; i++)
+    {
+        (*idx)[i] = 0;
+    }
+
+    int64_t *pos = malloc(num_nodes * sizeof(*pos));
+    int64_t *major, *minor;
+
+    if (csx_type == CSR)
+    {
+        major = raw_edges.u;
+        minor = raw_edges.v;
+    }
+    else  // csx_type == CSC
+    {
+        major = raw_edges.v;
+        minor = raw_edges.u;
+    }
+
+    for (int64_t i = 0; i < num_edges; i++)
+    {
+        (*ptr)[major[i]+1]++;
+    }
+
+    for(int64_t i = 1; i < (num_nodes+1); i++)
+    {
+        (*ptr)[i] += (*ptr)[i-1];
+    }
+
+    for (int64_t i = 0; i < num_nodes; i++)
+    {
+        pos[i] = (*ptr)[i];
+    }
+
+    for (int64_t i = 0; i < num_edges; i++)
+    {
+        (*idx)[pos[major[i]]++] = minor[i];
+    }
+
+    free(pos);
+}
+
+Dataset* dataset_load(DatasetKind dataset, char const* datadir, EdgeFormat format)
 {
     double t = omp_get_wtime();
 
-    // DatasetKind datatset_kind = str_to_dataset_kind(dataset);
-    // if (datatset_kind == DATASET_INVALID) ERROR("Given dataset is not valid: %s", dataset);
+    if (dataset == DATASET_INVALID) ERROR("Given dataset kind is not valid: %d", dataset);
 
     // Equvalent of whats in nob.c
     DatasetInfo ds_info = ds_infos[dataset];
@@ -287,10 +380,17 @@ Dataset* dataset_load(DatasetKind dataset, char const* datadir, EdgeFormat forma
 
     Dataset *ds = malloc(sizeof(*ds));
     ds->path = malloc(strlen(ds_path)+1); strcpy(ds->path, ds_path);
-    ds->num_nodes = ds_info.num_nodes;
-    ds->num_features = ds_info.num_features;
-    ds->num_classes = ds_info.num_classes;
-    ds->num_edges = ds_info.num_edges;
+    ds->num_nodes     = ds_info.num_nodes;
+    ds->num_features  = ds_info.num_features;
+    ds->num_classes   = ds_info.num_classes;
+    ds->num_edges     = ds_info.num_edges;
+    ds->edges.format = format;
+    ds->edges.src     = NULL;
+    ds->edges.dst     = NULL;
+    ds->edges.ptr_csc = NULL;
+    ds->edges.idx_csc = NULL;
+    ds->edges.ptr_csr = NULL;
+    ds->edges.idx_csr = NULL;
 
     char bin_path[256];
 
@@ -298,43 +398,40 @@ Dataset* dataset_load(DatasetKind dataset, char const* datadir, EdgeFormat forma
     double t_e = omp_get_wtime();
     path_join(bin_path, sizeof(bin_path), proc_path, "edge.bin");
     RawEdges raw_edges = load_edges(bin_path);
-
-    ds->edges.self_loop = detect_self_loops(raw_edges, ds->num_nodes);
-    if (flow == SOURCE_TO_TARGET)
-    {
-        ds->edges.inv_degree = get_inv_degree(raw_edges, ds->num_nodes, IN_DEGREE);
-    }
-    else if (flow == TARGET_TO_SOURCE)
-    {
-        ds->edges.inv_degree = get_inv_degree(raw_edges, ds->num_nodes, OUT_DEGREE);
-    }
-
-    if (to_symmetric || ds_info.undirected)
+    if (ds_info.directed)
     {
         symmetrize_edges(&raw_edges);
-        ds->num_edges = raw_edges.count;
     }
+    ds->num_edges = raw_edges.count;
 
-    ds->edges.format = format;
     switch(format)
     {
     case EDGE_COO:
+    {
         ds->edges.src = cache_aligned_alloc(ds->num_edges*sizeof(*ds->edges.src));
         ds->edges.dst = cache_aligned_alloc(ds->num_edges*sizeof(*ds->edges.dst));
         if (!ds->edges.src || !ds->edges.dst) ERROR("Could not allocate COO edges");
         // First touch
 #pragma omp parallel for
-        for (size_t i = 0; i < raw_edges.count; i++)
+        for (int64_t i = 0; i < ds->num_edges; i++)
         {
             ds->edges.src[i] = raw_edges.u[i];
             ds->edges.dst[i] = raw_edges.v[i];
         }
+        ds->edges.self_loop = detect_self_loops_coo(ds->edges.src, ds->edges.dst, ds->num_nodes, ds->num_edges);
+        ds->edges.inv_in_degree  = get_inv_degree_coo(ds->edges.src, ds->edges.dst, ds->num_nodes, ds->num_edges, IN_DEGREE);
+        ds->edges.inv_out_degree = get_inv_degree_coo(ds->edges.src, ds->edges.dst, ds->num_nodes, ds->num_edges, OUT_DEGREE);
         break;
-    case EDGE_COMPRESSED:
-        TODO("Implement CSR convertion");
+    }
+    case EDGE_CSX:
+        raw2crx(&ds->edges.ptr_csc, &ds->edges.idx_csc, raw_edges, ds->num_nodes, ds->num_edges, CSC);
+        raw2crx(&ds->edges.ptr_csr, &ds->edges.idx_csr, raw_edges, ds->num_nodes, ds->num_edges, CSR);
+        ds->edges.self_loop = detect_self_loops_crx(ds->edges.ptr_csc, ds->edges.idx_csc, ds->num_nodes);
+        ds->edges.inv_in_degree = NULL;
+        ds->edges.inv_out_degree = NULL;
         break;
     default:
-        ERROR("Unknown edge format type %d", format);
+        ERROR("Invalid edge format type %d", format);
     }
     free(raw_edges.u);
     free(raw_edges.v);
@@ -352,7 +449,7 @@ Dataset* dataset_load(DatasetKind dataset, char const* datadir, EdgeFormat forma
 
     // Compute statistics
     ds->edges.avg_degree = (float)ds->num_edges / ds->num_nodes;
-    size_t self_loop_count = 0;
+    int64_t self_loop_count = 0;
     for (int64_t i = 0; ds->edges.self_loop && i < ds->num_nodes; i++)
     {
         if (ds->edges.self_loop[i]) self_loop_count++;
@@ -368,7 +465,85 @@ Dataset* dataset_load(DatasetKind dataset, char const* datadir, EdgeFormat forma
     return ds;
 }
 
-Dataset *dataset_split(Dataset *base, Split split, FlowDirection flow)
+void split_csx(Edges *edges, Edges base_edges, const int64_t *restrict node_map, int64_t num_nodes, int64_t base_num_nodes, enum CSX_TYPE csx_type)
+{
+    const int64_t *restrict base_ptr, *restrict base_idx;
+    if (csx_type == CSC)
+    {
+        base_ptr = base_edges.ptr_csc;
+        base_idx = base_edges.idx_csc;
+    }
+    else // csx_type == CSR
+    {
+        base_ptr = base_edges.ptr_csr;
+        base_idx = base_edges.idx_csr;
+    }
+
+    int64_t *restrict ptr, *restrict idx;
+    ptr = cache_aligned_alloc((num_nodes + 1) * sizeof(*ptr));
+    // For NUMA first touch
+#pragma omp parallel for
+    for (int64_t i = 0; i < num_nodes + 1; i++)
+    {
+        ptr[i] = 0;
+    }
+
+    for (int64_t i = 0; i < base_num_nodes; i++)
+    {
+        int64_t m = node_map[i];
+        if (m == INVALID_IDX) continue;
+        for (int64_t j =  base_ptr[i]; j < base_ptr[i+1]; j++)
+        {
+            if (node_map[base_idx[j]] != INVALID_IDX)
+            {
+                ptr[m + 1]++;
+            }
+        }
+    }
+
+    for (int64_t i = 1; i <= num_nodes; i++)
+    {
+        ptr[i] += ptr[i - 1];
+    }
+
+    int64_t num_edges = ptr[num_nodes];
+    int64_t *pos = malloc(num_nodes * sizeof(*pos));
+    memcpy(pos, ptr, num_nodes * sizeof(*pos));
+    idx = cache_aligned_alloc(num_edges * sizeof(*idx));
+    // For NUMA first touch
+#pragma omp parallel for
+    for (int64_t i = 0; i < num_edges; i++)
+    {
+        idx[i] = 0;
+    }
+
+    for (int64_t i = 0; i < base_num_nodes; i++)
+    {
+        int64_t m = node_map[i];
+        if (m == INVALID_IDX) continue;
+        for (int64_t j = base_ptr[i]; j < base_ptr[i+1]; j++)
+        {
+            int64_t n = node_map[base_idx[j]];
+            if (n == INVALID_IDX) continue;
+            idx[pos[m]++] = n;
+        }
+    }
+
+    if (csx_type == CSC)
+    {
+        edges->ptr_csc = ptr;
+        edges->idx_csc = idx;
+    }
+    else
+    {
+        edges->ptr_csr = ptr;
+        edges->idx_csr = idx;
+    }
+
+    free(pos);
+}
+
+Dataset *dataset_split(Dataset *base, Split split)
 {
     double t = omp_get_wtime();
     int64_t *split_idx, split_size;
@@ -407,11 +582,17 @@ Dataset *dataset_split(Dataset *base, Split split, FlowDirection flow)
     ds->num_classes  = base->num_classes;
     ds->num_nodes = split_size;
     ds->edges.format = base->edges.format;
+    ds->edges.src     = NULL;
+    ds->edges.dst     = NULL;
+    ds->edges.ptr_csc = NULL;
+    ds->edges.idx_csc = NULL;
+    ds->edges.ptr_csr = NULL;
+    ds->edges.idx_csr = NULL;
 
     // Gather features
     ds->nodes = cache_aligned_alloc(ds->num_nodes * ds->num_features * sizeof(*ds->nodes));
 #pragma omp parallel for
-    for (size_t i = 0; i < ds->num_nodes; i++) {
+    for (int64_t i = 0; i < ds->num_nodes; i++) {
         memcpy(&ds->nodes[i * ds->num_features],
                &base->nodes[split_idx[i] * ds->num_features],
                ds->num_features * sizeof(*ds->nodes));
@@ -426,52 +607,59 @@ Dataset *dataset_split(Dataset *base, Split split, FlowDirection flow)
     int64_t *node_map = cache_aligned_alloc(base->num_nodes * sizeof(*node_map));
     build_node_mapping(node_map, base->num_nodes, split_idx, ds->num_nodes);
 
-    // Count number of edges in the split
-    // We do this in two passes since realloc might break cache allignment
-    int64_t edge_count = 0;
-    for (int64_t i = 0; i < base->num_edges; i++)
+    ds->num_edges = 0;      // Counting happens in the switch statement
+    switch(ds->edges.format)
     {
-        int64_t src = node_map[base->edges.src[i]];
-        int64_t dst = node_map[base->edges.dst[i]];
-        if (src != INVALID_IDX && dst != INVALID_IDX)
+    case EDGE_COO:
+    {
+        // Count number of edges in the split
+        // We do this in two passes since realloc might break cache allignment
+        for (int64_t i = 0; i < base->num_edges; i++)
         {
-            edge_count++;
+            int64_t src = node_map[base->edges.src[i]];
+            int64_t dst = node_map[base->edges.dst[i]];
+            if (src != INVALID_IDX && dst != INVALID_IDX)
+            {
+                ds->num_edges++;
+            }
         }
-    }
-    ds->edges.src = cache_aligned_alloc(edge_count * sizeof(*ds->edges.src));
-    ds->edges.dst = cache_aligned_alloc(edge_count * sizeof(*ds->edges.dst));
-    int64_t edge_idx = 0;
-    for (int64_t i = 0; i < base->num_edges; i++)
-    {
-        int64_t src = node_map[base->edges.src[i]];
-        int64_t dst = node_map[base->edges.dst[i]];
-        if (src != INVALID_IDX && dst != INVALID_IDX)
+        int64_t ei = 0;
+        ds->edges.src = cache_aligned_alloc(ds->num_edges * sizeof(*ds->edges.src));
+        ds->edges.dst = cache_aligned_alloc(ds->num_edges * sizeof(*ds->edges.dst));
+        for (int64_t i = 0; i < base->num_edges; i++)
         {
-            ds->edges.src[edge_idx] = src;
-            ds->edges.dst[edge_idx] = dst;
-            edge_idx++;
+            int64_t src = node_map[base->edges.src[i]];
+            int64_t dst = node_map[base->edges.dst[i]];
+            if (src != INVALID_IDX && dst != INVALID_IDX)
+            {
+                ds->edges.src[ei] = src;
+                ds->edges.dst[ei] = dst;
+                ei++;
+            }
         }
-    }
-    ds->num_edges  = edge_count;
 
-    // Transfer base's self loop
-    RawEdges raw_edges = { .u = ds->edges.src, .v = ds->edges.dst, .count = edge_count };
-    ds->edges.self_loop = detect_self_loops(raw_edges, ds->num_nodes);
-    if (flow == SOURCE_TO_TARGET)
-    {
-        ds->edges.inv_degree = get_inv_degree(raw_edges, ds->num_nodes, IN_DEGREE);
+        ds->edges.self_loop = detect_self_loops_coo(ds->edges.src, ds->edges.dst, ds->num_nodes, ds->num_edges);
+        ds->edges.inv_in_degree = get_inv_degree_coo(ds->edges.src, ds->edges.dst, ds->num_nodes, ds->num_edges, IN_DEGREE);
+        ds->edges.inv_out_degree = get_inv_degree_coo(ds->edges.src, ds->edges.dst, ds->num_nodes, ds->num_edges, OUT_DEGREE);
+        break;
     }
-    else if (flow == TARGET_TO_SOURCE)
+    case EDGE_CSX:
     {
-        ds->edges.inv_degree = get_inv_degree(raw_edges, ds->num_nodes, OUT_DEGREE);
+        split_csx(&ds->edges, base->edges, node_map, ds->num_nodes, base->num_nodes, CSC);
+        split_csx(&ds->edges, base->edges, node_map, ds->num_nodes, base->num_nodes, CSR);
+        ds->num_edges = ds->edges.ptr_csc[ds->num_nodes];
+        ds->edges.self_loop = detect_self_loops_crx(ds->edges.ptr_csc, ds->edges.idx_csc, ds->num_nodes);
+        ds->edges.inv_in_degree = NULL;
+        ds->edges.inv_out_degree = NULL;
+        break;
     }
-
-    free(node_map);
-    free(split_idx);
+    default:
+        ERROR("Invalid edge format type %d", base->edges.format);
+    }
 
     // Compute statistics
-    ds->edges.avg_degree = (float)edge_count / ds->num_nodes;
-    size_t self_loop_count = 0;
+    ds->edges.avg_degree = (float)ds->num_edges / ds->num_nodes;
+    int64_t self_loop_count = 0;
     for (int64_t i = 0; ds->edges.self_loop && i < ds->num_nodes; i++)
     {
         if (ds->edges.self_loop[i]) self_loop_count++;
@@ -481,6 +669,8 @@ Dataset *dataset_split(Dataset *base, Split split, FlowDirection flow)
     printf("Split OGB-ARXIV [%s] in %.2fs (node count: %ld, edge count %ld, avg degree: %.2f, avg self loops: %.2f)\n",
            split_name[split], omp_get_wtime() - t, ds->num_nodes, ds->num_edges, ds->edges.avg_degree, ds->edges.avg_self_loop);
 
+    free(node_map);
+    free(split_idx);
     return ds;
 }
 
@@ -488,11 +678,20 @@ void dataset_free(Dataset **ds)
 {
     if (!(*ds)) return;
 
-    free((*ds)->edges.src); (*ds)->edges.src = NULL;
-    free((*ds)->edges.dst); (*ds)->edges.dst = NULL;
-    free((*ds)->path);      (*ds)->path      = NULL;
-    free((*ds)->nodes);     (*ds)->nodes     = NULL;
-    free((*ds)->labels);    (*ds)->labels    = NULL;
+    // Free edges
+    free((*ds)->edges.src);            (*ds)->edges.src            = NULL;
+    free((*ds)->edges.dst);            (*ds)->edges.dst            = NULL;
+    free((*ds)->edges.ptr_csc);        (*ds)->edges.ptr_csc        = NULL;
+    free((*ds)->edges.idx_csc);        (*ds)->edges.idx_csc        = NULL;
+    free((*ds)->edges.ptr_csr);        (*ds)->edges.ptr_csr        = NULL;
+    free((*ds)->edges.idx_csr);        (*ds)->edges.idx_csr        = NULL;
+    free((*ds)->edges.self_loop);      (*ds)->edges.self_loop      = NULL;
+    free((*ds)->edges.inv_in_degree);  (*ds)->edges.inv_in_degree  = NULL;
+    free((*ds)->edges.inv_out_degree); (*ds)->edges.inv_out_degree = NULL;
+
+    free((*ds)->path);   (*ds)->path   = NULL;
+    free((*ds)->nodes);  (*ds)->nodes  = NULL;
+    free((*ds)->labels); (*ds)->labels = NULL;
     free((*ds));
     *ds = NULL;
 }

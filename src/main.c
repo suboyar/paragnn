@@ -38,7 +38,7 @@ static uint64_t     epochs      = DEFAULT_EPOCHS;
 static uint64_t     layers      = DEFAULT_LAYERS;
 static uint64_t     channels    = DEFAULT_CHANNELS;
 static Real         lr          = DEFAULT_LR;
-static EdgeFormat   edge_format = EDGE_COMPRESSED;
+static EdgeFormat   edge_format = EDGE_CSX;
 static bool         quick       = false;
 static bool         early_stop  = false;
 static bool         loss_track  = false;
@@ -323,12 +323,10 @@ int main(int argc, char** argv)
     openblas_set_num_threads(omp_get_max_threads());
     print_config();
 
-    bool to_symmetric = true;
-    Dataset *ds = dataset_load(dataset, datadir, edge_format, to_symmetric, flow);
-
-    Dataset *ds_train = dataset_split(ds, SPLIT_TRAIN, flow);
-    Dataset *ds_valid = dataset_split(ds, SPLIT_VALID, flow);
-    Dataset *ds_test = dataset_split(ds, SPLIT_TEST, flow);
+    Dataset *ds = dataset_load(dataset, datadir, edge_format);
+    Dataset *ds_train = dataset_split(ds, SPLIT_TRAIN);
+    Dataset *ds_valid = dataset_split(ds, SPLIT_VALID);
+    Dataset *ds_test = dataset_split(ds, SPLIT_TEST);
     dataset_free(&ds);
 
     int64_t num_features = ds_train->num_features;

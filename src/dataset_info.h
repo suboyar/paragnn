@@ -22,7 +22,7 @@ typedef struct {
     int64_t     num_features;
     int64_t     num_classes;
     int64_t     num_edges;
-    bool        undirected;
+    bool        directed; // edges that are directed will be symmetrized by default
     RawFormat   raw_format;
 } DatasetInfo;
 

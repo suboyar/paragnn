@@ -12,7 +12,7 @@ const DatasetInfo ds_infos[] = {
         .num_features = 128,
         .num_classes  = 40,
         .num_edges    = 1166243,
-        .undirected   = false,
+        .directed     = true,
         .raw_format   = FMT_CSV_GZ,
     },
     [DATASET_PRODUCTS] = {
@@ -23,8 +23,8 @@ const DatasetInfo ds_infos[] = {
         .num_nodes    = 2449029,
         .num_features = 100,
         .num_classes  = 47,
-        .num_edges    = 61859140, // edge count is doubled sisnce inlcudes reverser loops it being undirected
-        .undirected   = true,
+        .num_edges    = 61859140, // edge count is doubled since inlcudes reverser loops it being undirected
+        .directed     = false,
         .raw_format   = FMT_CSV_GZ,
     },
     [DATASET_PAPERS100M] = {
@@ -36,7 +36,7 @@ const DatasetInfo ds_infos[] = {
         .num_features = 128,
         .num_classes  = 172,
         .num_edges    = 1615685872,
-        .undirected   = false,
+        .directed     = true,
         .raw_format   = FMT_NPY,
     }
 };
