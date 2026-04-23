@@ -471,24 +471,35 @@ typedef enum {
     L3_PMU_YES,
 } L3MissPMU;
 
+typedef enum {
+    GPU_NO = 0,
+    GPU_YES,
+} GPUNode;
+
 typedef struct {
     const char *name;
     const char *desc;
     const char *arch;
     L3MissPMU   l3_miss_pmu;
+    GPUNode     gpu_node;
 } Partition;
 
 static const Partition partitions[] =  {
-    {"defq",     "DP AMD EPYC 7601 32-Core Processor SMT2 128 threads (Zen1)", "x86-64",  L3_PMU_NO},
-    {"armq",     "DP Cavium ThunderX2 CN9980 SMT4 256 threads",                "aarch64", L3_PMU_NO},
-    {"huaq",     "DP Huawei Kunpeng920-6426 no-HT 128 cores",                  "aarch64", L3_PMU_NO},
-    {"milanq",   "DP AMD EPYC 7763 64-Core Processor SMT2 256 threads (Zen3)", "x86-64",  L3_PMU_YES},
-    {"fpgaq",    "DP AMD EPYC 7413 24-Core Processor SMT2 96 threads (Zen3)",  "x86-64",  L3_PMU_YES},
-    {"genoaxq",  "DP AMD EPYC Genoa-X 9684X 96-Core (SMT2) (Zen4)",            "x86-64",  L3_PMU_YES},
-    {"xeonmaxq", "DP Intel XeonMax 9480 56-core (SMT2 144)",                   "x86-64",  L3_PMU_YES},
-    {"rome16q",  "SP AMD EPYC 7302P 16-Core Processor SMT2 32 threads (Zen2)", "x86-64",  L3_PMU_NO},
-    {"gh200q",   "Nvidia Grace Hopper GH200 APU 72-core cpu",                  "aarch64", L3_PMU_YES},
-    {"habanaq",  "DP Intel Xeon Scalable Platinum 8360Y",                      "x86-64",  L3_PMU_YES},
+    {"defq",     "DP AMD EPYC 7601 32-Core Processor SMT2 128 threads (Zen1)", "x86-64",  L3_PMU_NO,  GPU_NO},
+    {"armq",     "DP Cavium ThunderX2 CN9980 SMT4 256 threads",                "aarch64", L3_PMU_NO,  GPU_NO},
+    {"huaq",     "DP Huawei Kunpeng920-6426 no-HT 128 cores",                  "aarch64", L3_PMU_NO,  GPU_NO},
+    {"milanq",   "DP AMD EPYC 7763 64-Core Processor SMT2 256 threads (Zen3)", "x86-64",  L3_PMU_YES, GPU_NO},
+    {"fpgaq",    "DP AMD EPYC 7413 24-Core Processor SMT2 96 threads (Zen3)",  "x86-64",  L3_PMU_YES, GPU_NO},
+    {"genoaxq",  "DP AMD EPYC Genoa-X 9684X 96-Core (SMT2) (Zen4)",            "x86-64",  L3_PMU_YES, GPU_NO},
+    {"xeonmaxq", "DP Intel XeonMax 9480 56-core (SMT2 144)",                   "x86-64",  L3_PMU_YES, GPU_NO},
+    {"rome16q",  "SP AMD EPYC 7302P 16-Core Processor SMT2 32 threads (Zen2)", "x86-64",  L3_PMU_NO,  GPU_NO},
+    {"gh200q",   "Nvidia Grace Hopper GH200 APU 72-core cpu",                  "aarch64", L3_PMU_YES, GPU_NO},
+    {"habanaq",  "DP Intel Xeon Scalable Platinum 8360Y",                      "x86-64",  L3_PMU_YES, GPU_NO},
+    {"dgx2q",    "Tesla V100-SXM3-32GB",                                       "x68-64",  L3_PMU_NO,  GPU_YES},
+    {"a40q",     "NVIDIA A40",                                                 "aarch64", L3_PMU_NO,  GPU_YES},
+    {"a100q",    "NVIDIA A100-PCIE-40GB",                                      "x86-64",  L3_PMU_NO,  GPU_YES},
+    {"hgx2q",    "NVIDIA A100-SXM4-80GB",                                      "x86-64",  L3_PMU_NO,  GPU_YES},
+    {"gh200q",   "",                                                           "aarch64", L3_PMU_NO,  GPU_YES},
 };
 
 void list_partitions(void)
@@ -529,11 +540,11 @@ size_t resolve_partitions(const char** parts)
         goto exit;
     }
 
-    if (strcmp(flags.partitions.items[0], "all") == 0)
+    if (strcmp(flags.partitions.items[0], "cpu") == 0)
     {
         for (size_t i = 0; i < NOB_ARRAY_LEN(partitions); i++)
         {
-            parts[count++] = partitions[i].name;
+            if (partitions[i].gpu_node == GPU_NO) parts[count++] = partitions[i].name;
         }
         goto exit;
     }
@@ -542,7 +553,16 @@ size_t resolve_partitions(const char** parts)
     {
         for (size_t i = 0; i < NOB_ARRAY_LEN(partitions); i++)
         {
-            if (partitions[i].l3_miss_pmu) parts[count++] = partitions[i].name;
+            if (partitions[i].l3_miss_pmu == L3_PMU_YES) parts[count++] = partitions[i].name;
+        }
+        goto exit;
+    }
+
+    if (strcmp(flags.partitions.items[0], "gpu") == 0)
+    {
+        for (size_t i = 0; i < NOB_ARRAY_LEN(partitions); i++)
+        {
+            if (partitions[i].gpu_node == GPU_YES) parts[count++] = partitions[i].name;
         }
         goto exit;
     }
@@ -827,7 +847,7 @@ void usage(const char *progname)
             "Run options:\n"
             "  -run               Run after building\n"
             "  -slurm             Submit job to Slurm (creates a git worktree snapshot; commit first)\n"
-            "  -p PARTITION       Partition(s), repeatable (or 'list', 'all', 'pmu', 'aarch64', 'x86-64')\n"
+            "  -p PARTITION       Partition(s), repeatable (or 'list', 'cpu', 'gpu', 'pmu', 'aarch64', 'x86-64')\n"
             "  -script FILE       Sbatch script to submit (e.g., adhoc.sh)\n"
             "\n"
             "Data options:\n"
