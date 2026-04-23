@@ -96,7 +96,7 @@ static void sage_mean_aggregate_csx(SageLayer *l)
 
         // TODO: compare it with using inv_degree directly
         int64_t degree = ptr[i+1] - ptr[i];
-        if (degree == 0) continue;
+        if (degree == 0) continue; // since we memset agg_row with 0 by default we can just skip here
         Real scale = (Real)1.0 / degree;
         for (int64_t j = ptr[i]; j < ptr[i+1]; j++)
         {
@@ -132,7 +132,7 @@ void sageconv(SageLayer *const l)
     int64_t out_dim   = l->out_dim;
 
     // output = input @ Wroot
-    TIMER_BLOCK("root", {
+    TIMER_BLOCK("self_transform", {
             GEMM_NN(num_nodes, out_dim, in_dim,
                     1.0,
                     l->input, in_dim,
@@ -144,7 +144,7 @@ void sageconv(SageLayer *const l)
     sage_mean_aggregate(l);
 
     // output += agg @ Wagg
-    TIMER_BLOCK("neoigh", {
+    TIMER_BLOCK("neigh_transform", {
             GEMM_NN(num_nodes, out_dim, in_dim,
                     1.0,
                     l->agg,    in_dim,
