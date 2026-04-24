@@ -1,6 +1,7 @@
 #include <omp.h>
 #include <cblas.h>
 #include <stdint.h>
+#include <string.h>
 
 #include "core.h"
 #include "layers.h"
@@ -41,14 +42,16 @@ void gemm_tn_v1(int64_t M, int64_t N, int64_t K,
                 const Real *restrict B, int64_t ldb,
                 Real *restrict C, int64_t ldc)
 {
-#pragma omp parallel for simd
+#pragma omp parallel for
     for (int64_t i = 0; i < M; i++)
     {
+        Real *c_row = &C[i*ldc];
+        memset(c_row, 0, N * sizeof(Real));
+
         for (int64_t k = 0; k < K; k++)
         {
             register Real a = A[k*lda+i];
             const Real *b_row = &B[k*ldb];
-            Real *c_row = &C[i*ldc];
 #pragma omp simd
             for (int64_t j = 0; j < N; j++)
             {
@@ -284,11 +287,7 @@ static void sageconv_backward_impl(SageLayer *l, gemm_tn_fn kernel)
                 0.0,
                 l->grad_scatter, l->in_dim);
 
-#pragma omp parallel
-    {
-        scale_by_inv_degree(l);
-        scatter_coo(l->edges.dst, l->edges.src, l);
-    }
+    grad_mean_aggregate(l);
 }
 
 void sageconv_backward_gemm_tn_v1(SageLayer *l)   { sageconv_backward_impl(l, gemm_tn_v1); }

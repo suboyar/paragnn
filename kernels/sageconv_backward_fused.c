@@ -7,17 +7,21 @@
 
 void sageconv_backward_fused_v1(SageLayer *const l)
 {
+    int nthreads = omp_get_max_threads();
+
     size_t in_dim  = l->in_dim;      // 256, 512, 1024
     size_t out_dim = l->out_dim;     // 256, 512, 1024
     size_t num_nodes = l->num_nodes; // 1'166'243, 2'449'029, 111'059'956
 
-    int nthreads = omp_get_max_threads();
     size_t wt_size = in_dim * out_dim;
+
+    Real *restrict tls_dW = cache_aligned_alloc(2 * nthreads * l->in_dim * l->out_dim * sizeof(Real));
 
 #pragma omp parallel
     {
         int tid = omp_get_thread_num();
-        Real *restrict tid_dW = &l->tls_dW[tid * 2 * wt_size];
+
+        Real *restrict tid_dW = &tls_dW[tid * 2 * wt_size];
         real_zero_out(tid_dW, 2 * wt_size);
         const Real *restrict Wroot = l->Wroot;
         const Real *restrict Wagg = l->Wagg;
@@ -79,23 +83,11 @@ void sageconv_backward_fused_v1(SageLayer *const l)
                 dWa_out[j] = wa;
             }
         }
-
-        scale_by_inv_degree(l);
-        scatter_coo(l->edges.dst, l->edges.src, l);
     }
 
-    // Scalling by inverse degree
-#pragma omp parallel for
-    for (size_t i = 0; i < l->num_nodes; i++)
-    {
-        Real s = l->edges.inv_in_degree[i]; // Assumes SOURCE_TO_TARGET
-        Real *restrict gs = &l->grad_scatter[i * l->in_dim];
-#pragma omp simd
-        for (size_t j = 0; j < l->in_dim; j++)
-        {
-            gs[j] *= s;
-        }
-    }
+    grad_mean_aggregate(l);
+
+    free(tls_dW);
 }
 
 /*
@@ -276,10 +268,9 @@ void sageconv_backward_fused_v2(SageLayer *const l)
                 dWa_out[j] = wa;
             }
         }
-
-        scale_by_inv_degree(l);
-        scatter_coo(l->edges.dst, l->edges.src, l);
     }
+
+    grad_mean_aggregate(l);
 }
 
 //

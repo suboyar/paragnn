@@ -1,45 +1,145 @@
 #include <stdint.h>
 #include "layers.h"
 
-void scale_by_inv_degree(SageLayer *l)
+static void scale_by_inv_degree_coo(SageLayer *l)
 {
-#pragma omp for
-    for (size_t i = 0; i < l->num_nodes; i++)
+    int64_t num_nodes = l->num_nodes;
+    int64_t in_dim    = l->in_dim;
+
+    const Real *restrict inv_degree;
+    if (l->flow == SOURCE_TO_TARGET) // e.g. src (citer) aggregates from dst (cited)
     {
-        Real s = l->edges.inv_in_degree[i]; // Assumes SOURCE_TO_TARGET
-        Real *restrict gs = &l->grad_scatter[i * l->in_dim];
+        inv_degree = l->edges.inv_in_degree;
+    }
+    else // flow == TARGET_TO_SOURCE // e.g. dst (cited) aggregates from src (citer)
+    {
+        inv_degree = l->edges.inv_out_degree;
+    }
+
+    Real *restrict grad_scatter = l->grad_scatter;
+#pragma omp parallel for
+    for (int64_t i = 0; i < num_nodes; i++)
+    {
+        Real scale   = inv_degree[i];
+        Real *gs_row = &grad_scatter[i * in_dim];
 #pragma omp simd
-        for (size_t j = 0; j < l->in_dim; j++)
+        for (int64_t j = 0; j < in_dim; j++)
         {
-            gs[j] *= s;
+            gs_row[j] *= scale;
         }
     }
 }
 
-void scatter_coo(uint32_t *nodes, uint32_t *peers, SageLayer *l)
+static void scale_by_inv_degree_csx(SageLayer *l)
 {
-#pragma omp for
-    for (size_t e = 0; e < l->num_edges; e++)
-    {
-        Real *restrict gi       = &l->grad_input[peers[e] * l->in_dim];
-        const Real *restrict gs = &l->grad_scatter[nodes[e] * l->in_dim];
+    int64_t num_nodes = l->num_nodes;
+    int64_t in_dim    = l->in_dim;
 
-        for (size_t i = 0; i < l->in_dim; i++)
+    const int64_t *restrict ptr;
+    if (l->flow == SOURCE_TO_TARGET)
+    {
+        ptr = l->edges.ptr_csc;
+    }
+    else
+    {
+        ptr = l->edges.ptr_csr;
+    }
+
+    Real *restrict grad_scatter = l->grad_scatter;
+#pragma omp parallel for
+    for (int64_t i = 0; i < num_nodes; i++)
+    {
+        Real scale = 0.0;
+        int64_t degree = ptr[i+1] - ptr[i];
+        if (degree != 0) scale = REAL(1.0) / degree;
+        Real *gs_row = &grad_scatter[i * in_dim];
+#pragma omp simd
+        for (int64_t j = 0; j < in_dim; j++)
+        {
+            gs_row[j] *= scale;
+        }
+    }
+}
+
+static void scatter_coo(SageLayer *l)
+{
+    int64_t num_edges = l->num_edges;
+    int64_t in_dim    = l->in_dim;
+
+    const int64_t *restrict nodes, *restrict peers;
+    if (l->flow == SOURCE_TO_TARGET) // e.g. src (citer) aggregates from dst (cited)
+    {
+        nodes = l->edges.dst;
+        peers = l->edges.src;
+    }
+    else // flow == TARGET_TO_SOURCE // e.g. dst (cited) aggregates from src (citer)
+    {
+        nodes = l->edges.src;
+        peers = l->edges.dst;
+    }
+
+    const Real *restrict grad_scatter = l->grad_scatter;
+    Real       *restrict grad_input   = l->grad_input;
+
+#pragma omp parallel for
+    for (int64_t e = 0; e < num_edges; e++)
+    {
+        const Real *gs_row = &grad_scatter[nodes[e] * in_dim];
+        Real       *gi_row = &grad_input[peers[e] * in_dim];
+
+        for (int64_t i = 0; i < in_dim; i++)
         {
 #pragma omp atomic
-            gi[i] += gs[i];
+            gi_row[i] += gs_row[i];
         }
     }
 }
 
-void scale_by_inv_degree_parallel(SageLayer *l)
+void scatter_csx(SageLayer *l)
 {
-#pragma omp parallel
-    scale_by_inv_degree(l);
+    int64_t num_nodes = l->num_nodes;
+    int64_t in_dim    = l->in_dim;
+
+    const int64_t *restrict ptr, *restrict idx;
+    if (l->flow == SOURCE_TO_TARGET)
+    {
+        ptr = l->edges.ptr_csr;
+        idx = l->edges.idx_csr;
+    }
+    else // flow == TARGET_TO_SOURCE
+    {
+        ptr = l->edges.ptr_csc;
+        idx = l->edges.idx_csc;
+    }
+
+    const Real *restrict grad_scatter = l->grad_scatter;
+    Real       *restrict grad_input   = l->grad_input;
+
+#pragma omp parallel for
+    for (int64_t i = 0; i < num_nodes; i++)
+    {
+        Real *gi_row = &grad_input[i * in_dim];
+        for (int64_t j = ptr[i]; j < ptr[i+1]; j++)
+        {
+            const Real *gs_row = &grad_scatter[idx[j] * in_dim];
+            for (int64_t k = 0; k < l->in_dim; k++)
+            {
+                gi_row[k] += gs_row[k];
+            }
+        }
+    }
 }
 
-void scatter_coo_parallel(uint32_t *nodes, uint32_t *peers, SageLayer *l)
+void grad_mean_aggregate(SageLayer *l)
 {
-#pragma omp parallel
-    scatter_coo(nodes, peers, l);
+    if (l->edges.format == EDGE_COO)
+    {
+        scale_by_inv_degree_coo(l);
+        scatter_coo(l);
+    }
+    else // format == EDGE_CSX
+    {
+        scale_by_inv_degree_csx(l);
+        scatter_csx(l);
+    }
 }

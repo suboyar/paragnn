@@ -5,7 +5,6 @@
 #include "dataset.h"
 #include "timer.h"
 
-#if 0
 static inline void fill_xavier_uniform(Real *x, int64_t in, int64_t out)
 {
     const Real limit = real_sqrt(REAL(6.0) / (in + out));
@@ -19,37 +18,20 @@ static inline void fill_xavier_uniform(Real *x, int64_t in, int64_t out)
         x[i] = limit * (REAL(2.0) * REAL(rand()) * recip_rand_max - REAL(1.0));
     }
 }
-#else
-static inline void fill_xavier_uniform(Real *x, int64_t in, int64_t out)
-{
-    const double limit = sqrt(6.0 / (in + out));
-    const double recip_rand_max = 1.0 / RAND_MAX;
-
-    // OpenMP can't be used here as rand() isn't thread-safe, variants that might
-    // be of interest are srand48_r or random_r. This can be looked more closely if this
-    // function ever takes more too much time.
-    for (int64_t i = 0; i < in * out; i++)
-    {
-        x[i] = (float)(limit * (2.0 * rand() * recip_rand_max - 1.0));
-    }
-}
-#endif
 
 // SAGE LAYER
 
 static void sage_alloc_node_buffers(SageLayer *l, uint32_t num_nodes)
 {
-    int nthreads = omp_get_max_threads();
-
     l->output       = cache_aligned_alloc(num_nodes * l->out_dim * sizeof(Real));
     l->agg          = cache_aligned_alloc(num_nodes * l->in_dim * sizeof(Real));
     l->grad_input   = cache_aligned_alloc(num_nodes * l->in_dim * sizeof(Real));
     l->grad_Wagg    = cache_aligned_alloc(l->in_dim * l->out_dim * sizeof(Real));
     l->grad_Wroot   = cache_aligned_alloc(l->in_dim * l->out_dim * sizeof(Real));
-    l->tls_dW       = cache_aligned_alloc(2 * nthreads * l->in_dim * l->out_dim * sizeof(Real));
+    // l->tls_dW       = cache_aligned_alloc(2 * nthreads * l->in_dim * l->out_dim * sizeof(Real));
     l->grad_scatter = cache_aligned_alloc(num_nodes * l->in_dim * sizeof(Real));
 
-    if (!l->output || !l->agg || !l->grad_input || !l->grad_Wagg || !l->grad_Wroot || !l->tls_dW || !l->grad_scatter)
+    if (!l->output || !l->agg || !l->grad_input || !l->grad_Wagg || !l->grad_Wroot || !l->grad_scatter)
     {
         ERROR("Could not allocate SageLayer buffers");
     }
@@ -93,7 +75,6 @@ static void sage_free_node_buffers(SageLayer *l)
     free(l->grad_input);   l->grad_input   = NULL;
     free(l->grad_Wagg);    l->grad_Wagg    = NULL;
     free(l->grad_Wroot);   l->grad_Wroot   = NULL;
-    free(l->tls_dW);       l->tls_dW       = NULL;
     free(l->grad_scatter); l->grad_scatter = NULL;
 }
 
