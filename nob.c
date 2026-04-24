@@ -68,6 +68,7 @@ typedef struct {
     char*   dataset;
     char*   datadir;
 
+    bool    prepare;
     bool    etags;
     bool    help;
     bool    clean;
@@ -96,6 +97,7 @@ enum {
     OPT_SCRIPT,
     OPT_DATASET,
     OPT_DATADIR,
+    OPT_PREPARE,
     OPT_ETAGS,
     OPT_CLEAN,
 };
@@ -117,6 +119,7 @@ static struct option long_options[] = {
     {"script",  required_argument, NULL, OPT_SCRIPT},
     {"dataset", required_argument, NULL, OPT_DATASET},
     {"datadir", required_argument, NULL, OPT_DATADIR},
+    {"prepare", no_argument,       NULL, OPT_PREPARE},
     {"etags",   no_argument,       NULL, OPT_ETAGS},
     {"help",    no_argument,       NULL, OPT_HELP},
     {"clean",   no_argument,       NULL, OPT_CLEAN},
@@ -210,8 +213,10 @@ Target targets[] = {
             KERNEL_FOLDER"sageconv_backward_common.c",
             KERNEL_FOLDER"sageconv_backward_gemm_tn.c",
             KERNEL_FOLDER"sageconv_backward_fused.c",
+            KERNEL_FOLDER"sageconv_backward_outer_tn.c",
             SRC_FOLDER"core.c",
             SRC_FOLDER"dataset.c",
+            SRC_FOLDER"dataset_info.c",
             SRC_FOLDER"layers.c",
             SRC_FOLDER"timer.c",
             KERNEL_FOLDER"cache_counter.c",
@@ -274,6 +279,7 @@ void append_common_flags(Target* t, BuildPhase phase)
     if (flags.debug)
     {
         nob_cmd_append(&cmd, "-ggdb", "-g3", "-gdwarf-2");
+        nob_cmd_append(&cmd, "-Wno-psabi"); // suppress ABI warnings from platform-specific vector types
     }
 
     if (strcmp("paragnn", t->name) == 0)
@@ -855,6 +861,7 @@ void usage(const char *progname)
             "  -datadir PATH      Data directory (default: %s)\n"
             "\n"
             "Other:\n"
+            "  -prepare           Run prepare_dataset before building\n"
             "  -etags             Generate etags\n"
             "  -clean             Clean build artifacts\n"
             "  -h, -help          Print this help message\n"
@@ -913,6 +920,7 @@ int main(int argc, char** argv)
         case OPT_SCRIPT:    flags.script     = optarg; break;
         case OPT_DATASET:   flags.dataset    = optarg; break;
         case OPT_DATADIR:   flags.datadir    = optarg; break;
+        case OPT_PREPARE:   flags.prepare    = true; break;
         case OPT_ETAGS:     flags.etags      = true;   break;
         case OPT_CLEAN:     flags.clean      = true;   break;
         case OPT_HELP:
@@ -959,7 +967,12 @@ int main(int argc, char** argv)
     else if (flags.etags) {rc = etags();}
     else
     {
-        rc = prepare_dataset();
+        if (flags.prepare)
+        {
+            rc = prepare_dataset();
+            if (rc != OK) goto exit;
+        }
+
         if (rc == OK)
         {
             if (flags.slurm) {rc = slurm_via_worktree();}
