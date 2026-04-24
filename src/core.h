@@ -9,7 +9,7 @@
 #define STRINGIFY(x) #x
 #define PRAGMA_UNROLL(n) _Pragma(STRINGIFY(GCC unroll n))
 
-#ifdef USE_DOUBLE
+#if defined(USE_DOUBLE)
 #define Real      double
 #define REAL(x)   ((double)(x))
 #define REAL_MAX  DBL_MAX

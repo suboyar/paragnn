@@ -370,6 +370,7 @@ int main(int argc, char** argv)
     }
     for (size_t epoch = 1; epoch <= epochs; epoch++)
     {
+        Real train_acc = 0.0;
         TIMER_BLOCK("epoch", {
                 inference(net);
                 Real loss = nll_loss(log_prob_layer, ds_train->labels);
@@ -384,11 +385,15 @@ int main(int argc, char** argv)
                     loss_hist[loss_hist_len++] = loss;
                 }
                 old_loss = loss;
-                Real train_acc = accuracy(log_prob_layer, ds_train->labels);
+                train_acc = accuracy(log_prob_layer, ds_train->labels);
                 train(net, ds_train, optim, optim_kind);
-                printf("Epoch: %zu/%zu, Loss: %f, Train: %.2f%%\n",
-                       epoch, epochs, loss, 100*train_acc);
             });
+        double total_elapsed = timer_get_time("epoch", TIMER_TOTAL_TIME);
+        double avg_eps = epoch / total_elapsed;
+        printf("Epoch: %zu/%zu, Loss: %f, Train: %.2f%%, Avg Epochs/s: %.2f\n",
+               epoch, epochs, old_loss, 100*train_acc, avg_eps);
+        // printf("Epoch: %zu/%zu, Loss: %f, Train: %.2f%%\n",
+        //        epoch, epochs, loss, 100*train_acc);
     }
 
     timer_disable();
