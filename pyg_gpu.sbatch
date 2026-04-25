@@ -63,8 +63,13 @@ then
     fi
     if [[ $(uname -n) = "gh001" || $(uname -n) = "gh002" ]] # gh200q
     then
-        echo "TODO"
-        exit 1
+        module load cuda13.0/blas/13.0.2
+        module load cuda13.0/fft/13.0.2
+        module load cuda13.0/nsight/13.0.2
+        module load cuda13.0/nvml/13.0.2/580.95.05
+        module load cuda13.0/profiler/13.0.2
+        module load cuda13.0/toolkit/13.0.2
+        eval "$(conda shell.bash activate py12_torch2.11.0_cu130_pyg_aarch64)"
     fi
 fi
 
