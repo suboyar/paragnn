@@ -18,14 +18,14 @@
     #define NR  16
 
 #elif defined(TARGET_CPU_EPYC7601)         /* defq     */
-    // #define KC  64
-    // #define MR  6
-    // #define NR  16
+    #define KC  64
+    #define MR  6
+    #define NR  16
 
 #elif defined(TARGET_CPU_EPYC7413)         /* fpgaq    */
-    // #define KC  64
-    // #define MR  6
-    // #define NR  16
+    #define KC  64
+    #define MR  6
+    #define NR  16
 
 #elif defined(TARGET_CPU_EPYC9684X)        /* genoaxq  */
     // #define KC  64
@@ -33,9 +33,9 @@
     // #define NR  16
 
 #elif defined(TARGET_CPU_NEOVERSEV2)       /* gh200q   */
-    // #define KC  64
-    // #define MR  6
-    // #define NR  16
+    #define KC  128
+    #define MR  6
+    #define NR  16
 
 #elif defined(TARGET_CPU_XEON8360Y)        /* habanaq  */
     // #define KC  64
@@ -361,9 +361,9 @@ void outer_tn_v1(int64_t M, int64_t N, int64_t K,
             for (int64_t j = 0; j < N; j++)
             {
                 c_row[j] += a * b_row[j];
-            }
-        }
-    }
+            } // end for j
+        } // end for k
+    } // end for i
 }
 
 void outer_tn_v2(int64_t M, int64_t N, int64_t K,
@@ -396,24 +396,25 @@ void outer_tn_v2(int64_t M, int64_t N, int64_t K,
                 for (int64_t j = 0; j < N; j++)
                 {
                     c_row[j] += a * b_row[j];
-                }
-            }
-        }
-    }
+                } // end for j
+            } // end for i
+        } // end for k
 
-#pragma omp parallel for
-    for (int64_t i = 0; i < M; i++)
-    {
-        for (int t = 0; t < nthreads; t++)
+        // Reduction
+#pragma omp for
+        for (int64_t i = 0; i < M; i++)
         {
-            const Real *Cl_row = &Cwork[(int64_t)t * M * ldcl + i * ldcl];
-            Real *c_row = &C[i*ldc];
-#pragma omp simd
-            for (int64_t j = 0; j < N; j++)
+            for (int t = 0; t < nthreads; t++)
             {
-                c_row[j] += Cl_row[j];
-            }
-        }
+                const Real *Cl_row = &Cwork[(int64_t)t * M * ldcl + i * ldcl];
+                Real *c_row = &C[i*ldc];
+#pragma omp simd
+                for (int64_t j = 0; j < N; j++)
+                {
+                    c_row[j] += Cl_row[j];
+                } // end for j
+            } // end for t
+        } // end for i
     }
 
     free(Cwork);
@@ -450,9 +451,8 @@ void outer_tn_v3(int64_t M, int64_t N, int64_t K,
                                                   &A[kk*lda + ii], lda,
                                                   &B[kk*ldb + jj], ldb,
                                                   &C_tile[ii*ldcl + jj], ldcl);
-                }
+                } // end for jj
 
-                // N tail: jj >= N_tiled, columns N_tiled..N-1
                 for (int64_t j = N_tiled; j < N; j++)
                 {
                     Real c[MR];
@@ -471,16 +471,16 @@ void outer_tn_v3(int64_t M, int64_t N, int64_t K,
                         {
                             c[mr] += a_row[ii+mr] * b;
                         }
-                    }
+                    } // end for kk
+
                     PRAGMA_UNROLL(MR)
                     for (int mr = 0; mr < MR; mr++)
                     {
                         C_tile[(ii+mr)*ldcl + j] = c[mr];
                     }
-                }
-            }
+                } // end for j
+            } // end for ii
 
-            // M tail: ii >= M_tiled, rows M_tiled..M-1
             for (int64_t i = M_tiled; i < M; i++)
             {
                 for (int64_t k = kk; k < k_end; k++)
@@ -492,28 +492,27 @@ void outer_tn_v3(int64_t M, int64_t N, int64_t K,
                     for (int64_t j = 0; j < N; j++)
                     {
                         c_row[j] += a * b_row[j];
-                    }
-                }
-            }
-        }
-    }
+                    } // end for j
+                } // end for k
+            } // end for i
+        } // end for kk
 
-    // Reduction
-#pragma omp parallel for
-    for (int64_t i = 0; i < M; i++)
-    {
-        for (int t = 0; t < nthreads; t++)
+        // Reduction
+#pragma omp for
+        for (int64_t i = 0; i < M; i++)
         {
-            const Real *tile_row = &C_work[(int64_t)t * M * ldcl + i * ldcl];
-            Real *c_dest = &C[i*ldc];
-#pragma omp simd
-            for (int64_t j = 0; j < N; j++)
+            for (int t = 0; t < nthreads; t++)
             {
-                c_dest[j] += tile_row[j];
-            }
-        }
+                const Real *tile_row = &C_work[(int64_t)t * M * ldcl + i * ldcl];
+                Real *c_dest = &C[i*ldc];
+#pragma omp simd
+                for (int64_t j = 0; j < N; j++)
+                {
+                    c_dest[j] += tile_row[j];
+                } // end for j
+            } // end for t
+        } // end for i
     }
-
     free(C_work);
 }
 
@@ -560,9 +559,9 @@ void outer_tn_v4(int64_t M, int64_t N, int64_t K,
                                                   &Ap[ii * kb],
                                                   &Bp[jj * kb],
                                                   &Cl[ii*ldcl + jj], ldcl);
-                }
-            }
-        }
+                } // end for jj
+            } // end for ii
+        } // end for kk
 
         free(Ap);
         free(Bp);
@@ -578,9 +577,9 @@ void outer_tn_v4(int64_t M, int64_t N, int64_t K,
                 for (int64_t j = 0; j < N; j++)
                 {
                     c_row[j] += Cl_row[j];
-                }
-            }
-        }
+                } // end for j
+            } // end for t
+        } // end for i
     }
 
     free(Cwork);
@@ -621,15 +620,17 @@ void outer_tn_v5(int64_t M, int64_t N, int64_t K,
             const Real *B_kk = &B[kk * ldb];
             pack_panel_NR(B_kk, ldb, Bp, N, N_pad, kb);
 
-            for (int64_t ii = 0; ii < M_pad; ii += MR) {
-                for (int64_t jj = 0; jj < N_pad; jj += NR) {
+            for (int64_t ii = 0; ii < M_pad; ii += MR)
+            {
+                for (int64_t jj = 0; jj < N_pad; jj += NR)
+                {
                     outer_tn_microkernel_MRxNR_v3(kb,
                                                   &Ap[ii * kb],
                                                   &Bp[jj * kb],
                                                   &Cl[ii*ldcl + jj], ldcl);
-                }
-            }
-        }
+                } // end for jj
+            } // end for ii
+        } // end for kk
 
         free(Ap);
         free(Bp);
@@ -646,9 +647,9 @@ void outer_tn_v5(int64_t M, int64_t N, int64_t K,
                 for (int64_t j = 0; j < N; j++)
                 {
                     c_row[j] += Cl_row[j];
-                }
-            }
-        }
+                } // end for j
+            } // end for t
+        } // end for i
 
     }
 
