@@ -233,6 +233,19 @@ Target targets[] = {
             ),
         .libs = STRS_STATIC("-lm"),
     },
+    {
+        .name = "relu",
+        .srcs = STRS_STATIC(
+            KERNEL_FOLDER"relu.c",
+            SRC_FOLDER"core.c",
+            SRC_FOLDER"dataset.c",
+            SRC_FOLDER"dataset_info.c",
+            SRC_FOLDER"layers.c",
+            SRC_FOLDER"timer.c",
+            KERNEL_FOLDER"cache_counter.c",
+            ),
+        .libs = STRS_STATIC("-lm", "-lopenblas"),
+    },
 };
 
 Target* find_target(const char* name)
