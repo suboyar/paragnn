@@ -15,7 +15,6 @@
 
 #include "cache_counter.h"
 #include "core.h"
-#include "../nob.h"
 
 // Extracted form cputype.h: https://github.com/torvalds/linux/blob/54e82e93ca93e49cb4c33988adec5c8cb9d0df31/arch/arm64/include/asm/cputype.h
 #define ARM_CPU_IMP_ARM    0x41

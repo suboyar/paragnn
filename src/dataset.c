@@ -366,14 +366,13 @@ Dataset* dataset_load(DatasetKind dataset, char const* datadir, EdgeFormat forma
 
     if (dataset == DATASET_INVALID) ERROR("Given dataset kind is not valid: %d", dataset);
 
-    // Equvalent of whats in nob.c
     DatasetInfo ds_info = ds_infos[dataset];
 
     char ds_path[256];
     path_join(ds_path, sizeof(ds_path), datadir, ds_info.dir_name);
     if (access(ds_path, F_OK) != 0)
     {
-        ERROR("Dataset is missing, run ./nob -dataset %s -datadir %s", ds_info.name, datadir);
+        ERROR("Dataset is missing, run:\n  dsprep -dataset %s -datadir %s", ds_info.name, datadir);
     }
     char proc_path[256];
     path_join(proc_path, sizeof(proc_path), ds_path, "processed");

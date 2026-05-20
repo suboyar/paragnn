@@ -1,3 +1,5 @@
+#include <error.h>
+#include <errno.h>
 #include <cblas.h>
 #include <float.h>
 #include <getopt.h>
@@ -10,13 +12,10 @@
 #include "dataset.h"
 #include "dataset_info.h"
 #include "layers.h"
-#include "sageconv_backward_fused.h"
-#include "sageconv_backward_gemm_tn.h"
-#include "sageconv_backward_outer_tn.h"
+#include "grad_sageconv_fused.h"
+#include "grad_sageconv_gemm_tn.h"
+#include "grad_sageconv_outer_tn.h"
 #include "timer.h"
-
-#define NOB_IMPLEMENTATION
-#include "../nob.h"
 
 // Default flag values
 #define MAX_DIMS 16
@@ -104,21 +103,21 @@ void benchmark(int64_t in_dim, int64_t out_dim, Dataset *ds)
     int64_t num_nodes = l->num_nodes;
 
     BenchFunc funcs[] = {
-        // BENCH_FUNC(sageconv_backward_gemm_tn_v1),
-        // BENCH_FUNC(sageconv_backward_gemm_tn_v2),
-        // BENCH_FUNC(sageconv_backward_gemm_tn_v3),
-        // BENCH_FUNC(sageconv_backward_gemm_tn_v4),
-        // BENCH_FUNC(sageconv_backward_gemm_tn_blas),
+        // BENCH_FUNC(grad_sageconv_gemm_tn_v1),
+        // BENCH_FUNC(grad_sageconv_gemm_tn_v2),
+        // BENCH_FUNC(grad_sageconv_gemm_tn_v3),
+        // BENCH_FUNC(grad_sageconv_gemm_tn_v4),
+        // BENCH_FUNC(grad_sageconv_gemm_tn_blas),
 
-        // BENCH_FUNC(sageconv_backward_fused_v1),
-        // BENCH_FUNC(sageconv_backward_fused_v2),
+        // BENCH_FUNC(grad_sageconv_fused_v1),
+        // BENCH_FUNC(grad_sageconv_fused_v2),
 
-        // BENCH_FUNC(sageconv_backward_outer_v1),
-        // BENCH_FUNC(sageconv_backward_outer_v2),
-        // BENCH_FUNC(sageconv_backward_outer_v3),
-        // BENCH_FUNC(sageconv_backward_outer_v4),
-        BENCH_FUNC(sageconv_backward_outer_v5),
-        // BENCH_FUNC(sageconv_backward_outer_v6),
+        // BENCH_FUNC(grad_sageconv_outer_v1),
+        // BENCH_FUNC(grad_sageconv_outer_v2),
+        // BENCH_FUNC(grad_sageconv_outer_v3),
+        // BENCH_FUNC(grad_sageconv_outer_v4),
+        // BENCH_FUNC(grad_sageconv_outer_v5),
+        // BENCH_FUNC(grad_sageconv_outer_v6),
     };
 
 #if !defined(SKIP_VALID)
@@ -128,7 +127,7 @@ void benchmark(int64_t in_dim, int64_t out_dim, Dataset *ds)
         printf("Reference:");
         fflush(stdout);
     }
-    sageconv_backward_gemm_tn_blas(l);
+    grad_sageconv_gemm_tn_blas(l);
     Real *ref_gwr = cache_aligned_alloc(in_dim * out_dim * sizeof(Real));
     Real *ref_gwa = cache_aligned_alloc(in_dim * out_dim * sizeof(Real));
     Real *ref_gi = cache_aligned_alloc(num_nodes * in_dim * sizeof(Real));
@@ -404,7 +403,7 @@ int main(int argc, char** argv)
             return 1;
         }
     }
-    datadir = nob_expand_path(datadir);
+    datadir = expand_path(datadir);
 
     // openblas_set_num_threads(omp_get_max_threads());
     int openblas_num_threads = openblas_get_num_threads();

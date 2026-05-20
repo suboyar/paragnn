@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <fcntl.h>
 #include <omp.h>
 #include <getopt.h>
 #include <stddef.h>
@@ -8,22 +9,74 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <zlib.h>
 
-#define NOB_IMPLEMENTATION
-#include "../nob.h"
+#include "core.h"
 #include "dataset_info.h"
 
-Nob_Cmd cmd = {0};
+static bool verbose = false;
 
-static const char *path_join(const char *dir, const char *file)
+static char *temp_buf = NULL;
+static size_t temp_cap = 0;
+static size_t temp_used = 0;
+
+static void temp_reset(void) { temp_used = 0; }
+
+static void temp_free(void) { free(temp_buf); temp_buf = NULL; temp_cap = 0; temp_used = 0; }
+
+static char *temp_alloc(size_t n)
+{
+    if (temp_used + n > temp_cap)
+    {
+        if (temp_cap == 0) temp_cap = 4096;
+        while (temp_used + n > temp_cap) temp_cap *= 2;
+        temp_buf = realloc(temp_buf, temp_cap);
+        if (!temp_buf) { ERROR("out of memory"); exit(1); }
+    }
+    char *p = temp_buf + temp_used;
+    temp_used += n;
+    return p;
+}
+
+char *path_join(const char *dir, const char *file)
 {
     size_t dir_len = strlen(dir);
-    if (dir[dir_len-1] != '/')
-        return nob_temp_sprintf("%s/%s", dir, file);
-    else
-        return nob_temp_sprintf("%s%s", dir, file);
+    size_t file_len = strlen(file);
+    bool need_sep = (dir_len > 0 && dir[dir_len - 1] != '/');
+    size_t total = dir_len + need_sep + file_len + 1;
+    char *out = temp_alloc(total);
+
+    memcpy(out, dir, dir_len);
+    if (need_sep) out[dir_len] = '/';
+    memcpy(out + dir_len + need_sep, file, file_len);
+    out[total - 1] = '\0';
+    return out;
+}
+
+int run_cmd(const char *const argv[])
+{
+    pid_t pid = fork();
+    if (pid < 0)
+    {
+        ERROR("fork failed: %s", strerror(errno));
+    }
+
+    if (pid == 0)
+    {
+        execvp(argv[0], (char *const *)argv);
+        LOG_ERROR("execvp %s: %s", argv[0], strerror(errno));
+        _exit(127);
+    }
+
+    int status;
+    if (waitpid(pid, &status, 0) < 0)
+    {
+        ERROR("waitpid failed: %s\n", strerror(errno));
+    }
+
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 0 : -1;
 }
 
 // This is specifically design to only conver cases for node-feat.csv with no space handling
@@ -164,15 +217,14 @@ size_t gz_decompress(const char* file_path, uint8_t **buf)
 
     if (!(file = gzopen(file_path, "rb")))
     {
-        nob_log(NOB_ERROR, "gzopen failed: %s", strerror(errno));
+        ERROR("gzopen failed: %s", strerror(errno));
         goto cleanup;
     }
 
     *buf = malloc(cap);
-    if (!buf)
+    if (!*buf)
     {
-        nob_log(NOB_ERROR, "malloc failed: %s", strerror(errno));
-        goto cleanup;
+        ERROR("malloc failed: %s", strerror(errno));
     }
 
     while (1)
@@ -188,8 +240,7 @@ size_t gz_decompress(const char* file_path, uint8_t **buf)
             uint8_t *tmp = realloc(*buf, cap);
             if (!tmp)
             {
-                nob_log(NOB_ERROR, "realloc failed: %s", strerror(errno));
-                goto cleanup;
+                ERROR("realloc failed: %s", strerror(errno));
             }
             *buf = tmp;
         }
@@ -199,8 +250,7 @@ size_t gz_decompress(const char* file_path, uint8_t **buf)
     {
         int err;
         const char *msg = gzerror(file, &err);
-        nob_log(NOB_ERROR, "gzread failed: %s", msg);
-        goto cleanup;
+        ERROR("gzread failed: %s", msg);
     }
 
     success = 1;
@@ -230,14 +280,18 @@ void parse_splits(char *input, size_t input_size, char *output)
 }
 
 typedef enum { PARSE_FEATS, PARSE_LABELS, PARSE_EDGES, PARSE_SPLIT} ParseKind;
-bool process_csv_gz(const char *csv_gz_path, const char *bin_path, size_t out_size,
+void process_csv_gz(const char *csv_gz_path, const char *bin_path, size_t out_size,
                     ParseKind kind, const DatasetInfo *ds_info)
 {
-    nob_log(NOB_INFO, "Processing %s", bin_path);
+    char *input = NULL;
+    char *output = MAP_FAILED;
+    int fd_out = -1;
+
+    if (verbose) printf("Processing %s", bin_path);
+
     // Input
-    char *input;
     size_t input_size = gz_decompress(csv_gz_path, (uint8_t**)&input);
-    if (input == NULL) return false;
+    if (input == NULL) goto cleanup;
 
     if (kind == PARSE_SPLIT)
     {
@@ -250,29 +304,27 @@ bool process_csv_gz(const char *csv_gz_path, const char *bin_path, size_t out_si
     }
 
     // Output
-    int fd_out = open(bin_path, O_RDWR | O_CREAT | O_TRUNC, 0644);
+    fd_out = open(bin_path, O_RDWR | O_CREAT | O_TRUNC, 0644);
     if (fd_out < 0)
     {
-        nob_log(NOB_ERROR, "Could not open %s: %s", csv_gz_path, strerror(errno));
-        free(input);
-        return false;
+        ERROR("Could not open %s: %s", csv_gz_path, strerror(errno));
+        goto cleanup;
     }
     ftruncate(fd_out, out_size);
-    char* output = mmap(NULL, out_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd_out, 0);
+    output = mmap(NULL, out_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd_out, 0);
 
     switch (kind) {
     case PARSE_FEATS:  parse_feats(input, input_size, output, ds_info->num_nodes, ds_info->num_features); break;
     case PARSE_LABELS: parse_labels(input, input_size, output); break;
     case PARSE_EDGES:  parse_edges(input, input_size, output); break;
     case PARSE_SPLIT:  parse_splits(input, input_size, output); break;
-    default: NOB_UNREACHABLE(nob_temp_sprintf("Wrong parse kind: %d", kind));
+    default: UNREACHABLE("Wrong parse kind: %d", kind);
     }
 
+cleanup:
     free(input);
-    munmap(output, out_size);
-    close(fd_out);
-
-    return true;
+    if (output != MAP_FAILED) munmap(output, out_size);
+    if (fd_out >= 0) close(fd_out);
 }
 
 typedef struct {
@@ -296,35 +348,33 @@ NpyHeader parse_npy_header(const char *data)
     return h;
 }
 
-bool process_npy(const char *npy_path, const char *bin_path, size_t out_size, size_t dst_elem_size)
+void process_npy(const char *npy_path, const char *bin_path, size_t out_size, size_t dst_elem_size)
 {
-    bool ret = true;
-    nob_log(NOB_INFO, "Processing %s", bin_path);
+    int rc = -1;
+    int fd_in = -1;
+    int fd_out = -1;
+    char *input = MAP_FAILED;
+    char *output = MAP_FAILED;
+    struct stat sb = {0};
 
-    int fd_in = open(npy_path, O_RDONLY);
-    if (fd_in < 0)
-    {
-        nob_log(NOB_ERROR, "Could not open %s: %s", npy_path, strerror(errno));
-        return false;
-    }
-    struct stat sb;
+    printf("Processing %s", bin_path);
+
+    fd_in = open(npy_path, O_RDONLY);
+    if (fd_in < 0) ERROR("Could not open %s: %s", npy_path, strerror(errno));
     fstat(fd_in, &sb);
-    char *input = mmap(NULL, sb.st_size, PROT_READ, MAP_PRIVATE, fd_in, 0);
+    input = mmap(NULL, sb.st_size, PROT_READ, MAP_PRIVATE, fd_in, 0);
 
     NpyHeader hdr = parse_npy_header(input);
     char *src = input + hdr.header_size;
     size_t total = out_size / dst_elem_size;
 
-    int fd_out = open(bin_path, O_RDWR | O_CREAT | O_TRUNC, 0644);
+    fd_out = open(bin_path, O_RDWR | O_CREAT | O_TRUNC, 0644);
     if (fd_out < 0)
     {
-        nob_log(NOB_ERROR, "Could not open %s: %s", bin_path, strerror(errno));
-        munmap(input, sb.st_size);
-        close(fd_in);
-        return false;
+        ERROR("Could not open %s: %s", bin_path, strerror(errno));
     }
     ftruncate(fd_out, out_size);
-    char *output = mmap(NULL, out_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd_out, 0);
+    output = mmap(NULL, out_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd_out, 0);
 
     // i8 -> u4
     if (hdr.type_char == 'i' && hdr.elem_size == 8 && dst_elem_size == 4)
@@ -360,60 +410,54 @@ bool process_npy(const char *npy_path, const char *bin_path, size_t out_size, si
     }
     else
     {
-        nob_log(NOB_ERROR, "Unsupported npy conversion: %c%zu -> %zu",
+        ERROR("Unsupported npy conversion: %c%zu -> %zu",
                 hdr.type_char, hdr.elem_size, dst_elem_size);
-        ret = false;
     }
 
-    munmap(input, sb.st_size);
-    close(fd_in);
-    munmap(output, out_size);
-    close(fd_out);
-    return ret;
+    if (output != MAP_FAILED) munmap(output, out_size);
+    if (input != MAP_FAILED)  munmap(input, sb.st_size);
+    if (fd_out >= 0) close(fd_out);
+    if (fd_in >= 0)  close(fd_in);
 }
 
-int prepare_dataset(char *dataset, char *datadir)
+void prepare_dataset(char *dataset, char *datadir)
 {
     const DatasetInfo *ds_info = &ds_infos[str_to_dataset_kind(dataset)];
-    if (!nob_mkdir_recursive(datadir)) return EXIT_FAILURE;
+    mkdir_recursive(datadir);
 
-    const char *zip_name = nob_path_name(ds_info->url);
-    const char *zip_path = nob_temp_sprintf("%s/%s", datadir, zip_name);
+    const char *zip_name = path_name(ds_info->url);
+    const char *zip_path = path_join(datadir, zip_name);
     const char *ds_path = path_join(datadir, ds_info->dir_name);
     const char *proc_path = path_join(ds_path, "processed");
     const char *split_root = path_join(ds_path, "split");
     const char *split_path  = path_join(split_root, ds_info->split_name);
 
-    if (nob_file_exists(path_join(proc_path, "edge.bin")) &&
-        nob_file_exists(path_join(proc_path, "node-feat.bin")) &&
-        nob_file_exists(path_join(proc_path, "node-label.bin")) &&
-        nob_file_exists(path_join(proc_path, "train.bin")) &&
-        nob_file_exists(path_join(proc_path, "valid.bin")) &&
-        nob_file_exists(path_join(proc_path, "test.bin")))
+    if (file_exists(path_join(proc_path, "edge.bin")) &&
+        file_exists(path_join(proc_path, "node-feat.bin")) &&
+        file_exists(path_join(proc_path, "node-label.bin")) &&
+        file_exists(path_join(proc_path, "train.bin")) &&
+        file_exists(path_join(proc_path, "valid.bin")) &&
+        file_exists(path_join(proc_path, "test.bin")))
     {
-        nob_log(NOB_INFO, "Dataset %s already processed, skipping", ds_info->name);
-        return EXIT_SUCCESS;
+        if (verbose) printf("Dataset %s already processed, skipping", ds_info->name);
+        return;
     }
 
-    if (!nob_file_exists(path_join(ds_path, "raw")))
+    if (!file_exists(path_join(ds_path, "raw")))
     {
-        if (!nob_file_exists(zip_path))
+        if (!file_exists(zip_path))
         {
-            nob_log(NOB_INFO, "Downloading %s...", ds_info->name);
-            nob_cmd_append(&cmd, "wget", "-q", "--show-progress", "-P", datadir, ds_info->url);
-            if (!nob_cmd_run(&cmd))
+            if (verbose) printf("Downloading %s...", ds_info->name);
+            if (run_cmd((const char *const[]){"wget", "-q", "--show-progress", "-P", datadir, ds_info->url, NULL}) < 0)
             {
-                nob_log(NOB_ERROR, "Failed to download %s dataset", ds_info->name);
-                return EXIT_FAILURE;
+                ERROR("Failed to download %s dataset", ds_info->name);
             }
         }
 
-        nob_log(NOB_INFO, "Extracting %s...", ds_info->name);
-        nob_cmd_append(&cmd, "unzip", "-q", "-n", zip_path, "-d", datadir);
-        if (!nob_cmd_run(&cmd))
+        printf("Extracting %s...", ds_info->name);
+        if (run_cmd((const char *const[]){"unzip", "-q", "-n", zip_path, "-d", datadir, NULL}) < 0)
         {
-            nob_log(NOB_ERROR, "Failed to unzip %s dataset", ds_info->name);
-            return EXIT_FAILURE;
+            ERROR("Failed to unzip %s dataset", ds_info->name);
         }
     }
 
@@ -424,55 +468,44 @@ int prepare_dataset(char *dataset, char *datadir)
     if (ds_info->raw_format == FMT_CSV_GZ)
     {
         // Data
-        if (!process_csv_gz(path_join(ds_path, "raw/node-feat.csv.gz"), path_join(proc_path, "node-feat.bin"), feat_size, PARSE_FEATS, ds_info))
-            return EXIT_FAILURE;
-        if (!process_csv_gz(path_join(ds_path, "raw/node-label.csv.gz"), path_join(proc_path, "node-label.bin"), label_size, PARSE_LABELS, ds_info))
-            return EXIT_FAILURE;
-        if (!process_csv_gz(path_join(ds_path, "raw/edge.csv.gz"), path_join(proc_path, "edge.bin"), edge_size, PARSE_EDGES, ds_info))
-            return EXIT_FAILURE;
+        process_csv_gz(path_join(ds_path, "raw/node-feat.csv.gz"), path_join(proc_path, "node-feat.bin"), feat_size, PARSE_FEATS, ds_info);
+        process_csv_gz(path_join(ds_path, "raw/node-label.csv.gz"), path_join(proc_path, "node-label.bin"), label_size, PARSE_LABELS, ds_info);
+        process_csv_gz(path_join(ds_path, "raw/edge.csv.gz"), path_join(proc_path, "edge.bin"), edge_size, PARSE_EDGES, ds_info);
 
         // Splits
-        if (!process_csv_gz(path_join(split_path, "train.csv.gz"), path_join(proc_path, "train.bin"), 0, PARSE_SPLIT, ds_info))
-            return EXIT_FAILURE;
-        if (!process_csv_gz(path_join(split_path, "valid.csv.gz"), path_join(proc_path, "valid.bin"), 0, PARSE_SPLIT, ds_info))
-            return EXIT_FAILURE;
-        if (!process_csv_gz(path_join(split_path, "test.csv.gz"), path_join(proc_path, "test.bin"), 0, PARSE_SPLIT, ds_info))
-            return EXIT_FAILURE;
+        process_csv_gz(path_join(split_path, "train.csv.gz"), path_join(proc_path, "train.bin"), 0, PARSE_SPLIT, ds_info);
+        process_csv_gz(path_join(split_path, "valid.csv.gz"), path_join(proc_path, "valid.bin"), 0, PARSE_SPLIT, ds_info);
+        process_csv_gz(path_join(split_path, "test.csv.gz"), path_join(proc_path, "test.bin"), 0, PARSE_SPLIT, ds_info);
     }
     else if (ds_info->raw_format == FMT_NPY)
     {
-        nob_cmd_append(&cmd, "unzip", "-q", "-n",
-                       path_join(ds_path, "raw/data.npz"),
-                       "-d",
-                       path_join(ds_path, "raw/data"));
-        if (!nob_cmd_run(&cmd)) return EXIT_FAILURE;
+        int rc;
+        rc = run_cmd((const char *const[]){"unzip", "-q",
+                                           "-n", path_join(ds_path, "raw/data.npz"),
+                                           "-d", path_join(ds_path, "raw/data")});
+        if (rc < 0) ERROR("failed to unzip npz file: %s", path_join(ds_path, "raw/data.npz"));
 
-        nob_cmd_append(&cmd, "unzip", "-q", "-n",
-                       nob_temp_sprintf("%s/raw/node-label.npz", ds_path),
-                       "-d",
-                       nob_temp_sprintf("%s/raw/node-label", ds_path));
-        if (!nob_cmd_run(&cmd)) return EXIT_FAILURE;
+        rc = run_cmd((const char *const[]){"unzip", "-q",
+                                           "-n", path_join(ds_path, "raw/node-label.npz"),
+                                           "-d", path_join(ds_path, "raw/node-label")});
+        if (rc < 0) ERROR("failed to unzip npz file: %s", path_join(ds_path, "raw/node-label.npz"));
 
-        if (!process_npy(path_join(ds_path, "raw/data/node_feat.npy"), path_join(proc_path, "node-feat.bin"), feat_size, sizeof(double)))
-            return EXIT_FAILURE;
-        if (!process_npy(path_join(ds_path, "raw/node-label/node_label.npy"), path_join(proc_path, "node-label.bin"), label_size, sizeof(int64_t)))
-            return EXIT_FAILURE;
-        if (!process_npy(path_join(ds_path, "raw/data/edge_index.npy"), path_join(proc_path, "edge.bin"), edge_size, sizeof(int64_t)))
-            return EXIT_FAILURE;
+        process_npy(path_join(ds_path, "raw/data/node_feat.npy"), path_join(proc_path, "node-feat.bin"), feat_size, sizeof(double));
+        process_npy(path_join(ds_path, "raw/node-label/node_label.npy"), path_join(proc_path, "node-label.bin"), label_size, sizeof(int64_t));
+        process_npy(path_join(ds_path, "raw/data/edge_index.npy"), path_join(proc_path, "edge.bin"), edge_size, sizeof(int64_t));
     }
     else
     {
-        nob_log(NOB_ERROR, "Invalid fromat: %d", ds_info->raw_format);
-        return EXIT_FAILURE;
+        ERROR("Invalid fromat: %d", ds_info->raw_format);
     }
 
-    nob_temp_reset();
-    return EXIT_SUCCESS;
+    temp_reset();
 }
 
 static struct option long_options[] = {
     {"dataset", required_argument, NULL, 'd'},
     {"datadir", required_argument, NULL, 'D'},
+    {"verbose", no_argument,       NULL, 'v'},
     {"help",    no_argument,       NULL, 'h'},
     {0,         0,                 0,     0}
 };
@@ -481,14 +514,15 @@ void usage(const char *progname)
 {
     fprintf(stderr,
             "Usage: %s -dataset NAME -datadir PATH\n"
-            "  -dataset  Dataset name {arxiv, products, papers100M}\n"
-            "  -datadir  Data directory\n",
+            "  -d, -dataset  Dataset name {arxiv, products, papers100M}\n"
+            "  -D, -datadir  Data directory\n"
+            "  -v, -verbose  Verbose output\n",
             progname);
 }
 
 int main(int argc, char **argv)
 {
-    int rc;
+    int rc = 1;
 
     char *dataset = NULL;
     char *datadir = NULL;
@@ -500,36 +534,35 @@ int main(int argc, char **argv)
         {
         case 'd': dataset = optarg; break;
         case 'D': datadir = optarg; break;
+        case 'v': verbose = true; break;
         case 'h':
             usage(argv[0]);
             rc = 0;
             goto exit;
         default:
             usage(argv[0]);
-            rc = 1;
             goto exit;
         }
     }
 
     if (!dataset || !datadir)
     {
-        nob_log(NOB_ERROR, "both -dataset and -datadir are required");
+        ERROR("both -dataset and -datadir are required");
         usage(argv[0]);
-        rc = 1;
         goto exit;
     }
 
-    datadir = nob_expand_path(datadir);
+    datadir = expand_path(datadir);
 
     if (str_to_dataset_kind(dataset) == DATASET_INVALID)
     {
-        nob_log(NOB_ERROR, "'%s' is an invalid dataset", dataset);
+        ERROR("'%s' is an invalid dataset", dataset);
         usage(argv[0]);
-        rc = 1;
         goto exit;
     }
 
-    rc = prepare_dataset(dataset, datadir);
+    prepare_dataset(dataset, datadir);
+    rc = 0;
 
 exit:
     free(datadir);

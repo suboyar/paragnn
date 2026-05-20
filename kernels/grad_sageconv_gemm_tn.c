@@ -6,7 +6,7 @@
 #include "core.h"
 #include "layers.h"
 #include "layers.h"
-#include "sageconv_backward_common.h"
+#include "grad_sageconv_common.h"
 
 #ifndef KC
 #define KC 256
@@ -255,7 +255,7 @@ typedef void (*gemm_tn_fn)(int64_t M, int64_t N, int64_t K,
                            const Real *restrict B, int64_t ldb,
                            Real *restrict C, int64_t ldc);
 
-static void sageconv_backward_impl(SageLayer *l, gemm_tn_fn kernel)
+static void grad_sageconv_impl(SageLayer *l, gemm_tn_fn kernel)
 {
     // grad_Wroot = input^T @ grad_output
     kernel(l->in_dim, l->out_dim, l->num_nodes,
@@ -290,8 +290,8 @@ static void sageconv_backward_impl(SageLayer *l, gemm_tn_fn kernel)
     grad_mean_aggregate(l);
 }
 
-void sageconv_backward_gemm_tn_v1(SageLayer *l)   { sageconv_backward_impl(l, gemm_tn_v1); }
-void sageconv_backward_gemm_tn_v2(SageLayer *l)   { sageconv_backward_impl(l, gemm_tn_v2); }
-void sageconv_backward_gemm_tn_v3(SageLayer *l)   { sageconv_backward_impl(l, gemm_tn_v3); }
-void sageconv_backward_gemm_tn_v4(SageLayer *l)   { sageconv_backward_impl(l, gemm_tn_v4); }
-void sageconv_backward_gemm_tn_blas(SageLayer *l) { sageconv_backward_impl(l, gemm_tn_blas); }
+void grad_sageconv_gemm_tn_v1(SageLayer *l)   { grad_sageconv_impl(l, gemm_tn_v1); }
+void grad_sageconv_gemm_tn_v2(SageLayer *l)   { grad_sageconv_impl(l, gemm_tn_v2); }
+void grad_sageconv_gemm_tn_v3(SageLayer *l)   { grad_sageconv_impl(l, gemm_tn_v3); }
+void grad_sageconv_gemm_tn_v4(SageLayer *l)   { grad_sageconv_impl(l, gemm_tn_v4); }
+void grad_sageconv_gemm_tn_blas(SageLayer *l) { grad_sageconv_impl(l, gemm_tn_blas); }

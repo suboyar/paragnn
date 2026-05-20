@@ -8,7 +8,6 @@
 
 #include "core.h"
 #include "timer.h"
-#include "../nob.h"
 
 #ifndef TIMER_INDENT_SPACE
 #define TIMER_INDENT_SPACE 2
@@ -423,7 +422,7 @@ void timer_export_csv(FILE *fd)
         if (reg.entries[i].name != NULL && reg.entries[i].count > 0) {
             TimerEntry* e = &reg.entries[i];
             path[0] = '\0';
-            if (e->parent) build_path(e->parent, path, NOB_ARRAY_LEN(path));
+            if (e->parent) build_path(e->parent, path, sizeof(path)/sizeof(path[0]));
 
             double avg = e->total_time / e->count;
             fprintf(fd, "%s,%s,%f,%f,%f,%f,%zu",

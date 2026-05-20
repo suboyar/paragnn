@@ -61,11 +61,11 @@ to_obj = $(addprefix $(BUILDDIR)/,$(notdir $(patsubst %.c,%.o,$1)))
 PARAGNN_SRCS = src/main.c src/core.c src/nn.c src/sageconv.c src/matmul_naive.c \
                src/dataset.c src/dataset_info.c src/layers.c src/optim.c src/timer.c
 
-SAGECONV_BACKWARD_SRCS := kernels/sageconv_backward_common.c \
-                          kernels/sageconv_backward_fused.c \
-                          kernels/sageconv_backward_gemm_tn.c \
-                          kernels/sageconv_backward_outer_tn.c \
-                          kernels/sageconv_backward.c \
+GRAD_SAGECONV_SRCS := kernels/grad_sageconv_common.c \
+                          kernels/grad_sageconv_fused.c \
+                          kernels/grad_sageconv_gemm_tn.c \
+                          kernels/grad_sageconv_outer_tn.c \
+                          kernels/grad_sageconv.c \
                           kernels/cache_counter.c \
                           src/core.c \
                           src/dataset.c \
@@ -80,14 +80,14 @@ AGGREGATE_SRCS := kernels/aggregate.c \
                   src/timer.c \
                   src/dataset_info.c
 
-PREPARE_DATASET_SRC :=  src/prepare_dataset.c src/dataset_info.c
+PREPARE_DATASET_SRC :=  src/prepare_dataset.c src/dataset_info.c src/core.c
 
 paragnn: $(BUILDDIR)/paragnn
-sageconv_backward: $(BUILDDIR)/sageconv_backward
+ bench-grad-sageconv: $(BUILDDIR)/bench-grad-sageconv
 # aggregate: $(BUILDDIR)/aggregate
-prepare_dataset: $(BUILDDIR)/prepare_dataset
+dsprep: $(BUILDDIR)/dsprep
 
-all: paragnn sageconv_backward prepare_dataset
+all: paragnn bench-grad-sageconv dsprep
 
 ifeq ($(V),1)
     Q =
@@ -101,7 +101,7 @@ $(BUILDDIR)/paragnn: $(call to_obj,$(PARAGNN_SRCS)) | $(BUILDDIR)
 	$(E) "  LD    $@"
 	$(Q)$(CC) $(ALL_CFLAGS) -o $@ $^ -lm -lopenblas
 
-$(BUILDDIR)/sageconv_backward: $(call to_obj,$(SAGECONV_BACKWARD_SRCS)) | $(BUILDDIR)
+$(BUILDDIR)/bench-grad-sageconv: $(call to_obj,$(GRAD_SAGECONV_SRCS)) | $(BUILDDIR)
 	$(E) "  LD    $@"
 	$(Q)$(CC) $(ALL_CFLAGS) -o $@ $^ -lm -lopenblas
 
@@ -109,7 +109,7 @@ $(BUILDDIR)/aggregate: $(call to_obj,$(AGGREGATE_SRCS)) | $(BUILDDIR)
 	$(E) "  LD    $@"
 	$(Q)$(CC) $(ALL_CFLAGS) -o $@ $^ -lm -lopenblas
 
-$(BUILDDIR)/prepare_dataset: $(call to_obj,$(PREPARE_DATASET_SRC)) | $(BUILDDIR)
+$(BUILDDIR)/dsprep: $(call to_obj,$(PREPARE_DATASET_SRC)) | $(BUILDDIR)
 	$(E) "  LD    $@"
 	$(Q)$(CC) $(BASIC_CFLAGS) -o $@ $^ -lz
 
@@ -124,7 +124,7 @@ $(BUILDDIR)/%.o: kernels/%.c | $(BUILDDIR)
 $(BUILDDIR):
 	mkdir -p $@
 
-arxiv products papers100M: $(BUILDDIR)/prepare_dataset
+arxiv products papers100M: $(BUILDDIR)/dsprep
 	./$< -dataset $@ -datadir $(DATADIR)
 
 clean:
@@ -135,9 +135,9 @@ help:
 	@echo ""
 	@echo "Targets:"
 	@echo "  paragnn                    Build paragnn (default)"
-	@echo "  sageconv_backward          Build sageconv_backward kernel benchmark"
+	@echo "  bench-grad-sageconv          Build bench-grad-sageconv kernel benchmark"
 	@echo "  aggregate                  Build aggregate kernel benchmark"
-	@echo "  prepare_dataset            Build the dataset preparation tool"
+	@echo "  dsprep            Build the dataset preparation tool"
 	@echo "  arxiv|products|papers100M  Prepare a dataset"
 	@echo "  all                        Build all targets"
 	@echo "  clean                      Remove build directory"
@@ -157,7 +157,7 @@ help:
 	@echo "Example: make paragnn DEBUG=1 IMPL=blas"
 
 .PHONY: all clean help \
-        paragnn sageconv_backward aggregate \
+        paragnn bench-grad-sageconv aggregate \
         prepare_dataset arxiv products papers100M
 
 -include $(wildcard $(BUILDDIR)/*.d)

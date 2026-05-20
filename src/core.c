@@ -1,8 +1,10 @@
+#include <errno.h>
+#include <omp.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
-
-#include <omp.h>
+#include <wordexp.h>
 
 #include "core.h"
 
@@ -56,4 +58,72 @@ void real_zero_out(Real *a, size_t n)
             a[i] = 0.0;
         }
     }
+}
+
+char *expand_path(const char *path)
+{
+    if (path == NULL || path[0] == '\0') return NULL;
+
+    wordexp_t result;
+    if (wordexp(path, &result, WRDE_NOCMD | WRDE_UNDEF) != 0)
+        return NULL;
+
+    char *expanded = (result.we_wordc > 0) ? strdup(result.we_wordv[0]) : NULL;
+    wordfree(&result);
+    return expanded;
+}
+
+void mkdir_recursive(const char *path)
+{
+    if (path == NULL || path[0] == '\0')
+    {
+        ERROR("cannot create directory from empty path");
+    }
+
+    struct stat st;
+    if (stat(path, &st) == 0 && S_ISDIR(st.st_mode))
+    {
+        goto cleanup;
+    }
+
+    char *tmp = strdup(path);
+
+    for (char *p = tmp + 1; *p; p++)
+    {
+        if (*p == '/')
+        {
+            *p = '\0';
+            if (mkdir(tmp, 0755) < 0 && errno != EEXIST)
+            {
+                ERROR("could not create directory '%s': %s", tmp, strerror(errno));
+            }
+            *p = '/';
+        }
+    }
+
+    // create the final component
+    if (mkdir(tmp, 0755) < 0 && errno != EEXIST)
+    {
+        ERROR("could not create directory '%s': %s", tmp, strerror(errno));
+    }
+
+cleanup:
+    free(tmp);
+}
+
+const char *path_name(const char *path)
+{
+    const char *p = strrchr(path, '/');
+    return p ? p + 1 : path;
+}
+
+bool file_exists(const char *file_path)
+{
+    struct stat statbuf;
+    if (stat(file_path, &statbuf) < 0)
+    {
+        if (errno == ENOENT) return false;
+        ERROR("Could not check if file %s exists: %s", file_path, strerror(errno));
+    }
+    return true;
 }

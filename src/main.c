@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include <errno.h>
 #include <float.h>
 #include <math.h>
 #include <getopt.h>
@@ -21,9 +22,6 @@
 #include "sageconv.h"
 #include "dataset.h"
 #include "optim.h"
-
-#define NOB_IMPLEMENTATION
-#include "../nob.h"
 
 // Default values
 #define DEFAULT_EPOCHS      100
@@ -309,7 +307,7 @@ int main(int argc, char** argv)
     {
         datadir = DEFAULT_DATADIR;
     }
-    datadir = nob_expand_path(datadir);
+    datadir = expand_path(datadir);
 
     if (quick)
     {

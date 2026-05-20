@@ -3,9 +3,9 @@
 
 #include "core.h"
 #include "layers.h"
-#include "sageconv_backward_common.h"
+#include "grad_sageconv_common.h"
 
-void sageconv_backward_fused_v1(SageLayer *const l)
+void grad_sageconv_fused_v1(SageLayer *const l)
 {
     int nthreads = omp_get_max_threads();
 
@@ -133,7 +133,7 @@ void sageconv_backward_fused_v1(SageLayer *const l)
     #define FUSED_NB 2
 #endif
 
-void sageconv_backward_fused_v2(SageLayer *const l)
+void grad_sageconv_fused_v2(SageLayer *const l)
 {
     size_t in_dim    = l->in_dim;    // 256, 512, 1024
     size_t out_dim   = l->out_dim;   // 256, 512, 1024
@@ -275,7 +275,7 @@ void sageconv_backward_fused_v2(SageLayer *const l)
 
 //
 // This performed worse than the version that doesn't tile in_dim
-// (i.e. sageconv_backward_v4), 0.80s vs 0.14s. I have left this here
+// (i.e. grad_sageconv_v4), 0.80s vs 0.14s. I have left this here
 // to be as a reminder to my self on what I have tried.
 //
 
@@ -284,7 +284,7 @@ void sageconv_backward_fused_v2(SageLayer *const l)
 #define I_TILE 4 // Optimal for rome16q
 #endif // I_TILE
 
-void sageconv_backward_fused_vX(SageLayer *const l)
+void grad_sageconv_fused_vX(SageLayer *const l)
 {
     size_t in_dim    = l->in_dim;
     size_t out_dim   = l->out_dim;
@@ -440,7 +440,7 @@ void sageconv_backward_fused_vX(SageLayer *const l)
 
 //
 // This performed about the same as the non J_TILE version
-// (i.e. sageconv_backward_v4), for when J_TILE>=256 and in_dim=256,
+// (i.e. grad_sageconv_v4), for when J_TILE>=256 and in_dim=256,
 // and when J_TILE<256, it performed worse. Meaning tilling over
 // in_dim did not provide any benefit. I have left this here to be as
 // a reminder to my self on what I have tried.
@@ -451,7 +451,7 @@ void sageconv_backward_fused_vX(SageLayer *const l)
 #define J_TILE 256
 #endif // J_TILE
 
-void sageconv_backward_fused_vXX(SageLayer *const l)
+void grad_sageconv_fused_vXX(SageLayer *const l)
 {
     size_t in_dim    = l->in_dim;
     size_t out_dim   = l->out_dim;

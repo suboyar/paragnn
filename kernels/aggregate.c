@@ -6,7 +6,6 @@
 #include <error.h>
 #include <omp.h>
 
-#define NOB_IMPLEMENTATION
 #include "cache_counter.h"
 #include "core.h"
 #include "dataset.h"

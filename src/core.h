@@ -40,10 +40,16 @@
 #define MAX(a,b) (((a) > (b)) ? (a) : (b))
 #endif // MAX
 
+#ifndef LOG_ERROR
+#define LOG_ERROR(fmt, ...) do {                                        \
+        fflush(stdout);                                                 \
+        fprintf(stderr, "%s:%d: error: " fmt "\n", __FILE__, __LINE__, ##__VA_ARGS__); \
+    } while(0)
+#endif
+
 #ifndef ERROR
 #define ERROR(fmt, ...) do {                                            \
-        fflush(stdout);                                                 \
-        fprintf(stderr, "%s:%d: error: %s: " fmt "\n", __FILE__, __LINE__, __func__, ##__VA_ARGS__); \
+        LOG_ERROR(fmt, ##__VA_ARGS__);                                  \
         abort();                                                        \
     } while(0)
 #endif
@@ -67,6 +73,9 @@
         }                                                               \
     } while(0)
 #endif
+
+#define UNREACHABLE(fmt, ...) \
+    do { fprintf(stderr, "UNREACHABLE %s:%d: " fmt "\n", __FILE__, __LINE__, ##__VA_ARGS__); abort(); } while (0)
 
 #ifndef NDEBUG
     #if defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || defined(_M_X64)
@@ -152,5 +161,9 @@ typedef struct {
 
 void *cache_aligned_alloc(size_t size);
 void real_zero_out(Real *a, size_t n);
+char *expand_path(const char *path);
+void mkdir_recursive(const char *path);
+const char *path_name(const char *path);
+bool file_exists(const char *file_path);
 
 #endif // CORE_H
