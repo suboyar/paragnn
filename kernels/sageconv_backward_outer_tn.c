@@ -8,92 +8,71 @@
 #include "sageconv_backward_common.h"
 #include "vreg.h"
 
-#ifndef KC
-#ifndef MR
-#ifndef NR
+#if defined TARGET_CPU_GENERIC
+    #define KC_DEFAULT  32
+    #define MR_DEFAULT  6
+    #define NR_DEFAULT  16
 
-#if defined(TARGET_CPU_THUNDERX2)          /* armq     */
-    #define KC  64
-    #define MR  6
-    #define NR  16
+#elif defined(TARGET_CPU_THUNDERX2)        /* armq     */
+    #define KC_DEFAULT  64
+    #define MR_DEFAULT  6
+    #define NR_DEFAULT  16
 
 #elif defined(TARGET_CPU_EPYC7601)         /* defq     */
-    #define KC  64
-    #define MR  6
-    #define NR  16
+    #define KC_DEFAULT  64
+    #define MR_DEFAULT  6
+    #define NR_DEFAULT  16
 
 #elif defined(TARGET_CPU_EPYC7413)         /* fpgaq    */
-    #define KC  64
-    #define MR  6
-    #define NR  16
-
-#elif defined(TARGET_CPU_EPYC9684X)        /* genoaxq  */
-    // #define KC  64
-    // #define MR  6
-    // #define NR  16
+    #define KC_DEFAULT  64
+    #define MR_DEFAULT  6
+    #define NR_DEFAULT  16
 
 #elif defined(TARGET_CPU_NEOVERSEV2)       /* gh200q   */
-    #define KC  128
-    #define MR  6
-    #define NR  16
-
-#elif defined(TARGET_CPU_XEON8360Y)        /* habanaq  */
-    // #define KC  64
-    // #define MR  6
-    // #define NR  16
+    #define KC_DEFAULT  128
+    #define MR_DEFAULT  6
+    #define NR_DEFAULT  16
 
 #elif defined(TARGET_CPU_KUNPENG920)       /* huaq     */
-    #define KC 128
-    #define MR 9
-    #define NR 12
-
-#elif defined(TARGET_CPU_EPYC7763)         /* milanq   */
-    // #define KC  64
-    // #define MR  6
-    // #define NR  16
+    #define KC_DEFAULT 128
+    #define MR_DEFAULT 9
+    #define NR_DEFAULT 12
 
 #elif defined(TARGET_CPU_EPYC7302P)        /* rome16q  */
-    #define KC  64
-    #define MR  6
-    #define NR  16
+    #define KC_DEFAULT  64
+    #define MR_DEFAULT  6
+    #define NR_DEFAULT  16
 
-#elif defined(TARGET_CPU_XEONMAX9480)      /* xeonmaxq */
-    // #define KC  64
-    // #define MR  6
-    // #define NR  16
+// #elif defined(TARGET_CPU_XEON8360Y)        /* habanaq  */
+// #elif defined(TARGET_CPU_EPYC9684X)        /* genoaxq  */
+// #elif defined(TARGET_CPU_EPYC7763)         /* milanq   */
+// #elif defined(TARGET_CPU_XEONMAX9480)      /* xeonmaxq */
 
-/*  ISA-level fallbacks */
-
-#elif defined(__AVX512F__)
-    // #define KC  64
-    // #define MR  6
-    // #define NR  16
-
-#elif defined(__AVX2__)
-    // #define KC  64
-    // #define MR  6
-    // #define NR  16
-
-#elif defined(__ARM_FEATURE_SVE2)
-    // #define KC  64
-    // #define MR  6
-    // #define NR  16
-
-#elif defined(__ARM_NEON) || defined(__ARM_FEATURE_SIMD32)
-    // #define KC  64
-    // #define MR  6
-    // #define NR  16
-
-#else
-    #define KC  32
-    #define MR  6
-    #define NR  8
 #endif
 
-#endif /* NR */
-#endif /* MR */
-#endif /* KC */
+#ifndef KC
+    #ifdef KC_DEFAULT
+        #define KC KC_DEFAULT
+    #else
+        #error "KC not defined and no default for this CPU"
+    #endif
+#endif
 
+#ifndef MR
+    #ifdef MR_DEFAULT
+        #define MR MR_DEFAULT
+    #else
+        #error "MR not defined and no default for this CPU"
+    #endif
+#endif
+
+#ifndef NR
+    #ifdef NR_DEFAULT
+        #define NR NR_DEFAULT
+    #else
+        #error "NR not defined and no default for this CPU"
+    #endif
+#endif
 
 #ifdef USE_DOUBLE
     #define NR_FULL NR

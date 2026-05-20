@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+
+# Create a detached git worktree snapshot for reproducible job submission
+
+set -euo pipefail
+
+usage() {
+    cat >&2 <<EOF
+Usage: ${0##*/} [-l LABEL] [-b BASE]
+
+Create a detached worktree snapshot of HEAD for reproducible job submission.
+Prints the worktree path on success.
+
+Options:
+  -l LABEL   Worktree label (default: current branch or "detached")
+  -b BASE    Parent directory for worktrees (default: ../wt)
+  -h         Show this help
+EOF
+    exit "${1:-1}"
+}
+
+label=""
+base="../wt"
+
+while getopts "l:b:h" opt; do
+    case $opt in
+        l) label=$OPTARG ;;
+        b) base=$OPTARG ;;
+        h) usage 0 ;;
+        *) usage 1 ;;
+    esac
+done
+
+# Warn on dirty tree — easy to forget, painful to debug on the cluster
+if ! git diff-index --quiet HEAD -- 2>/dev/null; then
+    echo >&2 "warning: working tree has uncommitted changes (won't be in snapshot)"
+fi
+
+hash=$(git rev-parse --short HEAD)
+ts=$(date +%Y%m%dT%H%M%S)
+
+if [[ -z "$label" ]]; then
+    label=$(git symbolic-ref --short HEAD 2>/dev/null || echo "detached")
+    # slashes in branch names -> dashes
+    label=${label//\//-}
+fi
+
+wt_path="${base}/${label}/${ts}-${hash}"
+
+git worktree add --detach "$wt_path" HEAD >/dev/null
+echo "$wt_path"

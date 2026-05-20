@@ -1,0 +1,189 @@
+#!/usr/bin/env bash
+
+# Submit sbatch jobs to one or more partitions
+
+set -euo pipefail
+
+usage() {
+    cat >&2 <<EOF
+Usage: ${0##*/} [OPTIONS] [-p PARTITION]... [SCRIPT]
+
+Submit an sbatch job to one or more cluster partitions.
+
+Options:
+  -p PART       Partition selector, repeatable. A queue name, comma-separated
+                list, or one of: cpu gpu pmu x86-64 aarch64 list (default: pmu)
+  -d DIR        Project root to submit from (default: current directory)
+  -n            Dry run, only print sbatch commands
+  -h            Show this help
+
+Examples:
+  ${0##*/} <script>
+  ${0##*/} -p milanq,genoaxq <script>
+  ${0##*/} -p aarch64 -n <script>
+  ${0##*/} -d \$(./snapshot.sh) -p pmu <script>
+  ${0##*/} -p list
+EOF
+    exit "${1:-1}"
+}
+
+# Partition registry
+#   name:arch:pmu:gpu
+#   One line per queue
+PARTITIONS=(
+    defq:x86-64:0:0
+    armq:aarch64:0:0
+    huaq:aarch64:0:0
+    milanq:x86-64:1:0
+    fpgaq:x86-64:1:0
+    genoaxq:x86-64:1:0
+    xeonmaxq:x86-64:1:0
+    rome16q:x86-64:0:0
+    gh200q:aarch64:1:0
+    habanaq:x86-64:1:0
+    dgx2q:x86-64:0:1
+    a40q:aarch64:0:1
+    a100q:x86-64:0:1
+    hgx2q:x86-64:0:1
+)
+
+part_name() { echo "${1%%:*}"; }
+part_arch() { local t=${1#*:}; echo "${t%%:*}"; }
+part_pmu()  { local t=${1#*:}; t=${t#*:}; echo "${t%%:*}"; }
+part_gpu()  { echo "${1##*:}"; }
+
+# Resolve a selector (meta-name, comma list, or literal names) into
+# a newline-separated list of partition names.
+resolve() {
+    local sel=$1
+    case $sel in
+        list)
+            printf "%-12s %-8s pmu gpu\n" "name" "arch" >&2
+            for p in "${PARTITIONS[@]}"; do
+                printf "%-12s %-8s  %s   %s\n" \
+                    "$(part_name "$p")" "$(part_arch "$p")" \
+                    "$(part_pmu "$p")" "$(part_gpu "$p")" >&2
+            done
+            exit 0
+            ;;
+        cpu)    for p in "${PARTITIONS[@]}"; do [[ $(part_gpu "$p") == 0 ]] && part_name "$p"; done ;;
+        gpu)    for p in "${PARTITIONS[@]}"; do [[ $(part_gpu "$p") == 1 ]] && part_name "$p"; done ;;
+        pmu)    for p in "${PARTITIONS[@]}"; do [[ $(part_pmu "$p") == 1 ]] && part_name "$p"; done ;;
+        x86-64) for p in "${PARTITIONS[@]}"; do [[ $(part_arch "$p") == "x86-64" ]] && part_name "$p"; done ;;
+        aarch64)for p in "${PARTITIONS[@]}"; do [[ $(part_arch "$p") == "aarch64" ]] && part_name "$p"; done ;;
+        *,*)    tr ',' '\n' <<< "$sel" ;;
+        *)      echo "$sel" ;;
+    esac
+}
+
+validate_partition() {
+    local name=$1
+    for p in "${PARTITIONS[@]}"; do
+        [[ $(part_name "$p") == "$name" ]] && return 0
+    done
+    echo >&2 "error: unknown partition: $name"
+    return 1
+}
+
+
+# Pull --job-name from the sbatch script, fall back to filename stem
+parse_label() {
+    local script=$1
+    local name
+    name=$(awk -F"[\"']" "/^[[:space:]]*#[[:space:]]*SBATCH.*--job-name/{print \$2}" "$script")
+    if [[ -n "$name" ]]; then
+        echo "$name"
+    else
+        basename "$script" .sbatch
+    fi
+}
+
+partitions=()
+workdir=$(pwd)
+dry_run=0
+
+while getopts "p:d:nh" opt; do
+    case $opt in
+        p) partitions+=("$OPTARG") ;;
+        d) workdir=$OPTARG ;;
+        s) script=$OPTARG ;;
+        n) dry_run=1 ;;
+        h) usage 0 ;;
+        *) usage 1 ;;
+    esac
+done
+
+shift $((OPTIND - 1))
+
+if [[ $# -lt 1 ]]; then
+    echo >&2 "error: no sbatch script specified"
+    usage 1
+fi
+script=$(realpath "$1")
+label=$(parse_label "$script")
+
+if [[ ! -f "$script" ]]; then
+    echo >&2 "error: sbatch script not found: $script"
+    exit 1
+fi
+
+# Default to CPU partitions
+if [[ ${#partitions[@]} -eq 0 ]]; then
+    partitions=(cpu)
+fi
+
+# Resolve selectors into concrete names
+resolved=()
+for sel in "${partitions[@]}"; do
+    while IFS= read -r name; do
+        [[ -n "$name" ]] && resolved+=("$name")
+    done < <(resolve "$sel")
+done
+
+if [[ ${#resolved[@]} -eq 0 ]]; then
+    echo >&2 "error: no partitions selected"
+    exit 1
+fi
+
+for name in "${resolved[@]}"; do
+    validate_partition "$name"
+done
+
+# Log directory
+hash=$(git -C "$workdir" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+ts=$(date +%Y%m%dT%H%M%S)
+state_base="${XDG_STATE_HOME:-$HOME/.local/state}"
+log_base="${state_base}/paragnn/sbatch-logs/${label}/${ts}-${hash}"
+
+# Submit
+failures=0
+
+for part in "${resolved[@]}"; do
+    log_dir="${log_base}"
+    mkdir -p "$log_dir"
+
+    sbatch_cmd=(
+        sbatch
+        -p "$part"
+        -J "${label}-${part}"
+        -o "${log_dir}/${part}.out"
+        -e "${log_dir}/${part}.err"
+        --exclusive
+    )
+
+    if [[ $dry_run -eq 1 ]]; then
+        echo "[dry-run] ${sbatch_cmd[*]}"
+    else
+        if (cd "$workdir" && "${sbatch_cmd[@]}"); then
+            echo "submitted ${label} -> ${part}  (log: ${log_dir}/${part}.{out,err})"
+        else
+            echo >&2 "error: submission to ${part} failed"
+            ((failures++))
+        fi
+    fi
+done
+
+if [[ $failures -gt 0 ]]; then
+    echo >&2 "${failures} submission(s) failed"
+    exit 1
+fi
