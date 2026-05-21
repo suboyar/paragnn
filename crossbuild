@@ -28,7 +28,7 @@ for key in "${!ARCH[@]}"; do
 done
 
 all_archs=("${arm_archs[@]}" "${x86_archs[@]}")
-all_targets=(paragnn bench-grad-sageconv aggregate)
+all_targets=(paragnn bench-gs)
 
 keep_going=0
 targets=()

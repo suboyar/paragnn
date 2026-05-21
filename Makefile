@@ -84,11 +84,11 @@ AGGREGATE_SRCS := kernels/aggregate.c \
 DSPREP_SRC :=  src/dsprep.c src/dsinfo.c src/core.c
 
 paragnn: $(BUILDDIR)/paragnn
- bench-grad-sageconv: $(BUILDDIR)/bench-grad-sageconv
-# aggregate: $(BUILDDIR)/aggregate
+bench-gs: $(BUILDDIR)/bench-gs
+# bench-agg: $(BUILDDIR)/bench-agg
 dsprep: $(BUILDDIR)/dsprep
 
-all: paragnn bench-grad-sageconv dsprep
+all: paragnn bench-gs dsprep
 
 ifeq ($(V),1)
     Q =
@@ -102,11 +102,11 @@ $(BUILDDIR)/paragnn: $(call to_obj,$(PARAGNN_SRCS)) | $(BUILDDIR)
 	$(E) "  LD    $@"
 	$(Q)$(CC) $(ALL_CFLAGS) $(LDFLAGS) -o $@ $^ -lm -lopenblas
 
-$(BUILDDIR)/bench-grad-sageconv: $(call to_obj,$(GRAD_SAGECONV_SRCS)) | $(BUILDDIR)
+$(BUILDDIR)/bench-gs: $(call to_obj,$(GRAD_SAGECONV_SRCS)) | $(BUILDDIR)
 	$(E) "  LD    $@"
 	$(Q)$(CC) $(ALL_CFLAGS) $(LDFLAGS) -o $@ $^ -lm -lopenblas
 
-$(BUILDDIR)/aggregate: $(call to_obj,$(AGGREGATE_SRCS)) | $(BUILDDIR)
+$(BUILDDIR)/bench-agg: $(call to_obj,$(AGGREGATE_SRCS)) | $(BUILDDIR)
 	$(E) "  LD    $@"
 	$(Q)$(CC) $(ALL_CFLAGS) $(LDFLAGS) -o $@ $^ -lm -lopenblas
 
@@ -135,11 +135,11 @@ help:
 	@echo "Usage: make [TARGET] [OPTIONS]"
 	@echo ""
 	@echo "Targets:"
-	@echo "  paragnn                    Build paragnn (default)"
-	@echo "  bench-grad-sageconv          Build bench-grad-sageconv kernel benchmark"
-	@echo "  aggregate                  Build aggregate kernel benchmark"
-	@echo "  dsprep            Build the ds preparation tool"
-	@echo "  arxiv|products|papers100M  Prepare a ds"
+	@echo "  paragnn                    Train GNN model (default)"
+	@echo "  bench-gs                   Benchmark grad SAGEConv kernels"
+	@echo "  bench-agg                  Build aggregate kernel benchmark"
+	@echo "  dsprep                     Benchmark aggregate kernels"
+	@echo "  arxiv|products|papers100M  Prepare datasets for training"
 	@echo "  all                        Build all targets"
 	@echo "  clean                      Remove build directory"
 	@echo ""
@@ -159,7 +159,7 @@ help:
 	@echo "Example: make paragnn DEBUG=1 IMPL=blas"
 
 .PHONY: all clean help \
-        paragnn bench-grad-sageconv aggregate \
+        paragnn bench-gs aggregate \
         dspreprep arxiv products papers100M
 
 -include $(wildcard $(BUILDDIR)/*.d)
