@@ -1,6 +1,6 @@
 #include <stdbool.h>
 #include <string.h>
-#include "dataset_info.h"
+#include "dsinfo.h"
 
 const DatasetInfo ds_infos[] = {
     [DATASET_ARXIV] = {

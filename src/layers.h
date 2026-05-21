@@ -4,7 +4,7 @@
 #include <stdio.h>
 
 #include "core.h"
-#include "dataset.h"
+#include "ds.h"
 #include "edges.h"
 #include "flow.h"
 

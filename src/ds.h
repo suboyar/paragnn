@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 #include "core.h"
-#include "dataset_info.h"
+#include "dsinfo.h"
 #include "edges.h"
 
 typedef enum {

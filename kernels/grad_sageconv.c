@@ -9,8 +9,8 @@
 
 #include "cache_counter.h"
 #include "core.h"
-#include "dataset.h"
-#include "dataset_info.h"
+#include "ds.h"
+#include "dsinfo.h"
 #include "layers.h"
 #include "grad_sageconv_fused.h"
 #include "grad_sageconv_gemm_tn.h"

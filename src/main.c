@@ -15,12 +15,12 @@
 #include <cblas.h>
 
 #include "core.h"
-#include "dataset_info.h"
+#include "dsinfo.h"
 #include "timer.h"
 #include "layers.h"
 #include "nn.h"
 #include "sageconv.h"
-#include "dataset.h"
+#include "ds.h"
 #include "optim.h"
 
 // Default values

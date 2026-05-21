@@ -15,7 +15,7 @@ TARGET_CPU ?= TARGET_CPU_GENERIC
 MARCH      ?= native
 DEFS       ?=
 V          ?= 0
-DATADIR ?= ~/D1/paragnn-dataset
+DATADIR ?= ~/D1/paragnn-ds
 
 # remove trailing slash if included
 BUILDDIR   := $(patsubst %/,%,$(BUILDDIR))
@@ -59,28 +59,28 @@ ALL_CFLAGS = $(strip $(BASIC_CFLAGS) $(CFLAGS))
 to_obj = $(addprefix $(BUILDDIR)/,$(notdir $(patsubst %.c,%.o,$1)))
 
 PARAGNN_SRCS = src/main.c src/core.c src/nn.c src/sageconv.c src/matmul_naive.c \
-               src/dataset.c src/dataset_info.c src/layers.c src/optim.c src/timer.c
+               src/ds.c src/dsinfo.c src/layers.c src/optim.c src/timer.c
 
 GRAD_SAGECONV_SRCS := kernels/grad_sageconv_common.c \
-                          kernels/grad_sageconv_fused.c \
-                          kernels/grad_sageconv_gemm_tn.c \
-                          kernels/grad_sageconv_outer_tn.c \
-                          kernels/grad_sageconv.c \
-                          kernels/cache_counter.c \
-                          src/core.c \
-                          src/dataset.c \
-                          src/timer.c \
-                          src/dataset_info.c \
-                          src/layers.c
+                      kernels/grad_sageconv_fused.c \
+                      kernels/grad_sageconv_gemm_tn.c \
+                      kernels/grad_sageconv_outer_tn.c \
+                      kernels/grad_sageconv.c \
+                      kernels/cache_counter.c \
+                      src/core.c \
+                      src/ds.c \
+                      src/timer.c \
+                      src/dsinfo.c \
+                      src/layers.c
 
 AGGREGATE_SRCS := kernels/aggregate.c \
                   kernels/cache_counter.c \
                   src/core.c \
-                  src/dataset.c \
+                  src/ds.c \
                   src/timer.c \
-                  src/dataset_info.c
+                  src/dsinfo.c
 
-PREPARE_DATASET_SRC :=  src/prepare_dataset.c src/dataset_info.c src/core.c
+DSPREP_SRC :=  src/dsprep.c src/dsinfo.c src/core.c
 
 paragnn: $(BUILDDIR)/paragnn
  bench-grad-sageconv: $(BUILDDIR)/bench-grad-sageconv
@@ -109,7 +109,7 @@ $(BUILDDIR)/aggregate: $(call to_obj,$(AGGREGATE_SRCS)) | $(BUILDDIR)
 	$(E) "  LD    $@"
 	$(Q)$(CC) $(ALL_CFLAGS) -o $@ $^ -lm -lopenblas
 
-$(BUILDDIR)/dsprep: $(call to_obj,$(PREPARE_DATASET_SRC)) | $(BUILDDIR)
+$(BUILDDIR)/dsprep: $(call to_obj,$(DSPREP_SRC)) | $(BUILDDIR)
 	$(E) "  LD    $@"
 	$(Q)$(CC) $(BASIC_CFLAGS) -o $@ $^ -lz
 
@@ -125,7 +125,7 @@ $(BUILDDIR):
 	mkdir -p $@
 
 arxiv products papers100M: $(BUILDDIR)/dsprep
-	./$< -dataset $@ -datadir $(DATADIR)
+	./$< -ds $@ -datadir $(DATADIR)
 
 clean:
 	rm -rf $(BUILDDIR)
@@ -137,8 +137,8 @@ help:
 	@echo "  paragnn                    Build paragnn (default)"
 	@echo "  bench-grad-sageconv          Build bench-grad-sageconv kernel benchmark"
 	@echo "  aggregate                  Build aggregate kernel benchmark"
-	@echo "  dsprep            Build the dataset preparation tool"
-	@echo "  arxiv|products|papers100M  Prepare a dataset"
+	@echo "  dsprep            Build the ds preparation tool"
+	@echo "  arxiv|products|papers100M  Prepare a ds"
 	@echo "  all                        Build all targets"
 	@echo "  clean                      Remove build directory"
 	@echo ""
@@ -158,6 +158,6 @@ help:
 
 .PHONY: all clean help \
         paragnn bench-grad-sageconv aggregate \
-        prepare_dataset arxiv products papers100M
+        dspreprep arxiv products papers100M
 
 -include $(wildcard $(BUILDDIR)/*.d)

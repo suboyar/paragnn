@@ -14,7 +14,7 @@
 #include <zlib.h>
 
 #include "core.h"
-#include "dataset_info.h"
+#include "dsinfo.h"
 
 static bool verbose = false;
 

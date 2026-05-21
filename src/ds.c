@@ -12,8 +12,8 @@
 #include <omp.h>
 
 #include "core.h"
-#include "dataset.h"
-#include "dataset_info.h"
+#include "ds.h"
+#include "dsinfo.h"
 
 #define INVALID_IDX -1          // assumes signed node indecies
 

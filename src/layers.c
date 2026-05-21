@@ -2,7 +2,7 @@
 
 #include "core.h"
 #include "layers.h"
-#include "dataset.h"
+#include "ds.h"
 #include "timer.h"
 
 static inline void fill_xavier_uniform(Real *x, int64_t in, int64_t out)
