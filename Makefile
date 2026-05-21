@@ -6,6 +6,7 @@ PARTITION ?= default
 # Defaults
 CC         ?= gcc
 CFLAGS     ?=
+LDFLAGS    ?=
 DEBUG      ?= 0
 OPENMP     ?= 1
 USE_DOUBLE ?= 0
@@ -99,15 +100,15 @@ endif
 
 $(BUILDDIR)/paragnn: $(call to_obj,$(PARAGNN_SRCS)) | $(BUILDDIR)
 	$(E) "  LD    $@"
-	$(Q)$(CC) $(ALL_CFLAGS) -o $@ $^ -lm -lopenblas
+	$(Q)$(CC) $(ALL_CFLAGS) $(LDFLAGS) -o $@ $^ -lm -lopenblas
 
 $(BUILDDIR)/bench-grad-sageconv: $(call to_obj,$(GRAD_SAGECONV_SRCS)) | $(BUILDDIR)
 	$(E) "  LD    $@"
-	$(Q)$(CC) $(ALL_CFLAGS) -o $@ $^ -lm -lopenblas
+	$(Q)$(CC) $(ALL_CFLAGS) $(LDFLAGS) -o $@ $^ -lm -lopenblas
 
 $(BUILDDIR)/aggregate: $(call to_obj,$(AGGREGATE_SRCS)) | $(BUILDDIR)
 	$(E) "  LD    $@"
-	$(Q)$(CC) $(ALL_CFLAGS) -o $@ $^ -lm -lopenblas
+	$(Q)$(CC) $(ALL_CFLAGS) $(LDFLAGS) -o $@ $^ -lm -lopenblas
 
 $(BUILDDIR)/dsprep: $(call to_obj,$(DSPREP_SRC)) | $(BUILDDIR)
 	$(E) "  LD    $@"
@@ -145,6 +146,7 @@ help:
 	@echo "Options:"
 	@echo "  CC=<compiler>              C compiler                [$(notdir $(CC))]"
 	@echo "  CFLAGS=<flags>             Additional compiler flags [$(CFLAGS)]"
+	@echo "  LDFLAGS=<flags>            Additional linking flags  [$(LDFLAGS)]"
 	@echo "  DEBUG=0|1                  Enable debug build        [$(DEBUG)]"
 	@echo "  OPENMP=0|1                 Enable OpenMP             [$(OPENMP)]"
 	@echo "  USE_DOUBLE=0|1             Use double precision      [$(USE_DOUBLE)]"

@@ -1,0 +1,127 @@
+#!/bin/sh
+set -euo pipefail
+
+ARM_GCC="${ARM_GCC:-$HOME/opt/aarch64-gcc/bin/aarch64-none-linux-gnu-gcc-15.2.1}"
+AARCH64_OPENBLAS="${AARCH64_OPENBLAS:-$HOME/opt/aarch64-openblas/lib}"
+echo "ARM_GCC=$ARM_GCC"
+echo "AARCH64_OPENBLAS=$AARCH64_OPENBLAS"
+
+# family:cc:march:ldflags
+declare -A ARCH=(
+    [neoverse_v2]="aarch64:$ARM_GCC:armv9-a+crc+i8mm+bf16+sve2-aes+sve2-bitperm+sve2-sha3+sve2-sm4+memtag+profile:-L$AARCH64_OPENBLAS"
+    [kunpeng_920]="aarch64:$ARM_GCC:armv8.2-a+dotprod+crc+crypto+fp16fml:-L$AARCH64_OPENBLAS"
+    [thunderx2]="aarch64:$ARM_GCC:armv8.1-a+crypto:-L$AARCH64_OPENBLAS"
+    [znver1]="x86-64::znver1:"
+    [znver2]="x86-64::znver2:"
+    [znver3]="x86-64::znver3:"
+    [znver4]="x86-64::znver4:"
+    [sapphirerapids]="x86-64::sapphirerapids:"
+    [icelake-server]="x86-64::icelake-server:"
+)
+
+arm_archs=() x86_archs=()
+for key in "${!ARCH[@]}"; do
+    case "${ARCH[$key]}" in
+        aarch64:*) arm_archs+=("$key") ;;
+        x86-64:*) x86_archs+=("$key") ;;
+    esac
+done
+
+all_archs=("${arm_archs[@]}" "${x86_archs[@]}")
+all_targets=(paragnn bench-grad-sageconv aggregate)
+
+keep_going=0
+targets=()
+verbose=0
+
+usage() {
+    cat >&2 <<EOF
+Usage: $(basename "$0") [-h] [-k] [target ...]
+  -k, --keep-going  Continue building after failures
+  -h, --help        Show this message
+
+Targets: paragnn bench-grad-sageconv aggregate
+EOF
+    exit "${1:-1}"
+}
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -k|--keep-going) keep_going=1; shift ;;
+        -v|--verbose) verbose=1; shift ;;
+        -h|--help) usage 0 ;;
+        -*) usage 1 ;;
+        *) targets+=("$1"); shift ;;
+    esac
+done
+
+[[ ${#targets[@]} -gt 0 ]] || targets=("${all_targets[@]}")
+[[ $keep_going -eq 0 ]]    || set +e
+
+
+# This fixes the module purge not able to finish when run in emacs' M-x compile
+if [ -n "$INSIDE_EMACS" ]; then
+    export LESS="-dFRX"
+fi
+
+# Silence module loading
+mod() {
+    if [[ $verbose -eq 1 ]]; then
+        module "$@"
+    else
+        module "$@" >/dev/null 2>&1
+    fi
+}
+
+# We need to purge as some modules might be polluting the environment
+# variables in way such that ARM_GCC is not able to run
+module purge
+mod load openblas/dynamic/0.3.30
+
+setup_toolchain() {
+    local family=$1
+    # This module breaks ARM_GCC, so aarch64 must be built first
+    if [[ $family == x86-64 ]]; then
+        mod load gcc/cu1281/15.2.0
+    else
+        mod unload gcc/cu1281/15.2.0 2>/dev/null || true
+    fi
+}
+
+fails=0
+
+build_family() {
+    local want=$1
+    local target=$2
+
+    setup_toolchain $want
+    for arch in "${all_archs[@]}"; do
+        IFS=: read -r family cc march ldflags <<< "${ARCH[$arch]}"
+        [[ $family == "$want" ]] || continue
+
+        local log="build/$arch/$target/build.log"
+        mkdir -p "build/$arch/$target"
+
+        cmd=(make -B -j"$(nproc)" "$target" BUILDDIR="build/$arch/$target" V=1)
+        [[ -n $cc ]]      && cmd+=(CC="$cc")
+        [[ -n $march ]]   && cmd+=(MARCH="$march")
+        [[ -n $ldflags ]] && cmd+=(LDFLAGS="$ldflags")
+
+        printf "Building %-20s " "$arch"
+        if "${cmd[@]}" >"$log" 2>&1; then
+            echo "ok"
+        else
+            echo "FAILED (see $log)"
+            ((fails++))
+        fi
+
+    done
+}
+
+for target in "${targets[@]}"; do
+    echo "==> $target"
+    build_family aarch64 "$target"
+    build_family x86-64 "$target"
+done
+
+exit $((fails > 0))
