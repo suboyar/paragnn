@@ -102,56 +102,33 @@
 #endif // NDEBUG
 
 /*
- * Target CPU name for console output. Auto-detected from TARGET_CPU_*
- * defines, falling back to ISA if no specific CPU is set.
+ * Target CPU name for console output. Auto-detected from
+ * TARGET_CPU_* defines.
  */
-#if defined(TARGET_CPU_THUNDERX2)          /* armq     */
+#if defined(TARGET_CPU_GENERIC)
+    #define TARGET_NAME "Generic"
+#elif defined(TARGET_CPU_THUNDERX2)        /* armq     */
     #define TARGET_NAME "ThunderX2 99xx"
-
 #elif defined(TARGET_CPU_EPYC7601)         /* defq     */
     #define TARGET_NAME "EPYC 7601"
-
 #elif defined(TARGET_CPU_EPYC7413)         /* fpgaq    */
     #define TARGET_NAME "EPYC 7413"
-
 #elif defined(TARGET_CPU_EPYC9684X)        /* genoaxq  */
     #define TARGET_NAME "EPYC 9684X"
-
 #elif defined(TARGET_CPU_NEOVERSEV2)       /* gh200q   */
     #define TARGET_NAME "Neoverse-V2"
-
 #elif defined(TARGET_CPU_XEON8360Y)        /* habanaq  */
     #define TARGET_NAME "Xeon Platinum 8360Y"
-
 #elif defined(TARGET_CPU_KUNPENG920)       /* huaq     */
     #define TARGET_NAME "Kunpeng-920"
-
 #elif defined(TARGET_CPU_EPYC7763)         /* milanq   */
     #define TARGET_NAME "EPYC 7763"
-
 #elif defined(TARGET_CPU_EPYC7302P)        /* rome16q  */
     #define TARGET_NAME "EPYC 7302P"
-
 #elif defined(TARGET_CPU_XEONMAX9480)      /* xeonmaxq */
     #define TARGET_NAME "Xeon Max 9480"
-
-/* ---- ISA-level fallbacks ---- */
-
-#elif defined(__AVX512F__)
-    #define TARGET_NAME "Unknown (AVX-512)"
-
-#elif defined(__AVX2__)
-    #define TARGET_NAME "Unknown (AVX2)"
-
-#elif defined(__ARM_FEATURE_SVE2)
-    #define TARGET_NAME "Unknown (SVE2)"
-
-#elif defined(__ARM_NEON) || defined(__ARM_FEATURE_SIMD32)
-    #define TARGET_NAME "Unknown (NEON)"
-
 #else
     #define TARGET_NAME "Unknown"
-
 #endif
 
 typedef struct {
