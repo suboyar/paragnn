@@ -1,22 +1,22 @@
 #!/bin/sh
 set -euo pipefail
 
-ARM_GCC="${ARM_GCC:-$HOME/opt/aarch64-gcc/bin/aarch64-none-linux-gnu-gcc-15.2.1}"
+AARCH64_GCC="${ARM_GCC:-$HOME/opt/aarch64-gcc/bin/aarch64-none-linux-gnu-gcc-15.2.1}"
 AARCH64_OPENBLAS="${AARCH64_OPENBLAS:-$HOME/opt/aarch64-openblas/lib}"
-echo "ARM_GCC=$ARM_GCC"
+echo "AARCH64_GCC=$AARCH64_GCC"
 echo "AARCH64_OPENBLAS=$AARCH64_OPENBLAS"
 
-# family:cc:march:ldflags
+# family:march:target_cpu
 declare -A ARCH=(
-    [neoverse_v2]="aarch64:$ARM_GCC:armv9-a+crc+i8mm+bf16+sve2-aes+sve2-bitperm+sve2-sha3+sve2-sm4+memtag+profile:-L$AARCH64_OPENBLAS"
-    [kunpeng_920]="aarch64:$ARM_GCC:armv8.2-a+dotprod+crc+crypto+fp16fml:-L$AARCH64_OPENBLAS"
-    [thunderx2]="aarch64:$ARM_GCC:armv8.1-a+crypto:-L$AARCH64_OPENBLAS"
-    [znver1]="x86-64::znver1:"
-    [znver2]="x86-64::znver2:"
-    [znver3]="x86-64::znver3:"
-    [znver4]="x86-64::znver4:"
-    [sapphirerapids]="x86-64::sapphirerapids:"
-    [icelake-server]="x86-64::icelake-server:"
+    [neoverse_v2]="aarch64:armv9-a+crc+i8mm+bf16+sve2-aes+sve2-bitperm+sve2-sha3+sve2-sm4+memtag+profile:TARGET_CPU_NEOVERSEV2"
+    [kunpeng_920]="aarch64:armv8.2-a+dotprod+crc+crypto+fp16fml:TARGET_CPU_KUNPENG920"
+    [thunderx2]="aarch64:armv8.1-a+crypto:TARGET_CPU_THUNDERX2"
+    [znver1]="x86-64:znver1:"
+    [znver2]="x86-64:znver2:"
+    [znver3]="x86-64:znver3:"
+    [znver4]="x86-64:znver4:"
+    [sapphirerapids]="x86-64:sapphirerapids:"
+    [icelake-server]="x86-64:icelake-server:"
 )
 
 arm_archs=() x86_archs=()
@@ -73,8 +73,8 @@ mod() {
     fi
 }
 
-# We need to purge as some modules might be polluting the environment
-# variables in way such that ARM_GCC is not able to run
+# We need to purge since some modules might be polluting the environment
+# variables in such a way that AARCH64_GCC is not able to run
 module purge
 mod load openblas/dynamic/0.3.30
 
@@ -96,16 +96,14 @@ build_family() {
 
     setup_toolchain $want
     for arch in "${all_archs[@]}"; do
-        IFS=: read -r family cc march ldflags <<< "${ARCH[$arch]}"
+        IFS=: read -r family march target_cpu <<< "${ARCH[$arch]}"
         [[ $family == "$want" ]] || continue
 
         local log="build/$arch/$target/build.log"
         mkdir -p "build/$arch/$target"
 
-        cmd=(make -B -j"$(nproc)" "$target" BUILDDIR="build/$arch/$target" V=1)
-        [[ -n $cc ]]      && cmd+=(CC="$cc")
-        [[ -n $march ]]   && cmd+=(MARCH="$march")
-        [[ -n $ldflags ]] && cmd+=(LDFLAGS="$ldflags")
+        cmd=(make -B -j"$(nproc)" "$target" MARCH="$march" BUILDDIR="build/$arch/$target" V=1)
+        [[ $family == aarch64 ]]  && cmd+=(CC="$AARCH64_GCC" LDFLAGS="-L$AARCH64_OPENBLAS" TARGET_CPU="$target_cpu")
 
         printf "Building %-20s " "$arch"
         if "${cmd[@]}" >"$log" 2>&1; then
