@@ -32,7 +32,7 @@ BASIC_CFLAGS += $(DEFS)
 BASIC_CFLAGS += -MMD -MP
 
 ifeq ($(DEBUG),1)
-    BASIC_CFLAGS += -O0 -ggdb -g3 -gdwarf-2
+    BASIC_CFLAGS += -O0 -ggdb -g3 -gdwarf-2 -march=$(MARCH)
     # suppress ABI warnings from platform-specific vector types
     BASIC_CFLAGS += -Wno-psabi
 else
