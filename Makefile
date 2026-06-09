@@ -1,6 +1,6 @@
 .DELETE_ON_ERROR:
 
-PARTITION ?= default
+PARTITION ?= $(or $(SLURM_JOB_PARTITION),default)
 -include mkconfigs/$(PARTITION).mk
 
 # Defaults
