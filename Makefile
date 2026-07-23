@@ -1,9 +1,11 @@
 .DELETE_ON_ERROR:
 
+MAKEFLAGS += -j$(shell nproc)
+
 PARTITION ?= $(or $(SLURM_JOB_PARTITION),default)
 -include mkconfigs/$(PARTITION).mk
 
-# Defaults
+# Defaulst
 CC         ?= gcc
 CFLAGS     ?=
 LDFLAGS    ?=
@@ -19,7 +21,8 @@ V          ?= 0
 DATADIR ?= ~/D1/paragnn-ds
 
 # remove trailing slash if included
-BUILDDIR   := $(patsubst %/,%,$(BUILDDIR))
+BUILDDIR := $(patsubst %/,%,$(BUILDDIR))
+BENCHDIR = $(BUILDDIR)/benchmark
 
 BASIC_CFLAGS += -D_POSIX_C_SOURCE=200809L \
                 -Wfloat-conversion \
@@ -57,16 +60,22 @@ endif
 
 ALL_CFLAGS = $(strip $(BASIC_CFLAGS) $(CFLAGS))
 
-to_obj = $(addprefix $(BUILDDIR)/,$(notdir $(patsubst %.c,%.o,$1)))
+to_obj = $(patsubst %.c,$(BUILDDIR)/%.o,$1)
+to_bench_obj = $(patsubst %.c,$(BENCHDIR)/%.o,$1)
 
 PARAGNN_SRCS = src/main.c src/core.c src/nn.c src/sageconv.c src/matmul_naive.c \
                src/ds.c src/dsinfo.c src/layers.c src/optim.c src/timer.c
 
-GRAD_SAGECONV_SRCS := kernels/grad_sageconv_common.c \
-                      kernels/grad_sageconv_fused.c \
-                      kernels/grad_sageconv_gemm_tn.c \
-                      kernels/grad_sageconv_outer_tn.c \
-                      kernels/grad_sageconv.c \
+GRAD_SAGECONV_SRCS := kernels/grad_sageconv/bench.c \
+                      kernels/grad_sageconv/outer_tn/outer_tn_kernel.c \
+                      kernels/grad_sageconv/outer_tn/outer_tn_v1.c \
+                      kernels/grad_sageconv/outer_tn/outer_tn_v2.c \
+                      kernels/grad_sageconv/outer_tn/outer_tn_v3.c \
+                      kernels/grad_sageconv/outer_tn/outer_tn_v4.c \
+                      kernels/grad_sageconv/outer_tn/outer_tn_v5.c \
+                      kernels/grad_sageconv/outer_tn/outer_tn_v6.c \
+                      kernels/grad_sageconv/outer_tn/outer_tn_v7.c \
+                      kernels/grad_sageconv/grad_mean_aggregate.c \
                       kernels/cache_counter.c \
                       src/core.c \
                       src/ds.c \
@@ -84,7 +93,7 @@ AGGREGATE_SRCS := kernels/aggregate.c \
 DSPREP_SRC :=  src/dsprep.c src/dsinfo.c src/core.c
 
 paragnn: $(BUILDDIR)/paragnn
-bench-gs: $(BUILDDIR)/bench-gs
+bench-gs: $(BENCHDIR)/bench-gs
 # bench-agg: $(BUILDDIR)/bench-agg
 dsprep: $(BUILDDIR)/dsprep
 
@@ -102,7 +111,7 @@ $(BUILDDIR)/paragnn: $(call to_obj,$(PARAGNN_SRCS)) | $(BUILDDIR)
 	$(E) "  LD    $@"
 	$(Q)$(CC) $(ALL_CFLAGS) $(LDFLAGS) -o $@ $^ -lm -lopenblas
 
-$(BUILDDIR)/bench-gs: $(call to_obj,$(GRAD_SAGECONV_SRCS)) | $(BUILDDIR)
+$(BENCHDIR)/bench-gs: $(call to_bench_obj,$(GRAD_SAGECONV_SRCS)) | $(BENCHDIR)
 	$(E) "  LD    $@"
 	$(Q)$(CC) $(ALL_CFLAGS) $(LDFLAGS) -o $@ $^ -lm -lopenblas
 
@@ -114,21 +123,25 @@ $(BUILDDIR)/dsprep: $(call to_obj,$(DSPREP_SRC)) | $(BUILDDIR)
 	$(E) "  LD    $@"
 	$(Q)$(CC) $(BASIC_CFLAGS) -o $@ $^ -lz
 
-$(BUILDDIR)/%.o: src/%.c | $(BUILDDIR)
-	$(E) "  CC    $<"
-	$(Q)$(CC) $(ALL_CFLAGS) -c $< -o $@
-
-$(BUILDDIR)/%.o: kernels/%.c | $(BUILDDIR)
+$(BUILDDIR)/%.o: %.c
+	@mkdir -p $(dir $@)
 	$(E) "  CC    $<"
 	$(Q)$(CC) $(ALL_CFLAGS) -Isrc/ -c $< -o $@
 
-$(BUILDDIR):
-	mkdir -p $@
+$(BENCHDIR)/%.o: %.c
+	@mkdir -p $(dir $@)
+	$(E) "  CC    $<"
+	$(Q)$(CC) $(ALL_CFLAGS) -Isrc/ -c $< -o $@
+
+$(BUILDDIR)/grad_sageconv_outer_tn.s: kernels/grad_sageconv_outer_tn.c | $(BUILDDIR)
+	$(E) "  ASM   $<"
+	$(Q)$(CC) $(ALL_CFLAGS) -DMCA_MARKERS -Isrc/ -S -o $@ $<
 
 arxiv products papers100M: $(BUILDDIR)/dsprep
 	./$< -ds $@ -datadir $(DATADIR)
 
 clean:
+	rm -rf $(BENCHDIR)
 	rm -rf $(BUILDDIR)
 
 help:

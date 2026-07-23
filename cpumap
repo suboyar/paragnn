@@ -72,7 +72,7 @@ cores)
         habanaq)  echo 0-71         ;;
         huaq)     echo 0-127        ;;
         milanq)   echo 0-127        ;;
-        rome16q)  echo 0-31         ;;
+        rome16q)  echo 0-15         ;;
         xeonmaxq) echo 0-111        ;;
         *) echo >&2 "error: unknown partition: $part"; exit 1 ;;
     esac

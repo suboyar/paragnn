@@ -131,6 +131,14 @@
     #define TARGET_NAME "Unknown"
 #endif
 
+#ifdef MCA_MARKERS
+    #define MCA_BEGIN(name) __asm volatile("# LLVM-MCA-BEGIN " name)
+    #define MCA_END(name)   __asm volatile("# LLVM-MCA-END " name)
+#else
+    #define MCA_BEGIN(name)
+    #define MCA_END(name)
+#endif
+
 typedef struct {
     FILE* fp;
     char* filename;
