@@ -8,24 +8,29 @@
 
 #include "core.h"
 
+
+static long _cache_line = -1;
 static long get_cache_line_size(void)
 {
-    long size;
+    if (_cache_line < 0)
+    {
+        _cache_line = sysconf(_SC_LEVEL4_CACHE_LINESIZE);
+        if (_cache_line > 0) goto exit;
 
-    size = sysconf(_SC_LEVEL4_CACHE_LINESIZE);
-    if (size > 0) return size;
+        _cache_line = sysconf(_SC_LEVEL3_CACHE_LINESIZE);
+        if (_cache_line > 0) goto exit;
 
-    size = sysconf(_SC_LEVEL3_CACHE_LINESIZE);
-    if (size > 0) return size;
+        _cache_line = sysconf(_SC_LEVEL2_CACHE_LINESIZE);
+        if (_cache_line > 0) goto exit;
 
-    size = sysconf(_SC_LEVEL2_CACHE_LINESIZE);
-    if (size > 0) return size;
+        _cache_line = sysconf(_SC_LEVEL1_DCACHE_LINESIZE);
+        if (_cache_line > 0) goto exit;
 
-    size = sysconf(_SC_LEVEL1_DCACHE_LINESIZE);
-    if (size > 0) return size;
-
-    // Cache line size unavailable via sysconf(), using default of 64 bytes
-    return 64;
+        // Cache line size unavailable via sysconf(), using default of 64 bytes
+        _cache_line = 64;
+    }
+exit:
+    return _cache_line;
 }
 
 void *cache_aligned_alloc(size_t size)

@@ -33,20 +33,7 @@ static FILE        *csv_fd;
 static DatasetKind  dataset;
 static char        *datadir;
 
-#define OUTER_TN_SIGNATUR int64_t, int64_t, int64_t,                \
-        const Real*, int64_t,                                       \
-        const Real*, int64_t,                                       \
-        Real*, int64_t
-
-void outer_tn_v1(OUTER_TN_SIGNATUR);
-void outer_tn_v2(OUTER_TN_SIGNATUR);
-void outer_tn_v3(OUTER_TN_SIGNATUR);
-void outer_tn_v4(OUTER_TN_SIGNATUR);
-void outer_tn_v5(OUTER_TN_SIGNATUR);
-void outer_tn_v6(OUTER_TN_SIGNATUR);
-void outer_tn_v7(OUTER_TN_SIGNATUR);
-
-typedef void (*outer_fn)(OUTER_TN_SIGNATUR);
+typedef void (*outer_fn)(int64_t, int64_t, int64_t, const Real*, int64_t, const Real*, int64_t, Real*, int64_t);
 typedef void (*fptr)(SageLayer *const l);
 
 typedef struct {
@@ -56,7 +43,8 @@ typedef struct {
 
 #define BENCH_FUNC(fn) { .func = &(fn), .name = #fn }
 
-void cblas_gemm(SageLayer *l)
+// Used for both as computing reference for validation stage and benchmarking
+static void cblas_gemm(SageLayer *l)
 {
     cblas_rgemm(CblasRowMajor,
                 CblasTrans, CblasNoTrans,
@@ -138,7 +126,7 @@ static bool is_valid(Real *x, Real *y, int64_t n)
     return true;
 }
 
-void validate(int64_t in_dim, int64_t out_dim, Dataset *ds, BenchKernel *funcs, size_t func_count)
+static void validate(int64_t in_dim, int64_t out_dim, Dataset *ds, BenchKernel *funcs, size_t func_count)
 {
     SageLayer *l = sage_layer_create(ds->num_nodes, ds->num_edges, ds->edges, in_dim, out_dim, SOURCE_TO_TARGET);
 
@@ -153,9 +141,8 @@ void validate(int64_t in_dim, int64_t out_dim, Dataset *ds, BenchKernel *funcs, 
     // compute reference
     printf("Reference:");
     fflush(stdout);
-    Real *ref_gwr = cache_aligned_alloc(l->in_dim * l->out_dim * sizeof(Real));
-    Real *ref_gwa = cache_aligned_alloc(l->in_dim * l->out_dim * sizeof(Real));
-    // grad_Wroot = input^T @ grad_output
+
+    Real *ref_grad_Wroot = cache_aligned_alloc(l->in_dim * l->out_dim * sizeof(Real));
     cblas_rgemm(CblasRowMajor,
                 CblasTrans, CblasNoTrans,
                 l->in_dim, l->out_dim, l->num_nodes,
@@ -163,69 +150,50 @@ void validate(int64_t in_dim, int64_t out_dim, Dataset *ds, BenchKernel *funcs, 
                 l->input,       l->in_dim,
                 l->grad_output, l->out_dim,
                 0.0,
-                ref_gwr,  l->out_dim);
-    // grad_Wagg = agg^T @ grad_output
-    cblas_rgemm(CblasRowMajor,
-                CblasTrans, CblasNoTrans,
-                l->in_dim, l->out_dim, l->num_nodes,
-                1.0,
-                l->agg,         l->in_dim,
-                l->grad_output, l->out_dim,
-                0.0,
-                ref_gwa,   l->out_dim);
-    printf(" ok\n");
+                ref_grad_Wroot,  l->out_dim);
 
-    for (size_t i = 0; i < sizeof(funcs)/sizeof(funcs[0]); i++)
+    printf(" ok\n");
+    fflush(stdout);
+
+    for (size_t i = 0; i < func_count; i++)
     {
         if (isatty(STDOUT_FILENO))
         {
-            printf("\r\033[KValidating: %s", funcs[i].name);
+            printf("\r\033[KValidating: %s", funcs[i].name, i+1, func_count);
             fflush(stdout);
         }
 
         real_zero_out(l->grad_Wroot, l->in_dim * l->out_dim);
-        real_zero_out(l->grad_Wagg, l->in_dim * l->out_dim);
-        real_zero_out(l->grad_input, l->num_nodes * l->in_dim);
-        real_zero_out(l->grad_scatter, l->num_nodes * l->in_dim);
 
         funcs[i].func(l);
-        if(!is_valid(l->grad_Wroot, ref_gwr, l->in_dim * l->out_dim))
+
+        if (isatty(STDOUT_FILENO)) printf("\r\033[K");
+        if(is_valid(l->grad_Wroot, ref_grad_Wroot, l->in_dim * l->out_dim)) // for test purpose the logic is wrong
         {
-            if (isatty(STDOUT_FILENO)) printf("\r\033[K");
+            printf("Validating: %s (fail)\n", funcs[i].name, i+1, func_count);
+            fflush(stdout);
             ERROR("grad_Wroot doesn't match the reference (%s)", funcs[i].name);
         }
-        if(!is_valid(l->grad_Wagg, ref_gwa, l->in_dim * l->out_dim))
-        {
-            if (isatty(STDOUT_FILENO)) printf("\r\033[K");
-            ERROR("grad_Wagg doesn't match the reference (%s)", funcs[i].name);
-        }
-
-        if (isatty(STDOUT_FILENO))
-        {
-            printf(".");
-            fflush(stdout);
-        };
+        printf("Validating: %s (ok)\n", funcs[i].name);
+        fflush(stdout);
     }
 
-    if (isatty(STDOUT_FILENO)) printf("\r\033[KValidating: ok\n");
 
-    free(ref_gwr);
-    free(ref_gwa);
+    free(ref_grad_Wroot);
     free(input);
     sage_layer_free(&l);
 }
 
-void benchmark_kernel(int64_t in_dim, int64_t out_dim, Dataset *ds)
+static void benchmark_kernel(int64_t in_dim, int64_t out_dim, Dataset *ds)
 {
     cache_counter_t* thread_counters = cache_counter_init_all();
 
     BenchKernel funcs[] = {
-        BENCH_FUNC(outer_tn_kernel_v1),
-        BENCH_FUNC(cblas_gemm),
-        BENCH_FUNC(outer_tn_kernel_v2),
-        BENCH_FUNC(outer_tn_kernel_v3),
-        BENCH_FUNC(outer_tn_kernel_v4),
-        BENCH_FUNC(outer_tn_kernel_v5),
+        // BENCH_FUNC(cblas_gemm),
+        // BENCH_FUNC(outer_tn_kernel_v1),
+        // BENCH_FUNC(outer_tn_kernel_v2),
+        // BENCH_FUNC(outer_tn_kernel_v3),
+        // BENCH_FUNC(outer_tn_kernel_v5),
         BENCH_FUNC(outer_tn_kernel_v6),
         BENCH_FUNC(outer_tn_kernel_v7),
     };
@@ -235,43 +203,42 @@ void benchmark_kernel(int64_t in_dim, int64_t out_dim, Dataset *ds)
     validate(in_dim, out_dim, ds, funcs, sizeof(funcs)/sizeof(funcs[0]));
 #endif // SKIP_VALID
 
-    // NUMA first touch
-    SageLayer *layers[func_count];
-    for (size_t i = 0; i < func_count; i++)
-    {
-        SageLayer *l = sage_layer_create(ds->num_nodes, ds->num_edges, ds->edges, in_dim, out_dim, SOURCE_TO_TARGET);
-
-        // Real *input = cache_aligned_alloc(ds->num_nodes * l->in_dim * sizeof(Real));
-        // fill_uniform(input, ds->num_nodes * l->in_dim);
-        // l->input = input;
-
-        // Real *grad_output = cache_aligned_alloc(ds->num_nodes * l->out_dim * sizeof(Real));
-        // fill_uniform(grad_output, ds->num_nodes * l->out_dim);
-        // l->grad_output = grad_output;
-
-        l->input = cache_aligned_alloc(ds->num_nodes * l->in_dim * sizeof(Real));
-        l->grad_output = cache_aligned_alloc(ds->num_nodes * l->out_dim * sizeof(Real));
-
-        layers[i] = l;
-
-        funcs[i].func(l);
-    }
-
+    SageLayer *l = NULL;
     for (size_t i = 0; i < sizeof(funcs)/sizeof(funcs[0]); i++)
     {
-        SageLayer *l = layers[i];
-#if !defined(SKIP_WARMUP)
-        if (isatty(STDOUT_FILENO))
+        // NUMA first touch
+        printf("First touch: %s ", funcs[i].name);
+        fflush(stdout);
+        if (l != NULL)
         {
-            printf("\r\033[KWarmup: %s", funcs[i].name);
-            fflush(stdout);
+            free(l->input);
+            sage_layer_free(&l);
         }
+        l = sage_layer_create(ds->num_nodes, ds->num_edges, ds->edges, in_dim, out_dim, SOURCE_TO_TARGET);
 
-        for (int64_t j = 0; j < 10; j++)
+#if 0
+        Real *input = cache_aligned_alloc(ds->num_nodes * l->in_dim * sizeof(Real));
+        fill_uniform(input, ds->num_nodes * l->in_dim);
+        l->input = input;
+        Real *grad_output = cache_aligned_alloc(ds->num_nodes * l->out_dim * sizeof(Real));
+        fill_uniform(grad_output, ds->num_nodes * l->out_dim);
+        l->grad_output = grad_output;
+#else
+        l->input = cache_aligned_alloc(ds->num_nodes * l->in_dim * sizeof(Real));
+        l->grad_output = cache_aligned_alloc(ds->num_nodes * l->out_dim * sizeof(Real));
+        funcs[i].func(l);
+#endif
+
+        printf("\r\033[KFirst touch: %s (ok)\n", funcs[i].name);
+        fflush(stdout);
+
+#if !defined(SKIP_WARMUP)
+        const int warmup_count = 10;
+        for (int j = 0; j < warmup_count; j++)
         {
             if (isatty(STDOUT_FILENO))
             {
-                printf(".");
+                printf("\r\033[KWarmup: %s (%d/%d)", funcs[i].name, j+1, warmup_count);
                 fflush(stdout);
             }
 
@@ -281,6 +248,11 @@ void benchmark_kernel(int64_t in_dim, int64_t out_dim, Dataset *ds)
             real_zero_out(l->grad_scatter, l->num_nodes * in_dim);
             funcs[i].func(l);
         }
+
+        if (isatty(STDOUT_FILENO)) printf("\r\033[K");
+        printf("Warmup: %s (ok)\n", funcs[i].name);
+        fflush(stdout);
+
 #endif // SKIP_WARMUP
 
         double min_time = DBL_MAX;
@@ -288,13 +260,13 @@ void benchmark_kernel(int64_t in_dim, int64_t out_dim, Dataset *ds)
         uint64_t flops = 2 * l->num_nodes * in_dim * out_dim;
 
         // Run
-        double sum_time = 0.0;
-        if (isatty(STDOUT_FILENO))
+        if (!isatty(STDOUT_FILENO))
         {
-            printf("\r\033[KRun: %s", funcs[i].name);
+            printf("Run: %s", funcs[i].name);
             fflush(stdout);
         }
 
+        double sum_time = 0.0;
         for (int64_t j = 0; j < ntimes; j++)
         {
             real_zero_out(l->grad_Wroot, in_dim * out_dim);
@@ -316,10 +288,8 @@ void benchmark_kernel(int64_t in_dim, int64_t out_dim, Dataset *ds)
 
             if (isatty(STDOUT_FILENO))
             {
-                printf("\r\033[KRun: %s", funcs[i].name);
-                for (int64_t k = 0; k <= j; k++)
-                    putchar('.');
-                printf("%.2fs", sum_time / (j + 1));
+                printf("\r\033[KRun: %s (%d/%d) [%.5fs]", \
+                       funcs[i].name, j+1, ntimes, sum_time / (j + 1));
                 fflush(stdout);
             }
 
@@ -337,15 +307,13 @@ void benchmark_kernel(int64_t in_dim, int64_t out_dim, Dataset *ds)
                 }
             }
         }
+
+        if (isatty(STDOUT_FILENO)) printf("\r\033[KRun: %s", funcs[i].name);
+        printf(" (ok)\n");
+        fflush(stdout);
         timer_enable();
         timer_record_counters(funcs[i].name, flops, l3_local, l3_remote, bytes);
         timer_disable();
-    }
-
-    if (isatty(STDOUT_FILENO))
-    {
-        printf("\r\033[K");
-        fflush(stdout);
     }
 
     timer_print();
@@ -353,12 +321,8 @@ void benchmark_kernel(int64_t in_dim, int64_t out_dim, Dataset *ds)
 
     cache_counter_close_all(thread_counters);
     timer_reset();
-    for (size_t i = 0; i < func_count; i++)
-    {
-        SageLayer *l = layers[i];
-        free(l->input);
-        sage_layer_free(&l);
-    }
+    free(l->input);
+    sage_layer_free(&l);
 }
 
 enum {
@@ -383,7 +347,7 @@ static struct option long_options[] = {
     {0,         0,                 0,    0}
 };
 
-void usage(const char *progname)
+static void usage(const char *progname)
 {
     fprintf(stderr,
             "Usage: %s [OPTIONS]\n"

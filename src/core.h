@@ -47,10 +47,15 @@
     } while(0)
 #endif
 
-#ifndef ERROR
+#ifndef NDEBUG
 #define ERROR(fmt, ...) do {                                            \
         LOG_ERROR(fmt, ##__VA_ARGS__);                                  \
-        abort();                                                        \
+        __builtin_trap();                                               \
+    } while(0)
+#else
+#define ERROR(fmt, ...) do {                                            \
+        LOG_ERROR(fmt, ##__VA_ARGS__);                                  \
+        _exit(1);                                                       \
     } while(0)
 #endif
 
