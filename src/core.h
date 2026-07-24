@@ -1,9 +1,10 @@
 #ifndef CORE_H
 #define CORE_H
 
+#include <math.h>
 #include <stdlib.h>
 #include <stdio.h>
-#include <math.h>
+#include <unistd.h>
 #include <cblas.h>
 
 #define STRINGIFY(x) #x
