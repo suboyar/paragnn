@@ -43,6 +43,36 @@ typedef struct {
 
 #define BENCH_FUNC(fn) { .func = &(fn), .name = #fn }
 
+// Used as the "naive" benchmark
+static void _naive(int64_t M, int64_t N, int64_t K,
+           const Real *restrict A, int64_t lda,
+           const Real *restrict B, int64_t ldb,
+           Real *restrict C, int64_t ldc)
+{
+#pragma omp parallel for
+    for (int64_t i = 0; i < M; i++)
+    {
+        Real *c_row = &C[i*ldc];
+        {
+            for (int64_t j = 0; j < N; j++)
+            {
+                for (int64_t k = 0; k < K; k++)
+                {
+                    c_row[j] += A[k*lda + i] * B[k*ldb + j];
+                } // end for j
+            } // end for k
+        } // end for i
+    }
+}
+
+static void naive(SageLayer *l)
+{
+    _naive(l->in_dim, l->out_dim, l->num_nodes,
+           l->input,       l->in_dim,
+           l->grad_output, l->out_dim,
+           l->grad_Wroot,  l->out_dim);
+}
+
 // Used for both as computing reference for validation stage and benchmarking
 static void cblas_gemm(SageLayer *l)
 {
@@ -55,6 +85,7 @@ static void cblas_gemm(SageLayer *l)
                 0.0,
                 l->grad_Wroot,  l->out_dim);
 }
+
 
 static void grad_sageconv_impl(SageLayer *l, outer_fn kernel)
 {
@@ -168,7 +199,7 @@ static void validate(int64_t in_dim, int64_t out_dim, Dataset *ds, BenchKernel *
         funcs[i].func(l);
 
         if (isatty(STDOUT_FILENO)) printf("\r\033[K");
-        if(is_valid(l->grad_Wroot, ref_grad_Wroot, l->in_dim * l->out_dim)) // for test purpose the logic is wrong
+        if(!is_valid(l->grad_Wroot, ref_grad_Wroot, l->in_dim * l->out_dim))
         {
             printf("Validating: %s (fail)\n", funcs[i].name, i+1, func_count);
             fflush(stdout);
@@ -189,14 +220,12 @@ static void benchmark_kernel(int64_t in_dim, int64_t out_dim, Dataset *ds)
     cache_counter_t* thread_counters = cache_counter_init_all();
 
     BenchKernel funcs[] = {
-        // BENCH_FUNC(cblas_gemm),
-        // BENCH_FUNC(outer_tn_kernel_v1),
-        // BENCH_FUNC(outer_tn_kernel_v2),
-        // BENCH_FUNC(outer_tn_kernel_v3),
-        // BENCH_FUNC(outer_tn_kernel_v5),
-        BENCH_FUNC(outer_tn_kernel_v6),
-        BENCH_FUNC(outer_tn_kernel_v7),
-    };
+        BENCH_FUNC(naive),
+        BENCH_FUNC(cblas_gemm),
+        BENCH_FUNC(outer_tn_kernel_v1),
+        BENCH_FUNC(outer_tn_kernel_v2),
+        BENCH_FUNC(outer_tn_kernel_v3),
+        };
     size_t func_count = sizeof(funcs)/sizeof(funcs[0]);
 
 #if !defined(SKIP_VALID)
@@ -450,7 +479,11 @@ int main(int argc, char** argv)
     int omp_num_threads = omp_get_max_threads();
     if (openblas_num_threads == 1)
     {
-        fprintf(stderr, "Error: OpenBLAS thread count is 1. Set OPENBLAS_NUM_THREADS or call openblas_set_num_threads()\n");
+        fprintf(stderr,
+                "Error: OpenBLAS thread count is 1. "
+                "Set OPENBLAS_NUM_THREADS (for non-OpenMP), "
+                "OMP_NUM_THREADS (for OpenMP builds) or "
+                "call openblas_set_num_threads()\n");
         return 1;
     }
 

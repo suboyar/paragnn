@@ -13,19 +13,25 @@ typedef double v8d  __attribute__((vector_size(64)));
 
 #if defined(__AVX512F__)
     #define NUM_REGS 32
-    #define N_VEC (64 / (int)sizeof(Real))
+    #define VLEN 512
+    #define VLEN_BYTES 64
 #elif defined(__AVX2__)
     #define NUM_REGS 16
-    #define N_VEC (32 / (int)sizeof(Real))
+    #define VLEN 256
+    #define VLEN_BYTES 32
 #elif defined(__ARM_NEON) || defined(__ARM_NEON__)
     #define NUM_REGS 32
-    #define N_VEC (16 / (int)sizeof(Real))
+    #define VLEN 128
+    #define VLEN_BYTES 16
 #elif defined(__SSE2__)
     #define NUM_REGS 16
-    #define N_VEC (16 / (int)sizeof(Real))
+    #define VLEN 128
+    #define VLEN_BYTES 16
 #else
     #error "Unsupported platform: need AVX2, AVX-512, or ARM NEON"
 #endif
+
+#define N_VEC (VLEN_BYTES / (int)sizeof(Real))
 
 // ARM Specific Microarchitectures
 #if defined(TARGET_CPU_THUNDERX2)      // armq
