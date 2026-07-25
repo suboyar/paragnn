@@ -24,8 +24,7 @@ DATADIR ?= ~/D1/paragnn-ds
 BUILDDIR := $(patsubst %/,%,$(BUILDDIR))
 BENCHDIR = $(BUILDDIR)/benchmark
 
-BASIC_CFLAGS += -D_POSIX_C_SOURCE=200809L \
-                -Wfloat-conversion \
+BASIC_CFLAGS += -Wfloat-conversion \
                 -Werror=implicit-function-declaration \
                 -Werror=strict-prototypes \
                 -Werror=incompatible-pointer-types
