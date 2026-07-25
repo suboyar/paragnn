@@ -5,6 +5,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <wordexp.h>
+#include <omp.h>
 
 #include "core.h"
 

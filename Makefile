@@ -43,6 +43,8 @@ endif
 
 ifeq ($(OPENMP),1)
     BASIC_CFLAGS += -fopenmp
+else
+    BASIC_LDFLAGS += -lgomp
 endif
 
 ifeq ($(USE_DOUBLE),1)
@@ -58,7 +60,7 @@ else
 endif
 
 ALL_CFLAGS = $(strip $(BASIC_CFLAGS) $(CFLAGS))
-
+ALL_LDFLAGS = $(strip $(BASIC_LDFLAGS) $(LDFLAGS))
 to_obj = $(patsubst %.c,$(BUILDDIR)/%.o,$1)
 to_bench_obj = $(patsubst %.c,$(BENCHDIR)/%.o,$1)
 
@@ -108,15 +110,15 @@ endif
 
 $(BUILDDIR)/paragnn: $(call to_obj,$(PARAGNN_SRCS)) | $(BUILDDIR)
 	$(E) "  LD    $@"
-	$(Q)$(CC) $(ALL_CFLAGS) $(LDFLAGS) -o $@ $^ -lm -lopenblas
+	$(Q)$(CC) $(ALL_CFLAGS) $(ALL_LDFLAGS) -o $@ $^ -lm -lopenblas
 
 $(BENCHDIR)/bench-gs: $(call to_bench_obj,$(GRAD_SAGECONV_SRCS)) | $(BENCHDIR)
 	$(E) "  LD    $@"
-	$(Q)$(CC) $(ALL_CFLAGS) $(LDFLAGS) -o $@ $^ -lm -lopenblas
+	$(Q)$(CC) $(ALL_CFLAGS) $(ALL_LDFLAGS) -o $@ $^ -lm -lopenblas -lnuma
 
 $(BUILDDIR)/bench-agg: $(call to_obj,$(AGGREGATE_SRCS)) | $(BUILDDIR)
 	$(E) "  LD    $@"
-	$(Q)$(CC) $(ALL_CFLAGS) $(LDFLAGS) -o $@ $^ -lm -lopenblas
+	$(Q)$(CC) $(ALL_CFLAGS) $(ALL_LDFLAGS) -o $@ $^ -lm -lopenblas
 
 $(BUILDDIR)/dsprep: $(call to_obj,$(DSPREP_SRC)) | $(BUILDDIR)
 	$(E) "  LD    $@"
