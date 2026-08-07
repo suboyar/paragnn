@@ -38,6 +38,22 @@ void *cache_aligned_alloc(size_t size)
     return aligned_alloc(alignment, padded_size);
 }
 
+int get_active_sockets(void)
+{
+    static int active_sockets = 0;
+    static int is_initialized = 0;
+
+    if (__builtin_expect(!is_initialized, 0))
+    {
+        struct bitmask *run_nodes = numa_get_run_node_mask();
+        active_sockets = numa_bitmask_weight(run_nodes);
+        numa_bitmask_free(run_nodes);
+        is_initialized = 1;
+    }
+
+    return active_sockets;
+}
+
 #ifndef PARALLEL_ZERO_THRESHOLD
 #ifdef USE_DOUBLE
 #define PARALLEL_ZERO_THRESHOLD 32768  // 256KB of doubles i.e L2 cache

@@ -29,8 +29,8 @@ void sgd_update(SGD *sgd, SageNet *net)
         if (layer.type == LAYER_SAGE)
         {
             SageLayer *l = (SageLayer*)layer.ctx;
-            sgd_step(sgd, l->Wroot, l->grad_Wroot, l->in_dim * l->out_dim);
-            sgd_step(sgd, l->Wagg, l->grad_Wagg, l->in_dim * l->out_dim);
+            sgd_step(sgd, l->Wroot, l->grad_Wroot, l->in_dim * l->ldW);
+            sgd_step(sgd, l->Wagg, l->grad_Wagg, l->in_dim * l->ldW);
         }
 
         else if (layer.type == LAYER_LINEAR)
@@ -59,7 +59,6 @@ void sgd_free(SGD **sgd)
 
 // ADAM optimizer
 
-// __attribute__((optimize("unroll-loops")))
 static void adam_step(AdamState *restrict s, Real *restrict param, const Real *restrict grad, int64_t n)
 {
     s->t++;
@@ -141,13 +140,13 @@ Adam* adam_create(SageNet *net, Real lr)
         if (layer.type == LAYER_SAGE)
         {
             SageLayer *l = (SageLayer*)layer.ctx;
-            adam->states[s++] = adam_state_create(l->in_dim * l->out_dim, lr);
-            adam->states[s++] = adam_state_create(l->in_dim  * l->out_dim,  lr);
+            adam->states[s++] = adam_state_create(l->in_dim * l->ldW, lr);
+            adam->states[s++] = adam_state_create(l->in_dim  * l->ldW,  lr);
         }
         else if (layer.type == LAYER_LINEAR)
         {
             LinearLayer *l = (LinearLayer*)layer.ctx;
-            adam->states[s++] = adam_state_create(l->in_dim * l->out_dim,    lr);
+            adam->states[s++] = adam_state_create(l->in_dim * l->out_dim, lr);
             adam->states[s++] = adam_state_create(l->out_dim, lr);
         }
     }
@@ -164,8 +163,8 @@ void adam_update(Adam *adam, SageNet *net)
         if (layer.type == LAYER_SAGE)
         {
             SageLayer *l = (SageLayer*)layer.ctx;
-            adam_step(adam->states[s++], l->Wroot, l->grad_Wroot, l->in_dim * l->out_dim);
-            adam_step(adam->states[s++], l->Wagg, l->grad_Wagg, l->in_dim * l->out_dim);
+            adam_step(adam->states[s++], l->Wroot, l->grad_Wroot, l->in_dim * l->ldW);
+            adam_step(adam->states[s++], l->Wagg, l->grad_Wagg, l->in_dim * l->ldW);
         }
         else if (layer.type == LAYER_LINEAR)
         {

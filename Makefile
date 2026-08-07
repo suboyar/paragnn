@@ -61,6 +61,9 @@ endif
 
 ALL_CFLAGS = $(strip $(BASIC_CFLAGS) $(CFLAGS))
 ALL_LDFLAGS = $(strip $(BASIC_LDFLAGS) $(LDFLAGS))
+
+COMMON_LIBS = -lm -lopenblas  -lnuma
+
 to_obj = $(patsubst %.c,$(BUILDDIR)/%.o,$1)
 to_bench_obj = $(patsubst %.c,$(BENCHDIR)/%.o,$1)
 
@@ -72,10 +75,6 @@ GRAD_SAGECONV_SRCS := kernels/grad_sageconv/bench.c \
                       kernels/grad_sageconv/outer_tn/outer_tn_v1.c \
                       kernels/grad_sageconv/outer_tn/outer_tn_v2.c \
                       kernels/grad_sageconv/outer_tn/outer_tn_v3.c \
-                      kernels/grad_sageconv/outer_tn/outer_tn_v4.c \
-                      kernels/grad_sageconv/outer_tn/outer_tn_v5.c \
-                      kernels/grad_sageconv/outer_tn/outer_tn_v6.c \
-                      kernels/grad_sageconv/outer_tn/outer_tn_v7.c \
                       kernels/grad_sageconv/grad_mean_aggregate.c \
                       kernels/cache_counter.c \
                       src/core.c \
@@ -110,15 +109,15 @@ endif
 
 $(BUILDDIR)/paragnn: $(call to_obj,$(PARAGNN_SRCS)) | $(BUILDDIR)
 	$(E) "  LD    $@"
-	$(Q)$(CC) $(ALL_CFLAGS) $(ALL_LDFLAGS) -o $@ $^ -lm -lopenblas
+	$(Q)$(CC) $(ALL_CFLAGS) $(ALL_LDFLAGS) -o $@ $^ $(COMMON_LIBS)
 
 $(BENCHDIR)/bench-gs: $(call to_bench_obj,$(GRAD_SAGECONV_SRCS)) | $(BENCHDIR)
 	$(E) "  LD    $@"
-	$(Q)$(CC) $(ALL_CFLAGS) $(ALL_LDFLAGS) -o $@ $^ -lm -lopenblas -lnuma
+	$(Q)$(CC) $(ALL_CFLAGS) $(ALL_LDFLAGS) -o $@ $^ $(COMMON_LIBS)
 
 $(BUILDDIR)/bench-agg: $(call to_obj,$(AGGREGATE_SRCS)) | $(BUILDDIR)
 	$(E) "  LD    $@"
-	$(Q)$(CC) $(ALL_CFLAGS) $(ALL_LDFLAGS) -o $@ $^ -lm -lopenblas
+	$(Q)$(CC) $(ALL_CFLAGS) $(ALL_LDFLAGS) -o $@ $^ $(COMMON_LIBS)
 
 $(BUILDDIR)/dsprep: $(call to_obj,$(DSPREP_SRC)) | $(BUILDDIR)
 	$(E) "  LD    $@"

@@ -308,7 +308,7 @@ void grad_sageconv(SageLayer *l)
                     l->input,       l->in_dim,
                     l->grad_output, l->out_dim,
                     0.0,
-                    l->grad_Wroot,  l->out_dim);
+                    l->grad_Wroot,  l->ldW);
         });
 
     // grad_Wagg = agg^T @ grad_output
@@ -318,7 +318,7 @@ void grad_sageconv(SageLayer *l)
                     l->agg,         l->in_dim,
                     l->grad_output, l->out_dim,
                     0.0,
-                    l->grad_Wagg,   l->out_dim);
+                    l->grad_Wagg,   l->ldW);
         });
 
     // grad_input  = grad_output @ Wroot^T
@@ -326,7 +326,7 @@ void grad_sageconv(SageLayer *l)
             GEMM_NT(l->num_nodes, l->in_dim, l->out_dim,
                     1.0,
                     l->grad_output, l->out_dim,
-                    l->Wroot,       l->out_dim,
+                    l->Wroot,       l->ldW,
                     0.0,
                     l->grad_input,  l->in_dim);
         });
@@ -336,7 +336,7 @@ void grad_sageconv(SageLayer *l)
             GEMM_NT(l->num_nodes, l->in_dim, l->out_dim,
                     1.0,
                     l->grad_output,  l->out_dim,
-                    l->Wagg,         l->out_dim,
+                    l->Wagg,         l->ldW,
                     0.0,
                     l->grad_scatter, l->in_dim);
         });

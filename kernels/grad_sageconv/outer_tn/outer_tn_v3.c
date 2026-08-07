@@ -15,6 +15,7 @@
 static void pack_A(const Real *restrict A, int64_t lda, Real *restrict Ap,
                    int64_t cols, int64_t rows)
 {
+    Real *restrict aligned_Ap = (Real *)__builtin_assume_aligned(Ap, VLEN_BYTES);
     int64_t full_rows = (rows / MR) * MR;
 
     int64_t pp = 0;
@@ -26,7 +27,7 @@ static void pack_A(const Real *restrict A, int64_t lda, Real *restrict Ap,
             const Real *src = A + pp + k * lda;
             PRAGMA_UNROLL(MR)
             for (int i = 0; i < MR; i++)
-                *Ap++ = src[i];
+                *aligned_Ap++ = src[i];
         }
     }
 
@@ -37,21 +38,20 @@ static void pack_A(const Real *restrict A, int64_t lda, Real *restrict Ap,
         for (int64_t k = 0; k < cols; k++)
         {
             const Real *src = A + pp + k * lda;
-
             // Absolute fringe of the matrix
             int i = 0;
             for (; i < rem; i++)
-                *Ap++ = src[i];
+                *aligned_Ap++ = src[i];
             for (; i < MR; i++)
-                *Ap++ = 0.0;
+                *aligned_Ap++ = 0.0;
         }
     }
 }
 
-static void pack_B(const Real *restrict X, int64_t ldx, Real *restrict Xp,
+static void pack_B(const Real *restrict B, int64_t ldb, Real *restrict Bp,
                    int64_t rows, int64_t cols)
 {
-    Real *restrict aligned_Xp = (Real *)__builtin_assume_aligned(Xp, VLEN_BYTES);
+    Real *restrict aligned_Bp = (Real *)__builtin_assume_aligned(Bp, VLEN_BYTES);
 
     int64_t cols_aligned = ((cols + NR - 1) / NR) * NR;
     const VReal vzero = (VReal){0};
@@ -61,12 +61,12 @@ static void pack_B(const Real *restrict X, int64_t ldx, Real *restrict Xp,
         int64_t rem = cols - pp;
         if (rem > NR) rem = NR;
 
-        Real *restrict dst = aligned_Xp + pp * rows;
+        Real *restrict dst = aligned_Bp + pp * rows;
 
 #pragma GCC unroll 4
         for (int64_t k = 0; k < rows; k++)
         {
-            const Real *src = X + k * ldx + pp;
+            const Real *src = B + k * ldb + pp;
             Real *out       = dst + k * NR;
             int64_t i = 0;
 
@@ -163,6 +163,59 @@ static void microkernel_MRxNR(int64_t k,
     }
 }
 
+static void reduction(int64_t M, int64_t N,
+                      int64_t M_pad, int64_t N_pad,
+                      int nthreads,
+                      Real *restrict C, int64_t ldc,
+                      Real *restrict Cl, int64_t ldcl,
+                      Real *all_Cl[])
+{
+#pragma omp for
+    for (int64_t i = 0; i < M; i++)
+    {
+        Real *out_row = &C[i * ldc];
+
+        int64_t j = 0;
+#define UNROLL_FACTOR (NUM_REGS/2)
+        for (; j + UNROLL_FACTOR * N_VEC <= N; j += UNROLL_FACTOR * N_VEC)
+        {
+            VReal sum[UNROLL_FACTOR];
+
+            PRAGMA_UNROLL(UNROLL_FACTOR)
+            for (int iv = 0; iv < UNROLL_FACTOR; iv++) {
+                sum[iv] = vrbcast((Real)0.0);
+            }
+
+            PRAGMA_UNROLL(4)
+            for (int t = 0; t < nthreads; t++)
+            {
+                const Real *in_row = &all_Cl[t][i * ldcl];
+
+                PRAGMA_UNROLL(UNROLL_FACTOR)
+                for (int iv = 0; iv < UNROLL_FACTOR; iv++) {
+                    sum[iv] += vrload(in_row + j + iv * N_VEC);
+                }
+            }
+
+            PRAGMA_UNROLL(UNROLL_FACTOR)
+            for (int iv = 0; iv < UNROLL_FACTOR; iv++) {
+                stream_vrstore(out_row + j + iv * N_VEC, sum[iv]);
+            }
+        }
+#undef UNROLL_FACTOR
+
+        for (; j < N; j++)
+        {
+            Real sum_scalar = (Real)0.0;
+            for (int t = 0; t < nthreads; t++)
+            {
+                sum_scalar += all_Cl[t][i * ldcl + j];
+            }
+            out_row[j] = sum_scalar;
+        }
+    }
+}
+
 void outer_tn_v3(int64_t M, int64_t N, int64_t K,
                  const Real *restrict A, int64_t lda,
                  const Real *restrict B, int64_t ldb,
@@ -245,38 +298,16 @@ void outer_tn_v3(int64_t M, int64_t N, int64_t K,
             first_time = 0;
         } // end for kk
 
-// Reduction
-#pragma omp for
-        for (int64_t i = 0; i < M; i++)
+        // If this thread did no work, its buffer contains garbage. Zero it out
+        // before the reduction reads from it
+        if (first_time)
         {
-            Real *c_row = &C[i * ldc];
-            int64_t j = 0;
-            for (; j + 4 * N_VEC <= N; j += 4 * N_VEC)
-            {
-                VReal acc0 = (VReal){0}, acc1 = (VReal){0},
-                      acc2 = (VReal){0}, acc3 = (VReal){0};
-
-                for (int t = 0; t < nthreads; t++)
-                {
-                    const Real *cl = &all_Cl[t][i * ldcl + j];
-                    acc0 += vrload_u(cl);
-                    acc1 += vrload_u(cl + N_VEC);
-                    acc2 += vrload_u(cl + 2 * N_VEC);
-                    acc3 += vrload_u(cl + 3 * N_VEC);
-                }
-                vrstore_u(c_row + j, acc0);
-                vrstore_u(c_row + j + N_VEC, acc1);
-                vrstore_u(c_row + j + 2 * N_VEC, acc2);
-                vrstore_u(c_row + j + 3 * N_VEC, acc3);
-            }
-
-            for (; j < N; j++)
-            {
-                Real acc = 0;
-                for (int t = 0; t < nthreads; t++)
-                    acc += all_Cl[t][i * ldcl + j];
-                c_row[j] = acc;
-            }
+            memset(Cl, 0, (size_t)M_pad * ldcl * sizeof(Real));
         }
+
+        #pragma omp barrier
+
+        // Reduction
+        reduction(M, N, M_pad, N_pad, nthreads, C, ldc, Cl, ldcl, all_Cl);
     }
 }

@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 from math import ceil, sqrt, floor
 
 # This script is based on "Analytical Modeling Is Enough for High-Performance BLIS"

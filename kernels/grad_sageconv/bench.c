@@ -70,7 +70,7 @@ static void naive(SageLayer *l)
     _naive(l->in_dim, l->out_dim, l->num_nodes,
            l->input,       l->in_dim,
            l->grad_output, l->out_dim,
-           l->grad_Wroot,  l->out_dim);
+           l->grad_Wroot,  l->ldW);
 }
 
 // Used for both as computing reference for validation stage and benchmarking
@@ -83,7 +83,7 @@ static void cblas_gemm(SageLayer *l)
                 l->input,       l->in_dim,
                 l->grad_output, l->out_dim,
                 0.0,
-                l->grad_Wroot,  l->out_dim);
+                l->grad_Wroot,  l->ldW);
 }
 
 
@@ -93,13 +93,13 @@ static void grad_sageconv_impl(SageLayer *l, outer_fn kernel)
     kernel(l->in_dim, l->out_dim, l->num_nodes,
            l->input,       l->in_dim,
            l->grad_output, l->out_dim,
-           l->grad_Wroot,  l->out_dim);
+           l->grad_Wroot,  l->ldW);
 
     // grad_Wagg = agg^T @ grad_output
     kernel(l->in_dim, l->out_dim, l->num_nodes,
            l->agg,         l->in_dim,
            l->grad_output, l->out_dim,
-           l->grad_Wagg,   l->out_dim);
+           l->grad_Wagg,   l->ldW);
 
     // grad_input = grad_output @ Wroot^T
     cblas_rgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
@@ -150,13 +150,22 @@ static inline bool real_eq(Real a, Real b)
     return false;
 }
 
-static bool is_valid(Real *x, Real *y, int64_t n)
+static char mismatch_buf[1024];
+static bool is_valid_2d(Real *x, Real *y, int64_t rows, int64_t cols, int64_t ld)
 {
-    for (int64_t i = 0; i < n; i++)
-        if (!real_eq(x[i], y[i])) return false;
+    for (int64_t i = 0; i < rows; i++)
+    {
+        for (int64_t j = 0; j < cols; j++)
+        {
+            if (!real_eq(x[i * ld + j], y[i * ld + j]))
+            {
+                snprintf(mismatch_buf, 1024, "Mismatch at [%ld, %ld]: %f != %f", i, j, x[i * ld + j], y[i * ld + j]);
+                return false;
+            }
+        }
+    }
     return true;
 }
-
 static void validate(int64_t in_dim, int64_t out_dim, Dataset *ds, BenchKernel *funcs, size_t func_count)
 {
     SageLayer *l = sage_layer_create(ds->num_nodes, ds->num_edges, ds->edges, in_dim, out_dim, SOURCE_TO_TARGET);
@@ -173,7 +182,7 @@ static void validate(int64_t in_dim, int64_t out_dim, Dataset *ds, BenchKernel *
     printf("Reference:");
     fflush(stdout);
 
-    Real *ref_grad_Wroot = cache_aligned_alloc(l->in_dim * l->out_dim * sizeof(Real));
+    Real *ref_grad_Wroot = cache_aligned_alloc(l->in_dim * l->ldW * sizeof(Real));
     cblas_rgemm(CblasRowMajor,
                 CblasTrans, CblasNoTrans,
                 l->in_dim, l->out_dim, l->num_nodes,
@@ -181,7 +190,7 @@ static void validate(int64_t in_dim, int64_t out_dim, Dataset *ds, BenchKernel *
                 l->input,       l->in_dim,
                 l->grad_output, l->out_dim,
                 0.0,
-                ref_grad_Wroot,  l->out_dim);
+                ref_grad_Wroot,  l->ldW);
 
     printf(" ok\n");
     fflush(stdout);
@@ -194,15 +203,16 @@ static void validate(int64_t in_dim, int64_t out_dim, Dataset *ds, BenchKernel *
             fflush(stdout);
         }
 
-        real_zero_out(l->grad_Wroot, l->in_dim * l->out_dim);
+        real_zero_out(l->grad_Wroot, l->in_dim * l->ldW);
 
         funcs[i].func(l);
 
         if (isatty(STDOUT_FILENO)) printf("\r\033[K");
-        if(!is_valid(l->grad_Wroot, ref_grad_Wroot, l->in_dim * l->out_dim))
+        if(!is_valid_2d(l->grad_Wroot, ref_grad_Wroot, l->in_dim, l->out_dim, l->ldW))
         {
             printf("Validating: %s (fail)\n", funcs[i].name, i+1, func_count);
             fflush(stdout);
+            printf("%s\n", mismatch_buf);
             ERROR("grad_Wroot doesn't match the reference (%s)", funcs[i].name);
         }
         printf("Validating: %s (ok)\n", funcs[i].name);
@@ -225,7 +235,7 @@ static void benchmark_kernel(int64_t in_dim, int64_t out_dim, Dataset *ds)
         BENCH_FUNC(outer_tn_kernel_v1),
         BENCH_FUNC(outer_tn_kernel_v2),
         BENCH_FUNC(outer_tn_kernel_v3),
-        };
+    };
     size_t func_count = sizeof(funcs)/sizeof(funcs[0]);
 
 #if !defined(SKIP_VALID)
@@ -271,8 +281,8 @@ static void benchmark_kernel(int64_t in_dim, int64_t out_dim, Dataset *ds)
                 fflush(stdout);
             }
 
-            real_zero_out(l->grad_Wroot, in_dim * out_dim);
-            real_zero_out(l->grad_Wagg, in_dim * out_dim);
+            real_zero_out(l->grad_Wroot, in_dim * l->ldW);
+            real_zero_out(l->grad_Wagg, in_dim * l->ldW);
             real_zero_out(l->grad_input, l->num_nodes * in_dim);
             real_zero_out(l->grad_scatter, l->num_nodes * in_dim);
             funcs[i].func(l);
@@ -298,8 +308,8 @@ static void benchmark_kernel(int64_t in_dim, int64_t out_dim, Dataset *ds)
         double sum_time = 0.0;
         for (int64_t j = 0; j < ntimes; j++)
         {
-            real_zero_out(l->grad_Wroot, in_dim * out_dim);
-            real_zero_out(l->grad_Wagg, in_dim * out_dim);
+            real_zero_out(l->grad_Wroot, in_dim * l->ldW);
+            real_zero_out(l->grad_Wagg, in_dim * l->ldW);
             real_zero_out(l->grad_input, l->num_nodes * in_dim);
 
             timer_enable();
@@ -488,7 +498,8 @@ int main(int argc, char** argv)
     }
 
     printf("OpenBLAS config: %s\n", openblas_get_config());
-    printf("Using %d threads(omp) and %d threads(openblas)\n", omp_num_threads, openblas_num_threads);
+    printf("Using %d threads(omp), %d threads(openblas), and %d NUMA node(s)\n",
+           omp_num_threads, openblas_num_threads, get_active_sockets());
 
     Dataset *ds = dataset_load(dataset, datadir, EDGE_CSX);
     Dataset *ds_train = dataset_split(ds, SPLIT_TRAIN);

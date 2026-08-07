@@ -163,7 +163,6 @@ void outer_tn_v2(int64_t M, int64_t N, int64_t K,
         local_M_pad = M_pad;
         local_N_pad = N_pad;
 
-        // memset(Cl, 0, (size_t)M_pad * ldcl * sizeof(Real));
         all_Cl[tid] = Cl;
 
         // NUMA First-Touch initialization
@@ -196,6 +195,16 @@ void outer_tn_v2(int64_t M, int64_t N, int64_t K,
             first_time = 0;
         } // end for kk
 
+        // If this thread did no work, its buffer contains garbage. Zero it out
+        // before the reduction reads from it
+        if (first_time)
+        {
+            memset(Cl, 0, (size_t)M_pad * ldcl * sizeof(Real));
+        }
+
+        #pragma omp barrier
+
+        // Reduction
 #pragma omp for
         for (int64_t i = 0; i < M; i++)
         {
@@ -210,5 +219,4 @@ void outer_tn_v2(int64_t M, int64_t N, int64_t K,
         }
 
     }
-    // free(all_Cl);
 }

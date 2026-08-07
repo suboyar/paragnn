@@ -8,7 +8,7 @@ static void outer_tn_kernel_impl(SageLayer *l, outer_fn kernel)
     kernel(l->in_dim, l->out_dim, l->num_nodes,
            l->input,       l->in_dim,
            l->grad_output, l->out_dim,
-           l->grad_Wroot,  l->out_dim);
+           l->grad_Wroot,  l->ldW);
 }
 
 static void grad_sageconv_impl(SageLayer *l, outer_fn kernel)
@@ -17,20 +17,20 @@ static void grad_sageconv_impl(SageLayer *l, outer_fn kernel)
     kernel(l->in_dim, l->out_dim, l->num_nodes,
            l->input,       l->in_dim,
            l->grad_output, l->out_dim,
-           l->grad_Wroot,  l->out_dim);
+           l->grad_Wroot,  l->ldW);
 
     // grad_Wagg = agg^T @ grad_output
     kernel(l->in_dim, l->out_dim, l->num_nodes,
            l->agg,         l->in_dim,
            l->grad_output, l->out_dim,
-           l->grad_Wagg,   l->out_dim);
+           l->grad_Wagg,   l->ldW);
 
     // grad_input = grad_output @ Wroot^T
     cblas_rgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
                 l->num_nodes, l->in_dim, l->out_dim,
                 1.0,
                 l->grad_output, l->out_dim,
-                l->Wroot,       l->out_dim,
+                l->Wroot,       l->ldW,
                 0.0,
                 l->grad_input,  l->in_dim);
 
@@ -39,7 +39,7 @@ static void grad_sageconv_impl(SageLayer *l, outer_fn kernel)
                 l->num_nodes, l->in_dim, l->out_dim,
                 1.0,
                 l->grad_output,  l->out_dim,
-                l->Wagg,         l->out_dim,
+                l->Wagg,         l->ldW,
                 0.0,
                 l->grad_scatter, l->in_dim);
 

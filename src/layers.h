@@ -52,7 +52,8 @@ typedef struct {
     Real          *grad_output;      // Gradients w.r.t. this layer's output (from downstream)
     Real          *grad_input;       // Gradients w.r.t. this layer's input (to upstream)
     Real          *grad_Wagg, *grad_Wroot;
-
+    // Physical row stride for gradW matrices (padded to N_VEC for non-temporal stores)
+    int64_t        ldW;
     // scratch buffer that layers can share between them so only they only needs to be allocated once
     Real     *tls_dW; // layout: [dWroot_row0][dWagg_row0][dWroot_row1][dWagg_row1]...
     Real     *grad_scatter;

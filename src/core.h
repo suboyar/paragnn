@@ -151,6 +151,7 @@ typedef struct {
 } FileHandler;
 
 void *cache_aligned_alloc(size_t size);
+int get_active_sockets(void);
 void real_zero_out(Real *a, size_t n);
 char *expand_path(const char *path);
 void mkdir_recursive(const char *path);

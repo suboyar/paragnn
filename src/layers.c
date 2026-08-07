@@ -4,11 +4,22 @@
 #include "layers.h"
 #include "ds.h"
 #include "timer.h"
+#include "vreg.h"
 
-static inline void fill_xavier_uniform(Real *x, int64_t in, int64_t out)
+static inline void fill_xavier_uniform(Real *x, int64_t in, int64_t ld, int64_t out)
 {
     const Real limit = real_sqrt(REAL(6.0) / (in + out));
     const Real recip_rand_max = REAL(1.0) / REAL(RAND_MAX);
+
+#pragma omp parallel for
+    for (int64_t i = 0; i < in; i++)
+    {
+        Real *xi = &x[i * ld];
+        for (int64_t j = 0; j < ld; j++)
+        {
+            xi[j] = REAL(0.0);
+        }
+    }
 
     // OpenMP can't be used here as rand() isn't thread-safe, variants that might
     // be of interest are srand48_r or random_r. This can be looked more closely if this
@@ -26,8 +37,6 @@ static void sage_alloc_node_buffers(SageLayer *l, uint32_t num_nodes)
     l->output       = cache_aligned_alloc(num_nodes * l->out_dim * sizeof(Real));
     l->agg          = cache_aligned_alloc(num_nodes * l->in_dim * sizeof(Real));
     l->grad_input   = cache_aligned_alloc(num_nodes * l->in_dim * sizeof(Real));
-    l->grad_Wagg    = cache_aligned_alloc(l->in_dim * l->out_dim * sizeof(Real));
-    l->grad_Wroot   = cache_aligned_alloc(l->in_dim * l->out_dim * sizeof(Real));
     // l->tls_dW       = cache_aligned_alloc(2 * nthreads * l->in_dim * l->out_dim * sizeof(Real));
     l->grad_scatter = cache_aligned_alloc(num_nodes * l->in_dim * sizeof(Real));
 
@@ -41,6 +50,7 @@ SageLayer* sage_layer_create(int64_t num_nodes, int64_t num_edges, Edges edges, 
 {
     SageLayer *layer = malloc(sizeof(*layer));
     if (!layer) ERROR("Could not allocate SageLayer");
+    int64_t out_dim_pad = ((out_dim + N_VEC - 1) / N_VEC) * N_VEC;
     *layer = (SageLayer) {
         .num_nodes    = num_nodes,
         .num_edges    = num_edges,
@@ -50,8 +60,15 @@ SageLayer* sage_layer_create(int64_t num_nodes, int64_t num_edges, Edges edges, 
         .flow         = flow,
         .input        = NULL,   // Set later when connecting layer
         .grad_output  = NULL,   // Set later when connecting layer
-        .Wagg         = cache_aligned_alloc(in_dim * out_dim * sizeof(Real)),
-        .Wroot        = cache_aligned_alloc(in_dim * out_dim * sizeof(Real)),
+        // This allows us to perfrom non-temporal store even if out_dim isn't a
+        // mutliple of N_VEC, e.g for last layer. Currently Wagg and Wroot
+        // doesn't need non-temporal store, but this makes performing weight
+        // optimization much simpler (optim.c).
+        .Wagg         = cache_aligned_alloc(in_dim * out_dim_pad * sizeof(Real)),
+        .Wroot        = cache_aligned_alloc(in_dim * out_dim_pad * sizeof(Real)),
+        .grad_Wagg    = cache_aligned_alloc(in_dim * out_dim_pad * sizeof(Real)),
+        .grad_Wroot   = cache_aligned_alloc(in_dim * out_dim_pad * sizeof(Real)),
+        .ldW          = out_dim_pad,
     };
 
     if (!layer->Wagg || !layer->Wroot)
@@ -62,8 +79,8 @@ SageLayer* sage_layer_create(int64_t num_nodes, int64_t num_edges, Edges edges, 
     sage_alloc_node_buffers(layer, num_nodes);
 
     // Initialize weights randomly
-    fill_xavier_uniform(layer->Wroot, in_dim, out_dim);
-    fill_xavier_uniform(layer->Wagg, in_dim, out_dim);
+    fill_xavier_uniform(layer->Wroot, in_dim, out_dim, out_dim_pad);
+    fill_xavier_uniform(layer->Wagg, in_dim, out_dim, out_dim_pad);
 
     return layer;
 }
@@ -244,8 +261,8 @@ LinearLayer* linear_layer_create(int64_t num_nodes, int64_t in_dim, int64_t out_
 
     linear_alloc_node_buffers(layer, num_nodes);
 
-    fill_xavier_uniform(layer->W, in_dim, out_dim);
-    fill_xavier_uniform(layer->bias, 1, out_dim);
+    fill_xavier_uniform(layer->W, in_dim, out_dim, out_dim);
+    fill_xavier_uniform(layer->bias, 1, out_dim, out_dim);
 
     return layer;
 }
