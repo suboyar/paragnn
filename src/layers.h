@@ -5,7 +5,7 @@
 
 #include "core.h"
 #include "ds.h"
-#include "edges.h"
+#include "sparsegraph.h"
 #include "flow.h"
 
 typedef enum {
@@ -41,7 +41,7 @@ typedef struct {
 typedef struct {
     int64_t        num_nodes;
     int64_t        num_edges;
-    Edges          edges;
+    SparseGraph    graph;
     int64_t        in_dim;
     int64_t        out_dim;
     FlowDirection  flow;
@@ -103,14 +103,14 @@ typedef struct {
 
 #define SAGE_NET_CREATE(conf, d, flow) sage_net_create((conf), sizeof(conf)/sizeof(conf[0]), (d), (flow))
 SageNet* sage_net_create(LayerConf *conf, int64_t count, Dataset *ds, FlowDirection flow);
-SageLayer* sage_layer_create(int64_t num_nodes, int64_t num_edges, Edges edges, int64_t in_dim, int64_t out_dim, FlowDirection flow);
+SageLayer* sage_layer_create(int64_t num_nodes, int64_t num_edges, SparseGraph graph, int64_t in_dim, int64_t out_dim, FlowDirection flow);
 ReluLayer* relu_layer_create(int64_t num_nodes, int64_t dim);
 L2NormLayer* l2norm_layer_create(int64_t num_nodes, int64_t dim);
 LinearLayer* linear_layer_create(int64_t num_nodes, int64_t in_dim, int64_t out_dim);
 LogSoftmaxLayer* logsoft_layer_create(int64_t num_nodes, int64_t dim);
 
 void sage_net_bind(SageNet *net, Dataset *ds);
-void sage_layer_bind(SageLayer *l, int64_t num_nodes, int64_t num_edges, Edges edges);
+void sage_layer_bind(SageLayer *l, int64_t num_nodes, int64_t num_edges, SparseGraph graph);
 void relu_layer_bind(ReluLayer *l, int64_t num_nodes);
 void l2norm_layer_bind(L2NormLayer *l, int64_t num_nodes);
 void linear_layer_bind(LinearLayer *l, int64_t num_nodes);

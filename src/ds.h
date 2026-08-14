@@ -6,7 +6,7 @@
 
 #include "core.h"
 #include "dsinfo.h"
-#include "edges.h"
+#include "sparsegraph.h"
 
 typedef enum {
     SPLIT_TRAIN,
@@ -15,17 +15,17 @@ typedef enum {
 } Split;
 
 typedef struct {
-    char *path;
-    int64_t  num_nodes;
-    int64_t  num_features;
-    int64_t  num_classes;
-    int64_t  num_edges;
-    Real    *nodes;            // Node features with shape [num_nodes, num_node_features]
-    int64_t *labels;           // Labels to each node [num_nodes]
-    Edges    edges;
+    char       *path;
+    int64_t     num_nodes;
+    int64_t     num_features;
+    int64_t     num_classes;
+    int64_t     num_edges;
+    Real       *nodes;            // Node features with shape [num_nodes, num_node_features]
+    int64_t    *labels;           // Labels to each node [num_nodes]
+    SparseGraph graph;
 } Dataset;
 
-Dataset* dataset_load(DatasetKind dataset, char const *data_dir, EdgeFormat format);
+Dataset* dataset_load(DatasetKind dataset, char const *data_dir, SparseFormat format);
 Dataset* dataset_split(Dataset *base, Split split);
 void dataset_free(Dataset **ds);
 

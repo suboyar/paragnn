@@ -32,17 +32,17 @@
 #define DEFAULT_DATADIR     "~/D1/paragnn-dataset"
 #define DEFAULT_CSV         "stdout"
 
-static uint64_t     epochs      = DEFAULT_EPOCHS;
-static uint64_t     layers      = DEFAULT_LAYERS;
-static uint64_t     channels    = DEFAULT_CHANNELS;
-static Real         lr          = DEFAULT_LR;
-static EdgeFormat   edge_format = EDGE_CSX;
-static bool         quick       = false;
-static bool         early_stop  = false;
-static bool         loss_track  = false;
-static FILE        *csv_fd      = NULL; // Set in main, since stdout ins't compile-time constant
-static DatasetKind  dataset     = DATASET_ARXIV;
-static char        *datadir     = NULL; // Set in main, since it might need to be expanded
+static uint64_t     epochs        = DEFAULT_EPOCHS;
+static uint64_t     layers        = DEFAULT_LAYERS;
+static uint64_t     channels      = DEFAULT_CHANNELS;
+static Real         lr            = DEFAULT_LR;
+static SparseFormat sparse_format = SPARSE_CSX;
+static bool         quick         = false;
+static bool         early_stop    = false;
+static bool         loss_track    = false;
+static FILE        *csv_fd        = NULL; // Set in main, since stdout ins't compile-time constant
+static DatasetKind  dataset       = DATASET_ARXIV;
+static char        *datadir       = NULL; // Set in main, since it might need to be expanded
 
 void print_config(void)
 {
@@ -293,7 +293,7 @@ int main(int argc, char** argv)
         case OPT_QUICK:      quick       = true;     break;
         case OPT_EARLYSTOP:  early_stop  = true;     break;
         case OPT_LOSSTRACK:  loss_track  = true;     break;
-        case OPT_COO:        edge_format = EDGE_COO; break;
+        case OPT_COO:        sparse_format = SPARSE_COO; break;
         case OPT_HELP:
             usage(argv[0]);
             return 0;
@@ -321,7 +321,7 @@ int main(int argc, char** argv)
     openblas_set_num_threads(omp_get_max_threads());
     print_config();
 
-    Dataset *ds = dataset_load(dataset, datadir, edge_format);
+    Dataset *ds = dataset_load(dataset, datadir, sparse_format);
     Dataset *ds_train = dataset_split(ds, SPLIT_TRAIN);
     Dataset *ds_valid = dataset_split(ds, SPLIT_VALID);
     Dataset *ds_test = dataset_split(ds, SPLIT_TEST);

@@ -46,7 +46,7 @@ static void sage_alloc_node_buffers(SageLayer *l, uint32_t num_nodes)
     }
 }
 
-SageLayer* sage_layer_create(int64_t num_nodes, int64_t num_edges, Edges edges, int64_t in_dim, int64_t out_dim, FlowDirection flow)
+SageLayer* sage_layer_create(int64_t num_nodes, int64_t num_edges, SparseGraph graph, int64_t in_dim, int64_t out_dim, FlowDirection flow)
 {
     SageLayer *layer = malloc(sizeof(*layer));
     if (!layer) ERROR("Could not allocate SageLayer");
@@ -54,7 +54,7 @@ SageLayer* sage_layer_create(int64_t num_nodes, int64_t num_edges, Edges edges, 
     *layer = (SageLayer) {
         .num_nodes    = num_nodes,
         .num_edges    = num_edges,
-        .edges        = edges,
+        .graph        = graph,
         .in_dim       = in_dim,
         .out_dim      = out_dim,
         .flow         = flow,
@@ -106,7 +106,7 @@ void sage_layer_free(SageLayer **l)
     *l = NULL;
 }
 
-void sage_layer_bind(SageLayer *l, int64_t num_nodes, int64_t num_edges, Edges edges)
+void sage_layer_bind(SageLayer *l, int64_t num_nodes, int64_t num_edges, SparseGraph graph)
 {
     if (l->num_nodes < num_nodes)
     {
@@ -115,7 +115,7 @@ void sage_layer_bind(SageLayer *l, int64_t num_nodes, int64_t num_edges, Edges e
     }
     l->num_nodes = num_nodes;
     l->num_edges = num_edges;
-    l->edges     = edges;
+    l->graph     = graph;
 }
 
 // RELU LAYER
@@ -437,7 +437,7 @@ SageNet* sage_net_create(LayerConf *conf, int64_t count, Dataset *ds, FlowDirect
         switch (conf[i].type)
         {
         case LAYER_SAGE:
-            ctx = sage_layer_create(ds->num_nodes, ds->num_edges, ds->edges, conf[i].in_dim, conf[i].out_dim, flow);
+            ctx = sage_layer_create(ds->num_nodes, ds->num_edges, ds->graph, conf[i].in_dim, conf[i].out_dim, flow);
             net->layers[i] = (Layer){
 				.type            = LAYER_SAGE,
                 .ctx             = ctx,
@@ -488,7 +488,7 @@ void sage_net_bind(SageNet *net, Dataset *ds)
         switch (layer->type)
         {
         case LAYER_SAGE:
-            sage_layer_bind(layer->ctx, ds->num_nodes, ds->num_edges, ds->edges);
+            sage_layer_bind(layer->ctx, ds->num_nodes, ds->num_edges, ds->graph);
             break;
         case LAYER_RELU:
             relu_layer_bind(layer->ctx, ds->num_nodes);

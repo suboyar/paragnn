@@ -23,10 +23,10 @@ static const char *split_name[] = {
     [SPLIT_TEST]  = "test",
 };
 
-EdgeFormat parse_edge_format(const char* str)
+SparseFormat parse_edge_format(const char* str)
 {
-    if (strcmp(str, "coo") == 0)        return EDGE_COO;
-    if (strcmp(str, "compressed") == 0) return EDGE_CSX;
+    if (strcmp(str, "coo") == 0)        return SPARSE_COO;
+    if (strcmp(str, "compressed") == 0) return SPARSE_CSX;
     ERROR("Not a valid edge format: %s", str);
 }
 
@@ -360,7 +360,7 @@ static void raw2crx(int64_t **ptr, int64_t **idx, RawEdges raw_edges, int64_t nu
     free(pos);
 }
 
-Dataset* dataset_load(DatasetKind dataset, char const* datadir, EdgeFormat format)
+Dataset* dataset_load(DatasetKind dataset, char const* datadir, SparseFormat format)
 {
     double t = omp_get_wtime();
 
@@ -383,13 +383,13 @@ Dataset* dataset_load(DatasetKind dataset, char const* datadir, EdgeFormat forma
     ds->num_features  = ds_info.num_features;
     ds->num_classes   = ds_info.num_classes;
     ds->num_edges     = ds_info.num_edges;
-    ds->edges.format = format;
-    ds->edges.src     = NULL;
-    ds->edges.dst     = NULL;
-    ds->edges.ptr_csc = NULL;
-    ds->edges.idx_csc = NULL;
-    ds->edges.ptr_csr = NULL;
-    ds->edges.idx_csr = NULL;
+    ds->graph.format  = format;
+    ds->graph.src     = NULL;
+    ds->graph.dst     = NULL;
+    ds->graph.ptr_csc = NULL;
+    ds->graph.idx_csc = NULL;
+    ds->graph.ptr_csr = NULL;
+    ds->graph.idx_csr = NULL;
 
     char bin_path[256];
 
@@ -405,29 +405,29 @@ Dataset* dataset_load(DatasetKind dataset, char const* datadir, EdgeFormat forma
 
     switch(format)
     {
-    case EDGE_COO:
+    case SPARSE_COO:
     {
-        ds->edges.src = cache_aligned_alloc(ds->num_edges*sizeof(*ds->edges.src));
-        ds->edges.dst = cache_aligned_alloc(ds->num_edges*sizeof(*ds->edges.dst));
-        if (!ds->edges.src || !ds->edges.dst) ERROR("Could not allocate COO edges");
+        ds->graph.src = cache_aligned_alloc(ds->num_edges*sizeof(*ds->graph.src));
+        ds->graph.dst = cache_aligned_alloc(ds->num_edges*sizeof(*ds->graph.dst));
+        if (!ds->graph.src || !ds->graph.dst) ERROR("Could not allocate COO edges");
         // First touch
 #pragma omp parallel for
         for (int64_t i = 0; i < ds->num_edges; i++)
         {
-            ds->edges.src[i] = raw_edges.u[i];
-            ds->edges.dst[i] = raw_edges.v[i];
+            ds->graph.src[i] = raw_edges.u[i];
+            ds->graph.dst[i] = raw_edges.v[i];
         }
-        ds->edges.self_loop = detect_self_loops_coo(ds->edges.src, ds->edges.dst, ds->num_nodes, ds->num_edges);
-        ds->edges.inv_in_degree  = get_inv_degree_coo(ds->edges.src, ds->edges.dst, ds->num_nodes, ds->num_edges, IN_DEGREE);
-        ds->edges.inv_out_degree = get_inv_degree_coo(ds->edges.src, ds->edges.dst, ds->num_nodes, ds->num_edges, OUT_DEGREE);
+        ds->graph.self_loop = detect_self_loops_coo(ds->graph.src, ds->graph.dst, ds->num_nodes, ds->num_edges);
+        ds->graph.inv_in_degree  = get_inv_degree_coo(ds->graph.src, ds->graph.dst, ds->num_nodes, ds->num_edges, IN_DEGREE);
+        ds->graph.inv_out_degree = get_inv_degree_coo(ds->graph.src, ds->graph.dst, ds->num_nodes, ds->num_edges, OUT_DEGREE);
         break;
     }
-    case EDGE_CSX:
-        raw2crx(&ds->edges.ptr_csc, &ds->edges.idx_csc, raw_edges, ds->num_nodes, ds->num_edges, CSC);
-        raw2crx(&ds->edges.ptr_csr, &ds->edges.idx_csr, raw_edges, ds->num_nodes, ds->num_edges, CSR);
-        ds->edges.self_loop = detect_self_loops_crx(ds->edges.ptr_csc, ds->edges.idx_csc, ds->num_nodes);
-        ds->edges.inv_in_degree = NULL;
-        ds->edges.inv_out_degree = NULL;
+    case SPARSE_CSX:
+        raw2crx(&ds->graph.ptr_csc, &ds->graph.idx_csc, raw_edges, ds->num_nodes, ds->num_edges, CSC);
+        raw2crx(&ds->graph.ptr_csr, &ds->graph.idx_csr, raw_edges, ds->num_nodes, ds->num_edges, CSR);
+        ds->graph.self_loop = detect_self_loops_crx(ds->graph.ptr_csc, ds->graph.idx_csc, ds->num_nodes);
+        ds->graph.inv_in_degree = NULL;
+        ds->graph.inv_out_degree = NULL;
         break;
     default:
         ERROR("Invalid edge format type %d", format);
@@ -447,16 +447,16 @@ Dataset* dataset_load(DatasetKind dataset, char const* datadir, EdgeFormat forma
     t_f = omp_get_wtime() - t_f;
 
     // Compute statistics
-    ds->edges.avg_degree = (float)ds->num_edges / ds->num_nodes;
+    ds->graph.avg_degree = (float)ds->num_edges / ds->num_nodes;
     int64_t self_loop_count = 0;
-    for (int64_t i = 0; ds->edges.self_loop && i < ds->num_nodes; i++)
+    for (int64_t i = 0; ds->graph.self_loop && i < ds->num_nodes; i++)
     {
-        if (ds->edges.self_loop[i]) self_loop_count++;
+        if (ds->graph.self_loop[i]) self_loop_count++;
     }
-    ds->edges.avg_self_loop = (float)self_loop_count / ds->num_nodes;
+    ds->graph.avg_self_loop = (float)self_loop_count / ds->num_nodes;
 
     printf("Loaded OGB-ARXIV in %.2fs (node count: %ld, edge count: %ld, avg degree: %.2f, avg self loops: %.2f)\n",
-           omp_get_wtime() - t, ds->num_nodes, ds->num_edges, ds->edges.avg_degree, ds->edges.avg_self_loop);
+           omp_get_wtime() - t, ds->num_nodes, ds->num_edges, ds->graph.avg_degree, ds->graph.avg_self_loop);
     printf("    loading edges: %.2fs\n", t_e);
     printf("    loading features: %.2fs\n", t_f);
     printf("    loading labels: %.2fs\n", t_l);
@@ -464,18 +464,18 @@ Dataset* dataset_load(DatasetKind dataset, char const* datadir, EdgeFormat forma
     return ds;
 }
 
-void split_csx(Edges *edges, Edges base_edges, const int64_t *restrict node_map, int64_t num_nodes, int64_t base_num_nodes, enum CSX_TYPE csx_type)
+void split_csx(SparseGraph *graph, SparseGraph base_graph, const int64_t *restrict node_map, int64_t num_nodes, int64_t base_num_nodes, enum CSX_TYPE csx_type)
 {
     const int64_t *restrict base_ptr, *restrict base_idx;
     if (csx_type == CSC)
     {
-        base_ptr = base_edges.ptr_csc;
-        base_idx = base_edges.idx_csc;
+        base_ptr = base_graph.ptr_csc;
+        base_idx = base_graph.idx_csc;
     }
     else // csx_type == CSR
     {
-        base_ptr = base_edges.ptr_csr;
-        base_idx = base_edges.idx_csr;
+        base_ptr = base_graph.ptr_csr;
+        base_idx = base_graph.idx_csr;
     }
 
     int64_t *restrict ptr, *restrict idx;
@@ -530,13 +530,13 @@ void split_csx(Edges *edges, Edges base_edges, const int64_t *restrict node_map,
 
     if (csx_type == CSC)
     {
-        edges->ptr_csc = ptr;
-        edges->idx_csc = idx;
+        graph->ptr_csc = ptr;
+        graph->idx_csc = idx;
     }
     else
     {
-        edges->ptr_csr = ptr;
-        edges->idx_csr = idx;
+        graph->ptr_csr = ptr;
+        graph->idx_csr = idx;
     }
 
     free(pos);
@@ -577,16 +577,16 @@ Dataset *dataset_split(Dataset *base, Split split)
     Dataset *ds = malloc(sizeof(*ds));
     if (!ds) ERROR("Could not allocate split Dataset");
     ds->path = malloc(strlen(base->path)+1); strcpy(ds->path, base->path);
-    ds->num_features = base->num_features;
-    ds->num_classes  = base->num_classes;
-    ds->num_nodes = split_size;
-    ds->edges.format = base->edges.format;
-    ds->edges.src     = NULL;
-    ds->edges.dst     = NULL;
-    ds->edges.ptr_csc = NULL;
-    ds->edges.idx_csc = NULL;
-    ds->edges.ptr_csr = NULL;
-    ds->edges.idx_csr = NULL;
+    ds->num_features  = base->num_features;
+    ds->num_classes   = base->num_classes;
+    ds->num_nodes     = split_size;
+    ds->graph.format  = base->graph.format;
+    ds->graph.src     = NULL;
+    ds->graph.dst     = NULL;
+    ds->graph.ptr_csc = NULL;
+    ds->graph.idx_csc = NULL;
+    ds->graph.ptr_csr = NULL;
+    ds->graph.idx_csr = NULL;
 
     // Gather features
     ds->nodes = cache_aligned_alloc(ds->num_nodes * ds->num_features * sizeof(*ds->nodes));
@@ -607,66 +607,66 @@ Dataset *dataset_split(Dataset *base, Split split)
     build_node_mapping(node_map, base->num_nodes, split_idx, ds->num_nodes);
 
     ds->num_edges = 0;      // Counting happens in the switch statement
-    switch(ds->edges.format)
+    switch(ds->graph.format)
     {
-    case EDGE_COO:
+    case SPARSE_COO:
     {
         // Count number of edges in the split
         // We do this in two passes since realloc might break cache allignment
         for (int64_t i = 0; i < base->num_edges; i++)
         {
-            int64_t src = node_map[base->edges.src[i]];
-            int64_t dst = node_map[base->edges.dst[i]];
+            int64_t src = node_map[base->graph.src[i]];
+            int64_t dst = node_map[base->graph.dst[i]];
             if (src != INVALID_IDX && dst != INVALID_IDX)
             {
                 ds->num_edges++;
             }
         }
         int64_t ei = 0;
-        ds->edges.src = cache_aligned_alloc(ds->num_edges * sizeof(*ds->edges.src));
-        ds->edges.dst = cache_aligned_alloc(ds->num_edges * sizeof(*ds->edges.dst));
+        ds->graph.src = cache_aligned_alloc(ds->num_edges * sizeof(*ds->graph.src));
+        ds->graph.dst = cache_aligned_alloc(ds->num_edges * sizeof(*ds->graph.dst));
         for (int64_t i = 0; i < base->num_edges; i++)
         {
-            int64_t src = node_map[base->edges.src[i]];
-            int64_t dst = node_map[base->edges.dst[i]];
+            int64_t src = node_map[base->graph.src[i]];
+            int64_t dst = node_map[base->graph.dst[i]];
             if (src != INVALID_IDX && dst != INVALID_IDX)
             {
-                ds->edges.src[ei] = src;
-                ds->edges.dst[ei] = dst;
+                ds->graph.src[ei] = src;
+                ds->graph.dst[ei] = dst;
                 ei++;
             }
         }
 
-        ds->edges.self_loop = detect_self_loops_coo(ds->edges.src, ds->edges.dst, ds->num_nodes, ds->num_edges);
-        ds->edges.inv_in_degree = get_inv_degree_coo(ds->edges.src, ds->edges.dst, ds->num_nodes, ds->num_edges, IN_DEGREE);
-        ds->edges.inv_out_degree = get_inv_degree_coo(ds->edges.src, ds->edges.dst, ds->num_nodes, ds->num_edges, OUT_DEGREE);
+        ds->graph.self_loop = detect_self_loops_coo(ds->graph.src, ds->graph.dst, ds->num_nodes, ds->num_edges);
+        ds->graph.inv_in_degree = get_inv_degree_coo(ds->graph.src, ds->graph.dst, ds->num_nodes, ds->num_edges, IN_DEGREE);
+        ds->graph.inv_out_degree = get_inv_degree_coo(ds->graph.src, ds->graph.dst, ds->num_nodes, ds->num_edges, OUT_DEGREE);
         break;
     }
-    case EDGE_CSX:
+    case SPARSE_CSX:
     {
-        split_csx(&ds->edges, base->edges, node_map, ds->num_nodes, base->num_nodes, CSC);
-        split_csx(&ds->edges, base->edges, node_map, ds->num_nodes, base->num_nodes, CSR);
-        ds->num_edges = ds->edges.ptr_csc[ds->num_nodes];
-        ds->edges.self_loop = detect_self_loops_crx(ds->edges.ptr_csc, ds->edges.idx_csc, ds->num_nodes);
-        ds->edges.inv_in_degree = NULL;
-        ds->edges.inv_out_degree = NULL;
+        split_csx(&ds->graph, base->graph, node_map, ds->num_nodes, base->num_nodes, CSC);
+        split_csx(&ds->graph, base->graph, node_map, ds->num_nodes, base->num_nodes, CSR);
+        ds->num_edges = ds->graph.ptr_csc[ds->num_nodes];
+        ds->graph.self_loop = detect_self_loops_crx(ds->graph.ptr_csc, ds->graph.idx_csc, ds->num_nodes);
+        ds->graph.inv_in_degree = NULL;
+        ds->graph.inv_out_degree = NULL;
         break;
     }
     default:
-        ERROR("Invalid edge format type %d", base->edges.format);
+        ERROR("Invalid edge format type %d", base->graph.format);
     }
 
     // Compute statistics
-    ds->edges.avg_degree = (float)ds->num_edges / ds->num_nodes;
+    ds->graph.avg_degree = (float)ds->num_edges / ds->num_nodes;
     int64_t self_loop_count = 0;
-    for (int64_t i = 0; ds->edges.self_loop && i < ds->num_nodes; i++)
+    for (int64_t i = 0; ds->graph.self_loop && i < ds->num_nodes; i++)
     {
-        if (ds->edges.self_loop[i]) self_loop_count++;
+        if (ds->graph.self_loop[i]) self_loop_count++;
     }
-    ds->edges.avg_self_loop = (float)self_loop_count / ds->num_nodes;
+    ds->graph.avg_self_loop = (float)self_loop_count / ds->num_nodes;
 
     printf("Split OGB-ARXIV [%s] in %.2fs (node count: %ld, edge count %ld, avg degree: %.2f, avg self loops: %.2f)\n",
-           split_name[split], omp_get_wtime() - t, ds->num_nodes, ds->num_edges, ds->edges.avg_degree, ds->edges.avg_self_loop);
+           split_name[split], omp_get_wtime() - t, ds->num_nodes, ds->num_edges, ds->graph.avg_degree, ds->graph.avg_self_loop);
 
     free(node_map);
     free(split_idx);
@@ -678,15 +678,15 @@ void dataset_free(Dataset **ds)
     if (!(*ds)) return;
 
     // Free edges
-    free((*ds)->edges.src);            (*ds)->edges.src            = NULL;
-    free((*ds)->edges.dst);            (*ds)->edges.dst            = NULL;
-    free((*ds)->edges.ptr_csc);        (*ds)->edges.ptr_csc        = NULL;
-    free((*ds)->edges.idx_csc);        (*ds)->edges.idx_csc        = NULL;
-    free((*ds)->edges.ptr_csr);        (*ds)->edges.ptr_csr        = NULL;
-    free((*ds)->edges.idx_csr);        (*ds)->edges.idx_csr        = NULL;
-    free((*ds)->edges.self_loop);      (*ds)->edges.self_loop      = NULL;
-    free((*ds)->edges.inv_in_degree);  (*ds)->edges.inv_in_degree  = NULL;
-    free((*ds)->edges.inv_out_degree); (*ds)->edges.inv_out_degree = NULL;
+    free((*ds)->graph.src);            (*ds)->graph.src            = NULL;
+    free((*ds)->graph.dst);            (*ds)->graph.dst            = NULL;
+    free((*ds)->graph.ptr_csc);        (*ds)->graph.ptr_csc        = NULL;
+    free((*ds)->graph.idx_csc);        (*ds)->graph.idx_csc        = NULL;
+    free((*ds)->graph.ptr_csr);        (*ds)->graph.ptr_csr        = NULL;
+    free((*ds)->graph.idx_csr);        (*ds)->graph.idx_csr        = NULL;
+    free((*ds)->graph.self_loop);      (*ds)->graph.self_loop      = NULL;
+    free((*ds)->graph.inv_in_degree);  (*ds)->graph.inv_in_degree  = NULL;
+    free((*ds)->graph.inv_out_degree); (*ds)->graph.inv_out_degree = NULL;
 
     free((*ds)->path);   (*ds)->path   = NULL;
     free((*ds)->nodes);  (*ds)->nodes  = NULL;

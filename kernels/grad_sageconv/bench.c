@@ -168,7 +168,7 @@ static bool is_valid_2d(Real *x, Real *y, int64_t rows, int64_t cols, int64_t ld
 }
 static void validate(int64_t in_dim, int64_t out_dim, Dataset *ds, BenchKernel *funcs, size_t func_count)
 {
-    SageLayer *l = sage_layer_create(ds->num_nodes, ds->num_edges, ds->edges, in_dim, out_dim, SOURCE_TO_TARGET);
+    SageLayer *l = sage_layer_create(ds->num_nodes, ds->num_edges, ds->graph, in_dim, out_dim, SOURCE_TO_TARGET);
 
     Real *input = cache_aligned_alloc(ds->num_nodes * l->in_dim * sizeof(Real));
     fill_uniform(input, ds->num_nodes * l->in_dim);
@@ -253,7 +253,7 @@ static void benchmark_kernel(int64_t in_dim, int64_t out_dim, Dataset *ds)
             free(l->input);
             sage_layer_free(&l);
         }
-        l = sage_layer_create(ds->num_nodes, ds->num_edges, ds->edges, in_dim, out_dim, SOURCE_TO_TARGET);
+        l = sage_layer_create(ds->num_nodes, ds->num_edges, ds->graph, in_dim, out_dim, SOURCE_TO_TARGET);
 
 #if 0
         Real *input = cache_aligned_alloc(ds->num_nodes * l->in_dim * sizeof(Real));
@@ -501,7 +501,7 @@ int main(int argc, char** argv)
     printf("Using %d threads(omp), %d threads(openblas), and %d NUMA node(s)\n",
            omp_num_threads, openblas_num_threads, get_active_sockets());
 
-    Dataset *ds = dataset_load(dataset, datadir, EDGE_CSX);
+    Dataset *ds = dataset_load(dataset, datadir, SPARSE_CSX);
     Dataset *ds_train = dataset_split(ds, SPLIT_TRAIN);
     ds = ds_train;
     printf("num nodes: %ld\n", ds->num_nodes);
