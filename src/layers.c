@@ -1,7 +1,8 @@
+#include "layers.h"
+
 #include <stdlib.h>
 
 #include "core.h"
-#include "layers.h"
 #include "ds.h"
 #include "timer.h"
 #include "vreg.h"
@@ -21,9 +22,9 @@ static inline void fill_xavier_uniform(Real *x, int64_t in, int64_t ld, int64_t 
         }
     }
 
-    // OpenMP can't be used here as rand() isn't thread-safe, variants that might
-    // be of interest are srand48_r or random_r. This can be looked more closely if this
-    // function ever takes more too much time.
+    // OpenMP can't be used here as rand() isn't thread-safe, variants that
+    // might be of interest are srand48_r or random_r. This can be looked into
+    // more closely if this function ever uses to much time.
     for (int64_t i = 0; i < in * out; i++)
     {
         x[i] = limit * (REAL(2.0) * REAL(rand()) * recip_rand_max - REAL(1.0));
@@ -34,22 +35,15 @@ static inline void fill_xavier_uniform(Real *x, int64_t in, int64_t ld, int64_t 
 
 static void sage_alloc_node_buffers(SageLayer *l, uint32_t num_nodes)
 {
-    l->output       = cache_aligned_alloc(num_nodes * l->out_dim * sizeof(Real));
-    l->agg          = cache_aligned_alloc(num_nodes * l->in_dim * sizeof(Real));
-    l->grad_input   = cache_aligned_alloc(num_nodes * l->in_dim * sizeof(Real));
-    // l->tls_dW       = cache_aligned_alloc(2 * nthreads * l->in_dim * l->out_dim * sizeof(Real));
-    l->grad_scatter = cache_aligned_alloc(num_nodes * l->in_dim * sizeof(Real));
-
-    if (!l->output || !l->agg || !l->grad_input || !l->grad_Wagg || !l->grad_Wroot || !l->grad_scatter)
-    {
-        ERROR("Could not allocate SageLayer buffers");
-    }
+    l->output       = ALLOC_OR_DIE(cache_aligned_alloc(num_nodes * l->out_dim * sizeof(Real)));
+    l->agg          = ALLOC_OR_DIE(cache_aligned_alloc(num_nodes * l->in_dim * sizeof(Real)));
+    l->grad_input   = ALLOC_OR_DIE(cache_aligned_alloc(num_nodes * l->in_dim * sizeof(Real)));
+    l->grad_scatter = ALLOC_OR_DIE(cache_aligned_alloc(num_nodes * l->in_dim * sizeof(Real)));
 }
 
-SageLayer* sage_layer_create(int64_t num_nodes, int64_t num_edges, SparseGraph graph, int64_t in_dim, int64_t out_dim, FlowDirection flow)
+SageLayer* sage_layer_alloc(int64_t num_nodes, int64_t num_edges, SparseGraph *graph, int64_t in_dim, int64_t out_dim, FlowDirection flow)
 {
-    SageLayer *layer = malloc(sizeof(*layer));
-    if (!layer) ERROR("Could not allocate SageLayer");
+    SageLayer *layer = ALLOC_OR_DIE(malloc(sizeof(*layer)));
     int64_t out_dim_pad = ((out_dim + N_VEC - 1) / N_VEC) * N_VEC;
     *layer = (SageLayer) {
         .num_nodes    = num_nodes,
@@ -64,49 +58,43 @@ SageLayer* sage_layer_create(int64_t num_nodes, int64_t num_edges, SparseGraph g
         // mutliple of N_VEC, e.g for last layer. Currently Wagg and Wroot
         // doesn't need non-temporal store, but this makes performing weight
         // optimization much simpler (optim.c).
-        .Wagg         = cache_aligned_alloc(in_dim * out_dim_pad * sizeof(Real)),
-        .Wroot        = cache_aligned_alloc(in_dim * out_dim_pad * sizeof(Real)),
-        .grad_Wagg    = cache_aligned_alloc(in_dim * out_dim_pad * sizeof(Real)),
-        .grad_Wroot   = cache_aligned_alloc(in_dim * out_dim_pad * sizeof(Real)),
+        .Wagg         = ALLOC_OR_DIE(cache_aligned_alloc(in_dim * out_dim_pad * sizeof(Real))),
+        .Wroot        = ALLOC_OR_DIE(cache_aligned_alloc(in_dim * out_dim_pad * sizeof(Real))),
+        .grad_Wagg    = ALLOC_OR_DIE(cache_aligned_alloc(in_dim * out_dim_pad * sizeof(Real))),
+        .grad_Wroot   = ALLOC_OR_DIE(cache_aligned_alloc(in_dim * out_dim_pad * sizeof(Real))),
         .ldW          = out_dim_pad,
     };
-
-    if (!layer->Wagg || !layer->Wroot)
-    {
-        ERROR("Could not allocate SageLayer parameters");
-    }
-
     sage_alloc_node_buffers(layer, num_nodes);
-
-    // Initialize weights randomly
-    fill_xavier_uniform(layer->Wroot, in_dim, out_dim, out_dim_pad);
-    fill_xavier_uniform(layer->Wagg, in_dim, out_dim, out_dim_pad);
-
     return layer;
+}
+
+void sage_layer_reset_parameters(SageLayer *l)
+{
+    fill_xavier_uniform(l->Wroot, l->in_dim, l->ldW, l->out_dim);
+    fill_xavier_uniform(l->Wagg, l->in_dim, l->ldW, l->out_dim);
 }
 
 static void sage_free_node_buffers(SageLayer *l)
 {
-    free(l->output);       l->output       = NULL;
-    free(l->agg);          l->agg          = NULL;
-    free(l->grad_input);   l->grad_input   = NULL;
-    free(l->grad_Wagg);    l->grad_Wagg    = NULL;
-    free(l->grad_Wroot);   l->grad_Wroot   = NULL;
-    free(l->grad_scatter); l->grad_scatter = NULL;
+    free(l->output);
+    free(l->agg);
+    free(l->grad_input);
+    free(l->grad_scatter);
 }
 
 void sage_layer_free(SageLayer **l)
 {
     if (!(*l)) return;
-
     sage_free_node_buffers(*l);
-    free((*l)->Wagg);  (*l)->Wagg  = NULL;
-    free((*l)->Wroot); (*l)->Wroot = NULL;
+    free((*l)->Wagg);
+    free((*l)->Wroot);
+    free((*l)->grad_Wroot);
+    free((*l)->grad_Wagg);
     free((*l));
     *l = NULL;
 }
 
-void sage_layer_bind(SageLayer *l, int64_t num_nodes, int64_t num_edges, SparseGraph graph)
+void sage_layer_bind(SageLayer *l, int64_t num_nodes, int64_t num_edges, SparseGraph *graph)
 {
     if (l->num_nodes < num_nodes)
     {
@@ -122,42 +110,32 @@ void sage_layer_bind(SageLayer *l, int64_t num_nodes, int64_t num_edges, SparseG
 
 static void relu_alloc_node_buffers(ReluLayer *l, int64_t num_nodes)
 {
-    l->output      = cache_aligned_alloc(num_nodes * l->dim * sizeof(Real));
-    l->grad_input  = cache_aligned_alloc(num_nodes * l->dim * sizeof(Real));
-
-    if (!l->output || !l->grad_input)
-    {
-        ERROR("Could not allocate ReluLayer buffers");
-    }
+    l->output      = ALLOC_OR_DIE(cache_aligned_alloc(num_nodes * l->dim * sizeof(Real)));
+    l->grad_input  = ALLOC_OR_DIE(cache_aligned_alloc(num_nodes * l->dim * sizeof(Real)));
 }
 
-ReluLayer* relu_layer_create(int64_t num_nodes, int64_t dim)
+ReluLayer* relu_layer_alloc(int64_t num_nodes, int64_t dim)
 {
-    ReluLayer *layer = malloc(sizeof(*layer));
-    if (!layer) ERROR("Could not allocate ReluLayer");
-
+    ReluLayer *layer = ALLOC_OR_DIE(malloc(sizeof(*layer)));
     *layer = (ReluLayer) {
         .num_nodes   = num_nodes,
         .dim         = dim,
         .input       = NULL, // Set later when connecting layers
         .grad_output = NULL, // Set later when connecting layers
     };
-
     relu_alloc_node_buffers(layer, num_nodes);
-
     return layer;
 }
 
 static void relu_free_node_buffers(ReluLayer *l)
 {
-    free(l->output);       l->output       = NULL;
-    free(l->grad_input);   l->grad_input   = NULL;
+    free(l->output);
+    free(l->grad_input);
 }
 
 void relu_layer_free(ReluLayer **l)
 {
     if (!(*l)) return;
-
     relu_free_node_buffers(*l);
     free((*l));
     *l = NULL;
@@ -177,43 +155,34 @@ void relu_layer_bind(ReluLayer *l, int64_t num_nodes)
 
 static void l2norm_alloc_node_buffers(L2NormLayer *l, int64_t num_nodes)
 {
-    l->output      = cache_aligned_alloc(num_nodes * l->dim * sizeof(Real));
-    l->grad_input  = cache_aligned_alloc(num_nodes * l->dim * sizeof(Real));
-    l->recip_mag   = cache_aligned_alloc(num_nodes * sizeof(Real));
-    if (!l->output || !l->grad_input || !l->recip_mag)
-    {
-        ERROR("Could not allocate L2NormLayer buffers");
-    }
+    l->output      = ALLOC_OR_DIE(cache_aligned_alloc(num_nodes * l->dim * sizeof(Real)));
+    l->grad_input  = ALLOC_OR_DIE(cache_aligned_alloc(num_nodes * l->dim * sizeof(Real)));
+    l->recip_mag   = ALLOC_OR_DIE(cache_aligned_alloc(num_nodes * sizeof(Real)));
 }
 
-L2NormLayer* l2norm_layer_create(int64_t num_nodes, int64_t dim)
+L2NormLayer* l2norm_layer_alloc(int64_t num_nodes, int64_t dim)
 {
-    L2NormLayer *layer = malloc(sizeof(*layer));
-    if (!layer) ERROR("Could not allocate L2NormLayer");
-
+    L2NormLayer *layer = ALLOC_OR_DIE(malloc(sizeof(*layer)));
     *layer = (L2NormLayer) {
         .num_nodes   = num_nodes,
         .dim         = dim,
         .input       = NULL, // Set later when connecting layers
         .grad_output = NULL, // Set later when connecting layers
     };
-
     l2norm_alloc_node_buffers(layer, num_nodes);
-
     return layer;
 }
 
 static void l2norm_free_node_buffers(L2NormLayer *l)
 {
-    free(l->output);     l->output     = NULL;
-    free(l->grad_input); l->grad_input = NULL;
-    free(l->recip_mag);  l->recip_mag  = NULL;
+    free(l->output);
+    free(l->grad_input);
+    free(l->recip_mag);
 }
 
 void l2norm_layer_free(L2NormLayer **l)
 {
     if (!(*l)) return;
-
     l2norm_free_node_buffers(*l);
     free((*l));
     *l = NULL;
@@ -233,55 +202,49 @@ void l2norm_layer_bind(L2NormLayer *l, int64_t num_nodes)
 
 static void linear_alloc_node_buffers(LinearLayer *l, int64_t num_nodes)
 {
-    l->output      = cache_aligned_alloc(num_nodes * l->out_dim * sizeof(Real));
-    l->grad_input  = cache_aligned_alloc(num_nodes * l->in_dim * sizeof(Real));
-    l->grad_W      = cache_aligned_alloc(l->in_dim * l->out_dim * sizeof(Real));
-    l->grad_bias   = cache_aligned_alloc(l->out_dim * sizeof(Real));
-
-    if (!l->output || !l->grad_input || !l->grad_W || l->grad_bias)
-    {
-        ERROR("Could not allocate LinearLayer buffers");
-    }
+    l->output      = ALLOC_OR_DIE(cache_aligned_alloc(num_nodes * l->out_dim * sizeof(Real)));
+    l->grad_input  = ALLOC_OR_DIE(cache_aligned_alloc(num_nodes * l->in_dim * sizeof(Real)));
+    l->grad_W      = ALLOC_OR_DIE(cache_aligned_alloc(l->in_dim * l->out_dim * sizeof(Real)));
+    l->grad_bias   = ALLOC_OR_DIE(cache_aligned_alloc(l->out_dim * sizeof(Real)));
 }
 
-LinearLayer* linear_layer_create(int64_t num_nodes, int64_t in_dim, int64_t out_dim)
+LinearLayer* linear_layer_alloc(int64_t num_nodes, int64_t in_dim, int64_t out_dim)
 {
-    LinearLayer *layer = malloc(sizeof(*layer));
-    if (!layer) ERROR("Could not allocate LinearLayer");
-
-    *layer = (LinearLayer) {
+    LinearLayer *l = ALLOC_OR_DIE(malloc(sizeof(*l)));
+    *l = (LinearLayer) {
         .num_nodes   = num_nodes,
         .in_dim      = in_dim,
         .out_dim     = out_dim,
         .input       = NULL, // Set later when connecting layers
         .grad_output = NULL, // Set later when connecting layers
-        .W           = cache_aligned_alloc(in_dim * out_dim * sizeof(Real)),
-        .bias        = cache_aligned_alloc(out_dim * sizeof(Real)),
+        .W           = ALLOC_OR_DIE(cache_aligned_alloc(in_dim * out_dim * sizeof(Real))),
+        .bias        = ALLOC_OR_DIE(cache_aligned_alloc(out_dim * sizeof(Real))),
     };
-
-    linear_alloc_node_buffers(layer, num_nodes);
-
-    fill_xavier_uniform(layer->W, in_dim, out_dim, out_dim);
-    fill_xavier_uniform(layer->bias, 1, out_dim, out_dim);
-
-    return layer;
+    linear_alloc_node_buffers(l, num_nodes);
+    return l;
 }
+
+void linear_layer_reset_parameters(LinearLayer* l)
+{
+    fill_xavier_uniform(l->W, l->in_dim, l->out_dim, l->out_dim);
+    fill_xavier_uniform(l->bias, 1, l->out_dim, l->out_dim);
+}
+
 
 static void linear_free_node_buffers(LinearLayer *l)
 {
-    free(l->output);     l->output     = NULL;
-    free(l->grad_input); l->grad_input = NULL;
-    free(l->grad_W);     l->grad_W     = NULL;
-    free(l->grad_bias);  l->grad_bias  = NULL;
+    free(l->output);
+    free(l->grad_input);
+    free(l->grad_W);
+    free(l->grad_bias);
 }
 
 void linear_layer_free(LinearLayer **l)
 {
     if (!*l) return;
-
     linear_free_node_buffers(*l);
-    free((*l)->W);    (*l)->W    = NULL;
-    free((*l)->bias); (*l)->bias = NULL;
+    free((*l)->W);
+    free((*l)->bias);
     free(*l);
     *l = NULL;
 }
@@ -299,19 +262,13 @@ void linear_layer_bind(LinearLayer *l, int64_t num_nodes)
 // LOGSOFTMAX LAYER
 static void logsoft_alloc_node_buffers(LogSoftmaxLayer *l, int64_t num_nodes)
 {
-    l->output      = cache_aligned_alloc(num_nodes * l->dim * sizeof(Real));
-    l->grad_input  = cache_aligned_alloc(num_nodes * l->dim * sizeof(Real));
-
-    if (!l->output || !l->grad_input)
-    {
-        ERROR("Could not allocate L2NormLayer buffers");
-    }
+    l->output     = ALLOC_OR_DIE(cache_aligned_alloc(num_nodes * l->dim * sizeof(Real)));
+    l->grad_input = ALLOC_OR_DIE(cache_aligned_alloc(num_nodes * l->dim * sizeof(Real)));
 }
 
-LogSoftmaxLayer* logsoft_layer_create(int64_t num_nodes, int64_t dim)
+LogSoftmaxLayer* logsoft_layer_alloc(int64_t num_nodes, int64_t dim)
 {
-    LogSoftmaxLayer *layer = malloc(sizeof(*layer));
-    if (!layer) ERROR("Could not allocate LogSoftmaxLayer");
+    LogSoftmaxLayer *layer = ALLOC_OR_DIE(malloc(sizeof(*layer)));
 
     *layer = (LogSoftmaxLayer) {
         .num_nodes   = num_nodes,
@@ -326,14 +283,13 @@ LogSoftmaxLayer* logsoft_layer_create(int64_t num_nodes, int64_t dim)
 
 static void logsoft_free_node_buffers(LogSoftmaxLayer *l)
 {
-    free(l->output);     l->output     = NULL;
-    free(l->grad_input); l->grad_input = NULL;
+    free(l->output);
+    free(l->grad_input);
 }
 
 void logsoft_layer_free(LogSoftmaxLayer **l)
 {
     if (!*l) return;
-
     logsoft_free_node_buffers(*l);
     free(*l);
     *l = NULL;
@@ -363,56 +319,56 @@ static void wireup_network(SageNet *net, int64_t num_layers, Dataset *ds)
         Real *out, **go;
         switch (layer.type)
         {
-        case LAYER_SAGE:
-            out = ((SageLayer*)layer.ctx)->output;
-            go  = &((SageLayer*)layer.ctx)->grad_output;
-            break;
-        case LAYER_RELU:
-            out = ((ReluLayer*)layer.ctx)->output;
-            go  = &((ReluLayer*)layer.ctx)->grad_output;
-            break;
-        case LAYER_L2NORM:
-            out = ((L2NormLayer*)layer.ctx)->output;
-            go  = &((L2NormLayer*)layer.ctx)->grad_output;
-            break;
-        case LAYER_LOGSOFTMAX:
-            out = ((LogSoftmaxLayer*)layer.ctx)->output;
-            go  = NULL;
-            break;
-        case LAYER_LINEAR:
-            out = ((LinearLayer*)layer.ctx)->output;
-            go  = &((LinearLayer*)layer.ctx)->grad_output;
-            break;
-        default:
-            ERROR("Unknown layer type %d", layer.type);
+            case LAYER_SAGE:
+                out = ((SageLayer*)layer.ctx)->output;
+                go  = &((SageLayer*)layer.ctx)->grad_output;
+                break;
+            case LAYER_RELU:
+                out = ((ReluLayer*)layer.ctx)->output;
+                go  = &((ReluLayer*)layer.ctx)->grad_output;
+                break;
+            case LAYER_L2NORM:
+                out = ((L2NormLayer*)layer.ctx)->output;
+                go  = &((L2NormLayer*)layer.ctx)->grad_output;
+                break;
+            case LAYER_LOGSOFTMAX:
+                out = ((LogSoftmaxLayer*)layer.ctx)->output;
+                go  = NULL;
+                break;
+            case LAYER_LINEAR:
+                out = ((LinearLayer*)layer.ctx)->output;
+                go  = &((LinearLayer*)layer.ctx)->grad_output;
+                break;
+            default:
+                ERROR("Unknown layer type %d", layer.type);
         }
 
         Layer next_layer = net->layers[i+1];
         Real **next_in, *next_gi;
         switch (next_layer.type)
         {
-        case LAYER_SAGE:
-            next_in = &((SageLayer*)next_layer.ctx)->input;
-            next_gi = ((SageLayer*)next_layer.ctx)->grad_input;
-            break;
-        case LAYER_RELU:
-            next_in = &((ReluLayer*)next_layer.ctx)->input;
-            next_gi = ((ReluLayer*)next_layer.ctx)->grad_input;
-            break;
-        case LAYER_L2NORM:
-            next_in = &((L2NormLayer*)next_layer.ctx)->input;
-            next_gi = ((L2NormLayer*)next_layer.ctx)->grad_input;
-            break;
-        case LAYER_LOGSOFTMAX:
-            next_in = &((LogSoftmaxLayer*)next_layer.ctx)->input;
-            next_gi = ((LogSoftmaxLayer*)next_layer.ctx)->grad_input;
-            break;
-        case LAYER_LINEAR:
-            next_in = &((LinearLayer*)next_layer.ctx)->input;
-            next_gi = ((LinearLayer*)next_layer.ctx)->grad_input;
-            break;
-        default:
-            ERROR("Unknown layer type %d", next_layer.type);
+            case LAYER_SAGE:
+                next_in = &((SageLayer*)next_layer.ctx)->input;
+                next_gi = ((SageLayer*)next_layer.ctx)->grad_input;
+                break;
+            case LAYER_RELU:
+                next_in = &((ReluLayer*)next_layer.ctx)->input;
+                next_gi = ((ReluLayer*)next_layer.ctx)->grad_input;
+                break;
+            case LAYER_L2NORM:
+                next_in = &((L2NormLayer*)next_layer.ctx)->input;
+                next_gi = ((L2NormLayer*)next_layer.ctx)->grad_input;
+                break;
+            case LAYER_LOGSOFTMAX:
+                next_in = &((LogSoftmaxLayer*)next_layer.ctx)->input;
+                next_gi = ((LogSoftmaxLayer*)next_layer.ctx)->grad_input;
+                break;
+            case LAYER_LINEAR:
+                next_in = &((LinearLayer*)next_layer.ctx)->input;
+                next_gi = ((LinearLayer*)next_layer.ctx)->grad_input;
+                break;
+            default:
+                ERROR("Unknown layer type %d", next_layer.type);
         }
 
         *next_in = out;
@@ -421,58 +377,56 @@ static void wireup_network(SageNet *net, int64_t num_layers, Dataset *ds)
 }
 
 
-SageNet* sage_net_create(LayerConf *conf, int64_t count, Dataset *ds, FlowDirection flow)
+SageNet* sage_net_alloc(LayerConf *conf, int64_t count, Dataset *ds, FlowDirection flow)
 {
-    SageNet *net = malloc(sizeof(*net));
-    if (!net) ERROR("Could not allocate SageNet");
+    SageNet *net = ALLOC_OR_DIE(malloc(sizeof(*net)));
 
     net->num_layers = count;
     // NOTE: we calloc here to make gcc not complain
-    net->layers = calloc(count,sizeof(*net->layers));
-    if (!net->layers) ERROR("Could not allocate layers");
+    net->layers = ALLOC_OR_DIE(calloc(count,sizeof(*net->layers)));
 
     for (int64_t i = 0; i < count; i++)
     {
         void *ctx = NULL;
         switch (conf[i].type)
         {
-        case LAYER_SAGE:
-            ctx = sage_layer_create(ds->num_nodes, ds->num_edges, ds->graph, conf[i].in_dim, conf[i].out_dim, flow);
-            net->layers[i] = (Layer){
-				.type            = LAYER_SAGE,
-                .ctx             = ctx,
-            };
-            break;
-        case LAYER_RELU:
-            ctx = (void*)relu_layer_create(ds->num_nodes, conf[i].in_dim);
-            net->layers[i] = (Layer){
-				.type            = LAYER_RELU,
-                .ctx             = ctx,
-            };
-            break;
-        case LAYER_L2NORM:
-            ctx = (void*)l2norm_layer_create(ds->num_nodes, conf[i].in_dim);
-            net->layers[i] = (Layer){
-				.type            = LAYER_L2NORM,
-                .ctx             = ctx,
-            };
-            break;
-        case LAYER_LINEAR:
-            ctx = (void*)linear_layer_create(ds->num_nodes, conf[i].in_dim, conf[i].out_dim);
-            net->layers[i] = (Layer){
-				.type            = LAYER_LINEAR,
-                .ctx             = ctx,
-            };
-            break;
-        case LAYER_LOGSOFTMAX:
-            ctx = (void*)logsoft_layer_create(ds->num_nodes, conf[i].in_dim);
-            net->layers[i] = (Layer){
-				.type            = LAYER_LOGSOFTMAX,
-                .ctx             = ctx,
-            };
-            break;
-        default:
-            ERROR("Unknown layer type %d", conf[i].type);
+            case LAYER_SAGE:
+                ctx = sage_layer_alloc(ds->num_nodes, ds->num_edges, ds->graph, conf[i].in_dim, conf[i].out_dim, flow);
+                net->layers[i] = (Layer){
+                    .type            = LAYER_SAGE,
+                    .ctx             = ctx,
+                };
+                break;
+            case LAYER_RELU:
+                ctx = (void*)relu_layer_alloc(ds->num_nodes, conf[i].in_dim);
+                net->layers[i] = (Layer){
+                    .type            = LAYER_RELU,
+                    .ctx             = ctx,
+                };
+                break;
+            case LAYER_L2NORM:
+                ctx = (void*)l2norm_layer_alloc(ds->num_nodes, conf[i].in_dim);
+                net->layers[i] = (Layer){
+                    .type            = LAYER_L2NORM,
+                    .ctx             = ctx,
+                };
+                break;
+            case LAYER_LINEAR:
+                ctx = (void*)linear_layer_alloc(ds->num_nodes, conf[i].in_dim, conf[i].out_dim);
+                net->layers[i] = (Layer){
+                    .type            = LAYER_LINEAR,
+                    .ctx             = ctx,
+                };
+                break;
+            case LAYER_LOGSOFTMAX:
+                ctx = (void*)logsoft_layer_alloc(ds->num_nodes, conf[i].in_dim);
+                net->layers[i] = (Layer){
+                    .type            = LAYER_LOGSOFTMAX,
+                    .ctx             = ctx,
+                };
+                break;
+            default:
+                ERROR("Unknown layer type %d", conf[i].type);
         }
     }
 
@@ -487,27 +441,51 @@ void sage_net_bind(SageNet *net, Dataset *ds)
         Layer *layer = &net->layers[i];
         switch (layer->type)
         {
-        case LAYER_SAGE:
-            sage_layer_bind(layer->ctx, ds->num_nodes, ds->num_edges, ds->graph);
-            break;
-        case LAYER_RELU:
-            relu_layer_bind(layer->ctx, ds->num_nodes);
-            break;
-        case LAYER_L2NORM:
-            l2norm_layer_bind(layer->ctx, ds->num_nodes);
-            break;
-        case LAYER_LINEAR:
-            linear_layer_bind(layer->ctx, ds->num_nodes);
-            break;
-        case LAYER_LOGSOFTMAX:
-            logsoft_layer_bind(layer->ctx, ds->num_nodes);
-            break;
-        default:
-            ERROR("Unknown layer type %d", layer->type);
+            case LAYER_SAGE:
+                sage_layer_bind(layer->ctx, ds->num_nodes, ds->num_edges, ds->graph);
+                break;
+            case LAYER_RELU:
+                relu_layer_bind(layer->ctx, ds->num_nodes);
+                break;
+            case LAYER_L2NORM:
+                l2norm_layer_bind(layer->ctx, ds->num_nodes);
+                break;
+            case LAYER_LINEAR:
+                linear_layer_bind(layer->ctx, ds->num_nodes);
+                break;
+            case LAYER_LOGSOFTMAX:
+                logsoft_layer_bind(layer->ctx, ds->num_nodes);
+                break;
+            default:
+                ERROR("Unknown layer type %d", layer->type);
         }
     }
 
     wireup_network(net, net->num_layers, ds);
+}
+
+void sage_net_reset_parameters(SageNet *net)
+{
+    for (int64_t i = 0; i < net->num_layers; i++)
+    {
+        Layer *layer = &net->layers[i];
+        switch (layer->type)
+        {
+            case LAYER_SAGE:
+                sage_layer_reset_parameters((SageLayer*)layer->ctx);
+                break;
+            case LAYER_LINEAR:
+                linear_layer_reset_parameters((LinearLayer*)layer->ctx);
+                break;
+            case LAYER_RELU:
+            case LAYER_L2NORM:
+            case LAYER_LOGSOFTMAX:
+                break;
+            default:
+                ERROR("Unknown layer type %d", layer->type);
+        }
+    }
+
 }
 
 void sage_net_free(SageNet **net)
@@ -515,27 +493,27 @@ void sage_net_free(SageNet **net)
     if (!(*net)) return;
 
     for (int64_t i = 0; i < (*net)->num_layers; i++)
-	{
+    {
         Layer layer = (*net)->layers[i];
         switch(layer.type)
         {
-        case LAYER_SAGE:
-            sage_layer_free((SageLayer**)&layer.ctx);
-            break;
-        case LAYER_RELU:
-            relu_layer_free((ReluLayer**)&layer.ctx);
-            break;
-        case LAYER_L2NORM:
-            l2norm_layer_free((L2NormLayer**)&layer.ctx);
-            break;
-        case LAYER_LOGSOFTMAX:
-            logsoft_layer_free((LogSoftmaxLayer**)&layer.ctx);
-            break;
-        case LAYER_LINEAR:
-            linear_layer_free((LinearLayer**)&layer.ctx);
-            break;
-        default:
-            ERROR("Unknown layer type %d", layer.type);
+            case LAYER_SAGE:
+                sage_layer_free((SageLayer**)&layer.ctx);
+                break;
+            case LAYER_RELU:
+                relu_layer_free((ReluLayer**)&layer.ctx);
+                break;
+            case LAYER_L2NORM:
+                l2norm_layer_free((L2NormLayer**)&layer.ctx);
+                break;
+            case LAYER_LOGSOFTMAX:
+                logsoft_layer_free((LogSoftmaxLayer**)&layer.ctx);
+                break;
+            case LAYER_LINEAR:
+                linear_layer_free((LinearLayer**)&layer.ctx);
+                break;
+            default:
+                ERROR("Unknown layer type %d", layer.type);
         }
     }
 
@@ -553,23 +531,23 @@ void sage_net_info(const SageNet *net)
         Layer *l = &net->layers[i];
         switch (l->type)
         {
-        case LAYER_SAGE:
-            printf("  (%zu) SageConv(%zu, %zu)\n", i,
-                   ((SageLayer *)l->ctx)->in_dim, ((SageLayer *)l->ctx)->out_dim);
-            break;
-        case LAYER_RELU:
-            printf("  (%zu) ReLU()\n", i);
-            break;
-        case LAYER_L2NORM:
-            printf("  (%zu) L2Norm()\n", i);
-            break;
-        case LAYER_LINEAR:
-            printf("  (%zu) Linear(%zu, %zu)\n", i,
-                   ((LinearLayer *)l->ctx)->in_dim, ((LinearLayer *)l->ctx)->out_dim);
-            break;
-        case LAYER_LOGSOFTMAX:
-            printf("  (%zu) LogSoftmax(dim=1)\n", i);
-            break;
+            case LAYER_SAGE:
+                printf("  (%zu) SageConv(%zu, %zu)\n", i,
+                       ((SageLayer *)l->ctx)->in_dim, ((SageLayer *)l->ctx)->out_dim);
+                break;
+            case LAYER_RELU:
+                printf("  (%zu) ReLU()\n", i);
+                break;
+            case LAYER_L2NORM:
+                printf("  (%zu) L2Norm()\n", i);
+                break;
+            case LAYER_LINEAR:
+                printf("  (%zu) Linear(%zu, %zu)\n", i,
+                       ((LinearLayer *)l->ctx)->in_dim, ((LinearLayer *)l->ctx)->out_dim);
+                break;
+            case LAYER_LOGSOFTMAX:
+                printf("  (%zu) LogSoftmax(dim=1)\n", i);
+                break;
         }
     }
 

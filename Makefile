@@ -68,7 +68,7 @@ to_obj = $(patsubst %.c,$(BUILDDIR)/%.o,$1)
 to_bench_obj = $(patsubst %.c,$(BENCHDIR)/%.o,$1)
 
 PARAGNN_SRCS = src/main.c src/core.c src/nn.c src/sageconv.c src/matmul_naive.c \
-               src/ds.c src/dsinfo.c src/layers.c src/optim.c src/timer.c
+               src/ds.c src/dsinfo.c src/layers.c src/optim.c src/timer.c src/sparsegraph.c
 
 GRAD_SAGECONV_SRCS := kernels/grad_sageconv/bench.c \
                       kernels/grad_sageconv/outer_tn/outer_tn_kernel.c \
@@ -121,7 +121,7 @@ $(BUILDDIR)/bench-agg: $(call to_obj,$(AGGREGATE_SRCS)) | $(BUILDDIR)
 
 $(BUILDDIR)/dsprep: $(call to_obj,$(DSPREP_SRC)) | $(BUILDDIR)
 	$(E) "  LD    $@"
-	$(Q)$(CC) $(BASIC_CFLAGS) -o $@ $^ -lz
+	$(Q)$(CC) $(BASIC_CFLAGS) -o $@ $^ $(COMMON_LIBS) -lz
 
 $(BUILDDIR)/%.o: %.c
 	@mkdir -p $(dir $@)
@@ -137,8 +137,16 @@ $(BUILDDIR)/grad_sageconv_outer_tn.s: kernels/grad_sageconv_outer_tn.c | $(BUILD
 	$(E) "  ASM   $<"
 	$(Q)$(CC) $(ALL_CFLAGS) -DMCA_MARKERS -Isrc/ -S -o $@ $<
 
+$(BUILDDIR) $(BENCH	DIR):
+	mkdir -p $@
+
 arxiv products papers100M: $(BUILDDIR)/dsprep
 	./$< -ds $@ -datadir $(DATADIR)
+
+tags:
+	$(E) "  Generating etags..."
+	$(Q)find src/ kernels/ -type f -name "*.[ch]" -exec etags --declarations {} +
+	$(E) "  Generating etags OK"
 
 clean:
 	rm -rf $(BENCHDIR)
@@ -154,6 +162,7 @@ help:
 	@echo "  dsprep                     Benchmark aggregate kernels"
 	@echo "  arxiv|products|papers100M  Prepare datasets for training"
 	@echo "  all                        Build all targets"
+	@echo "  tags                       Generate etags file for project"
 	@echo "  clean                      Remove build directory"
 	@echo ""
 	@echo "Options:"
@@ -171,8 +180,8 @@ help:
 	@echo ""
 	@echo "Example: make paragnn DEBUG=1 IMPL=blas"
 
-.PHONY: all clean help \
+.PHONY: all clean tags help \
         paragnn bench-gs aggregate \
-        dspreprep arxiv products papers100M
+        dsprep arxiv products papers100M
 
 -include $(wildcard $(BUILDDIR)/*.d)

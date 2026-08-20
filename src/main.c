@@ -36,12 +36,12 @@ static uint64_t     epochs        = DEFAULT_EPOCHS;
 static uint64_t     layers        = DEFAULT_LAYERS;
 static uint64_t     channels      = DEFAULT_CHANNELS;
 static Real         lr            = DEFAULT_LR;
-static SparseFormat sparse_format = SPARSE_CSX;
+static SparseFormat sparse_format = SPARSE_CS;
 static bool         quick         = false;
 static bool         early_stop    = false;
 static bool         loss_track    = false;
 static FILE        *csv_fd        = NULL; // Set in main, since stdout ins't compile-time constant
-static DatasetKind  dataset       = DATASET_ARXIV;
+static DatasetKind  datasetkind   = DATASET_ARXIV;
 static char        *datadir       = NULL; // Set in main, since it might need to be expanded
 
 void print_config(void)
@@ -59,7 +59,7 @@ void print_config(void)
            "openblas: %s\n",
            impl,
            sizeof(Real) == sizeof(double) ? "dp" : "sp",
-           epochs, lr, layers, channels, ds_infos[dataset].name,
+           epochs, lr, layers, channels, ds_infos[datasetkind].name,
            omp_get_max_threads(), openblas_get_num_threads(),
            getenv("SLURM_JOB_PARTITION"),
            openblas_get_config());
@@ -82,7 +82,7 @@ void print_memory_usage(void)
     }
 }
 
-void inference(SageNet *net)
+static void inference(SageNet *net)
 {
     TIMER_FUNC();
 
@@ -112,7 +112,7 @@ void inference(SageNet *net)
     }
 }
 
-void train(SageNet *net, Dataset *ds, Optim *optim, OptimKind kind)
+static void train(SageNet *net, Dataset *ds, Optim *optim, OptimKind kind)
 {
     TIMER_FUNC();
 
@@ -145,7 +145,7 @@ void train(SageNet *net, Dataset *ds, Optim *optim, OptimKind kind)
     optim_update(optim, kind, net);
 }
 
-void zero_grad(SageNet *net)
+static void zero_grad(SageNet *net)
 {
     for (size_t i = net->num_layers; i-- > 0; ) {
         Layer layer = net->layers[i];
@@ -172,21 +172,26 @@ void zero_grad(SageNet *net)
     }
 }
 
-bool is_double_eq(double a, double b)
+static void dry_run(SageNet *net, Optim *optim, OptimKind optim_kind, Dataset *ds_train, Dataset *ds_valid, Dataset *ds_test)
 {
-    const double abs_tol = 1e-9;
-    const double rel_tol = 1e-6;
-
-    // https://randomascii.wordpress.com/2012/02/25/comparing-floating-point-numbers-2012-edition/
-
-    double abs_diff = fabs(a - b);
-    double abs_max = fmax(fabs(a), fabs(b));
-
-    if (abs_diff > abs_tol && abs_diff > rel_tol * abs_max) {
-        return false;
+    if (ds_train)
+    {
+        sage_net_bind(net, ds_train);
+        inference(net);
+        train(net, ds_train, optim, optim_kind);
+    }
+    if (ds_valid)
+    {
+        sage_net_bind(net, ds_valid);
+        inference(net);
+    }
+    if (ds_test)
+    {
+        sage_net_bind(net, ds_test);
+        inference(net);
     }
 
-    return true;
+    if (ds_train) sage_net_bind(net, ds_train);
 }
 
 enum {
@@ -221,7 +226,7 @@ static struct option long_options[] = {
     {0,            0,                 0,    0}
 };
 
-void usage(const char *progname)
+static void usage(const char *progname)
 {
     fprintf(stderr,
             "Usage: %s [OPTIONS]\n"
@@ -244,7 +249,6 @@ void usage(const char *progname)
 
 int main(int argc, char** argv)
 {
-
     srand(0);
 
     int opt;
@@ -258,8 +262,8 @@ int main(int argc, char** argv)
         case OPT_LR: lr = strtoull(optarg, NULL, 10); break;
         case OPT_DATASET:
         {
-            dataset = str_to_dataset_kind(optarg);
-            if (dataset == DATASET_INVALID)
+            datasetkind = str_to_dataset_kind(optarg);
+            if (datasetkind == DATASET_INVALID)
             {
                 ERROR("Given dataset is not valid: %s", optarg);
                 usage(argv[0]);
@@ -321,11 +325,9 @@ int main(int argc, char** argv)
     openblas_set_num_threads(omp_get_max_threads());
     print_config();
 
-    Dataset *ds = dataset_load(dataset, datadir, sparse_format);
-    Dataset *ds_train = dataset_split(ds, SPLIT_TRAIN);
-    Dataset *ds_valid = dataset_split(ds, SPLIT_VALID);
-    Dataset *ds_test = dataset_split(ds, SPLIT_TEST);
-    dataset_free(&ds);
+    Dataset *ds_train = dataset_alloc(datasetkind, datadir, sparse_format, SPLIT_TRAIN);
+    Dataset *ds_valid = dataset_alloc(datasetkind, datadir, sparse_format, SPLIT_VALID);
+    Dataset *ds_test  = dataset_alloc(datasetkind, datadir, sparse_format, SPLIT_TEST);
 
     int64_t num_features = ds_train->num_features;
     int64_t num_classes = ds_train->num_classes;
@@ -350,7 +352,7 @@ int main(int argc, char** argv)
     arch[n++] = SAGE(channels, num_classes);
     arch[n++] = LOGSOFTMAX(num_classes);
 
-    SageNet *net = SAGE_NET_CREATE(arch, ds_train, flow);
+    SageNet *net = SAGE_NET_ALLOC(arch, ds_train, flow);
     sage_net_info(net);
 
     LogSoftmaxLayer *log_prob_layer = (LogSoftmaxLayer *)net->layers[net->num_layers - 1].ctx;
@@ -358,6 +360,16 @@ int main(int argc, char** argv)
     OptimKind optim_kind = OPTIM_ADAM;
     Optim *optim = optim_create(optim_kind, net, lr);
 
+    printf("Dry running for NUMA first touch...\n");
+    dry_run(net, optim, optim_kind, ds_train, ds_valid, ds_test);
+
+    printf("Load dataset and initializing GraphSAGE parameters...\n");
+    dataset_load(ds_train);
+    dataset_load(ds_valid);
+    dataset_load(ds_test);
+    sage_net_reset_parameters(net);
+
+    printf("GraphSAGE starting...\n");
     timer_enable();
     Real old_loss = REAL_MAX;
     Real *loss_hist = NULL;

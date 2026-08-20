@@ -2,9 +2,12 @@
 #define CORE_H
 
 #include <math.h>
+#include <errno.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 #include <unistd.h>
+
 #include <cblas.h>
 
 #define STRINGIFY(x) #x
@@ -83,6 +86,12 @@
 #define UNREACHABLE(fmt, ...) \
     do { fprintf(stderr, "UNREACHABLE %s:%d: " fmt "\n", __FILE__, __LINE__, ##__VA_ARGS__); abort(); } while (0)
 
+#define ALLOC_OR_DIE(expr) ({                                            \
+    __typeof__(expr) _ptr = (expr);                                    \
+    if (!_ptr) ERROR("%s failed: %s", #expr, strerror(errno)); \
+    _ptr;                                                              \
+})
+
 #ifndef NDEBUG
     #if defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || defined(_M_X64)
         #define BREAKPOINT() __asm__ __volatile__("int $3")
@@ -150,12 +159,22 @@ typedef struct {
     char* filename;
 } FileHandler;
 
+typedef struct {
+    void *data;
+    size_t bytes;
+    int fd;
+} MmapInfo;
+
 void *cache_aligned_alloc(size_t size);
 int get_active_sockets(void);
 void real_zero_out(Real *a, size_t n);
+
 char *expand_path(const char *path);
 void mkdir_recursive(const char *path);
 const char *path_name(const char *path);
 bool file_exists(const char *file_path);
+
+MmapInfo map_file(const char *file, int prot, int flags);
+void unmap_file(MmapInfo *info);
 
 #endif // CORE_H

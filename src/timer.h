@@ -40,6 +40,12 @@ void __timer_scope_end(TimerScope* scope);
         code;                                                           \
     } while(0)
 
+#define TIMER_NORECORD(time_var, code) do {     \
+        double _start = omp_get_wtime();        \
+        code;                                   \
+        (time_var) = omp_get_wtime() - _start;  \
+    } while(0)
+
 void timer_record(const char* name, double elapsed, TimerEntry* entry);
 void timer_record_parallel(const char* name, double* elapsed, int nthreads);
 void timer_enable(void);

@@ -1,15 +1,17 @@
+#include "core.h"
+
 #include <errno.h>
-#include <omp.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include <fcntl.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <wordexp.h>
+
 #include <omp.h>
 #include <numa.h>
-
-#include "core.h"
-
 
 static long get_cache_line_size(void)
 {
@@ -101,7 +103,7 @@ void mkdir_recursive(const char *path)
     struct stat st;
     if (stat(path, &st) == 0 && S_ISDIR(st.st_mode))
     {
-        goto cleanup;
+        return;
     }
 
     char *tmp = strdup(path);
@@ -144,4 +146,20 @@ bool file_exists(const char *file_path)
         ERROR("Could not check if file %s exists: %s", file_path, strerror(errno));
     }
     return true;
+}
+
+MmapInfo map_file(const char *file, int prot, int flags)
+{
+    int fd = open(file, O_RDONLY);
+    if (fd < 0) ERROR("Could not open %s: %s", file, strerror(errno));
+    struct stat sb;
+    fstat(fd, &sb);
+    void *data = mmap(NULL, sb.st_size, prot, flags, fd, 0);
+    return (MmapInfo){data, (size_t)sb.st_size, fd};
+}
+
+void unmap_file(MmapInfo *info)
+{
+    munmap(info->data, info->bytes);
+    close(info->fd);
 }
