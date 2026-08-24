@@ -137,8 +137,8 @@ $(BUILDDIR)/grad_sageconv_outer_tn.s: kernels/grad_sageconv_outer_tn.c | $(BUILD
 	$(E) "  ASM   $<"
 	$(Q)$(CC) $(ALL_CFLAGS) -DMCA_MARKERS -Isrc/ -S -o $@ $<
 
-$(BUILDDIR) $(BENCH	DIR):
-	mkdir -p $@
+$(BUILDDIR) $(BENCHDIR):
+	@mkdir -p $@
 
 arxiv products papers100M: $(BUILDDIR)/dsprep
 	./$< -ds $@ -datadir $(DATADIR)
