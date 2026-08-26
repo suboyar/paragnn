@@ -13,20 +13,20 @@
 #include <omp.h>
 #include <numa.h>
 
-long get_cache_line_size(void)
+size_t get_cache_linesize(void)
 {
-    static long cache_line = 0;
-    long val;
+    static size_t cache_linesize = 0;
+    size_t val;
 
 #pragma omp atomic read
-    val = cache_line;
+    val = cache_linesize;
 
     if (__builtin_expect(val == 0, 0))
     {
 #pragma omp critical
         {
 #pragma omp atomic read
-            val = cache_line;
+            val = cache_linesize;
 
             if (val == 0)
             {
@@ -38,7 +38,7 @@ long get_cache_line_size(void)
                 else val = 64;
 
 #pragma omp atomic write
-                cache_line = val;
+                cache_linesize = val;
             }
         }
     }
@@ -47,7 +47,7 @@ long get_cache_line_size(void)
 
 void *cache_aligned_alloc(size_t size)
 {
-    size_t alignment = get_cache_line_size();
+    size_t alignment = get_cache_linesize();
     size_t padded_size = (size + alignment - 1) & ~(alignment - 1);
 
     return aligned_alloc(alignment, padded_size);
