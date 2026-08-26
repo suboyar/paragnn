@@ -6,15 +6,13 @@
 #include <string.h>
 #include <unistd.h>
 #include <omp.h>
-#include <cblas.h>
 
-#include "outer_tn/outer_tn_kernel.h"
-#include "grad_mean_aggregate.h"
-#include "../cache_counter.h"
 #include "core.h"
 #include "ds.h"
 #include "dsinfo.h"
+#include "kernels.h"
 #include "layers.h"
+#include "../membw.h"
 #include "timer.h"
 
 // Default flag values
@@ -33,93 +31,60 @@ static FILE        *csv_fd;
 static DatasetKind  dataset;
 static char        *datadir;
 
-typedef void (*outer_fn)(int64_t, int64_t, int64_t, const Real*, int64_t, const Real*, int64_t, Real*, int64_t);
-typedef void (*fptr)(SageLayer *const l);
-
 typedef struct {
-    fptr func;
+    KernelFunc func;
+    TouchFunc func_touch;
     const char *name;
+    double flops_per_sec;
+    double bw;
+    double ai;
+    uint64_t llc_load_miss;
+    uint64_t llc_store_miss;
+    uint64_t l3_local_miss;
+    uint64_t l3_remote_miss;
+    uint64_t bytes_loaded;
 } BenchKernel;
+#define BENCH_FUNC(fn) { .func = &(fn), .func_touch = &(fn##_touch), .name = #fn, 0}
 
-#define BENCH_FUNC(fn) { .func = &(fn), .name = #fn }
-
-// Used as the "naive" benchmark
-static void _naive(int64_t M, int64_t N, int64_t K,
-           const Real *restrict A, int64_t lda,
-           const Real *restrict B, int64_t ldb,
-           Real *restrict C, int64_t ldc)
+static void stat_print(BenchKernel *funcs, size_t func_count)
 {
-#pragma omp parallel for
-    for (int64_t i = 0; i < M; i++)
-    {
-        Real *c_row = &C[i*ldc];
-        {
-            for (int64_t j = 0; j < N; j++)
-            {
-                for (int64_t k = 0; k < K; k++)
-                {
-                    c_row[j] += A[k*lda + i] * B[k*ldb + j];
-                } // end for j
-            } // end for k
-        } // end for i
+    int name_col_width = 30; // Match default minimum of timer_print
+    for (size_t i = 0; i < func_count; i++) {
+        if (funcs[i].name) {
+            int len = (int)strlen(funcs[i].name);
+            if (len > name_col_width) {
+                name_col_width = len;
+            }
+        }
     }
-}
 
-static void naive(SageLayer *l)
-{
-    _naive(l->in_dim, l->out_dim, l->num_nodes,
-           l->input,       l->in_dim,
-           l->grad_output, l->out_dim,
-           l->grad_Wroot,  l->ldW);
-}
+    char fixed_cols[256];
+    snprintf(fixed_cols, sizeof(fixed_cols),
+             "%-10s %-10s %-8s %-12s %-12s %-12s %-12s %-12s",
+             "GFLOP/s", "MB/s", "AI", "LLC Ld", "LLC St",
+             "L3 Loc", "L3 Rem", "Bytes");
 
-// Used for both as computing reference for validation stage and benchmarking
-static void cblas_gemm(SageLayer *l)
-{
-    cblas_rgemm(CblasRowMajor,
-                CblasTrans, CblasNoTrans,
-                l->in_dim, l->out_dim, l->num_nodes,
-                1.0,
-                l->input,       l->in_dim,
-                l->grad_output, l->out_dim,
-                0.0,
-                l->grad_Wroot,  l->ldW);
-}
+    char heading[512];
+    snprintf(heading, sizeof(heading), "%-*s %s", name_col_width, "name", fixed_cols);
 
+    printf("%s\n", heading);
 
-static void grad_sageconv_impl(SageLayer *l, outer_fn kernel)
-{
-    // grad_Wroot = input^T @ grad_output
-    kernel(l->in_dim, l->out_dim, l->num_nodes,
-           l->input,       l->in_dim,
-           l->grad_output, l->out_dim,
-           l->grad_Wroot,  l->ldW);
+    for (size_t i = 0; i < strlen(heading); i++) printf("-");
+    printf("\n");
 
-    // grad_Wagg = agg^T @ grad_output
-    kernel(l->in_dim, l->out_dim, l->num_nodes,
-           l->agg,         l->in_dim,
-           l->grad_output, l->out_dim,
-           l->grad_Wagg,   l->ldW);
-
-    // grad_input = grad_output @ Wroot^T
-    cblas_rgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
-                l->num_nodes, l->in_dim, l->out_dim,
-                1.0,
-                l->grad_output, l->out_dim,
-                l->Wroot,       l->out_dim,
-                0.0,
-                l->grad_input,  l->in_dim);
-
-    // grad_scatter = grad_output @ Wagg^T
-    cblas_rgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
-                l->num_nodes, l->in_dim, l->out_dim,
-                1.0,
-                l->grad_output,  l->out_dim,
-                l->Wagg,         l->out_dim,
-                0.0,
-                l->grad_scatter, l->in_dim);
-
-    grad_mean_aggregate(l);
+    for(size_t i = 0; i < func_count; i++)
+    {
+        printf("%-*s %-10.2f %-10.2f %-8.2f %-12lu %-12lu %-12lu %-12lu %-12lu\n",
+               name_col_width, funcs[i].name,
+               funcs[i].flops_per_sec / 1e9,
+               funcs[i].bw / 1e6,
+               funcs[i].ai,
+               funcs[i].llc_load_miss,
+               funcs[i].llc_store_miss,
+               funcs[i].l3_local_miss,
+               funcs[i].l3_remote_miss,
+               funcs[i].bytes_loaded);
+    }
 }
 
 static inline void fill_uniform(Real *restrict x, int64_t n)
@@ -166,16 +131,17 @@ static bool is_valid_2d(Real *x, Real *y, int64_t rows, int64_t cols, int64_t ld
     }
     return true;
 }
+
 static void validate(int64_t in_dim, int64_t out_dim, Dataset *ds, BenchKernel *funcs, size_t func_count)
 {
-    SageLayer *l = sage_layer_create(ds->num_nodes, ds->num_edges, ds->graph, in_dim, out_dim, SOURCE_TO_TARGET);
+    SageLayer *l = sage_layer_alloc(ds->node_count, ds->edge_count, ds->graph, in_dim, out_dim, SOURCE_TO_TARGET);
 
-    Real *input = cache_aligned_alloc(ds->num_nodes * l->in_dim * sizeof(Real));
-    fill_uniform(input, ds->num_nodes * l->in_dim);
+    Real *input = cache_aligned_alloc(ds->node_count * l->in_dim * sizeof(Real));
+    fill_uniform(input, ds->node_count * l->in_dim);
     l->input = input;
 
-    Real *grad_output = cache_aligned_alloc(ds->num_nodes * l->out_dim * sizeof(Real));
-    fill_uniform(grad_output, ds->num_nodes * l->out_dim);
+    Real *grad_output = cache_aligned_alloc(ds->node_count * l->out_dim * sizeof(Real));
+    fill_uniform(grad_output, ds->node_count * l->out_dim);
     l->grad_output = grad_output;
 
     // compute reference
@@ -183,14 +149,10 @@ static void validate(int64_t in_dim, int64_t out_dim, Dataset *ds, BenchKernel *
     fflush(stdout);
 
     Real *ref_grad_Wroot = cache_aligned_alloc(l->in_dim * l->ldW * sizeof(Real));
-    cblas_rgemm(CblasRowMajor,
-                CblasTrans, CblasNoTrans,
-                l->in_dim, l->out_dim, l->num_nodes,
-                1.0,
-                l->input,       l->in_dim,
-                l->grad_output, l->out_dim,
-                0.0,
-                ref_grad_Wroot,  l->ldW);
+    cblas_gemm(l->in_dim, l->out_dim, l->num_nodes,
+               l->input,       l->in_dim,
+               l->grad_output, l->out_dim,
+               ref_grad_Wroot,  l->ldW);
 
     printf(" ok\n");
     fflush(stdout);
@@ -205,7 +167,10 @@ static void validate(int64_t in_dim, int64_t out_dim, Dataset *ds, BenchKernel *
 
         real_zero_out(l->grad_Wroot, l->in_dim * l->ldW);
 
-        funcs[i].func(l);
+        funcs[i].func(l->in_dim, l->out_dim, l->num_nodes,
+                            l->input,       l->in_dim,
+                            l->grad_output, l->out_dim,
+                            l->grad_Wroot,  l->ldW);
 
         if (isatty(STDOUT_FILENO)) printf("\r\033[K");
         if(!is_valid_2d(l->grad_Wroot, ref_grad_Wroot, l->in_dim, l->out_dim, l->ldW))
@@ -225,51 +190,72 @@ static void validate(int64_t in_dim, int64_t out_dim, Dataset *ds, BenchKernel *
     sage_layer_free(&l);
 }
 
-static void benchmark_kernel(int64_t in_dim, int64_t out_dim, Dataset *ds)
+#define CACHE_FLUSH_SIZE (512 * 1024 * 1024)
+
+static void flush_cache(void)
 {
-    cache_counter_t* thread_counters = cache_counter_init_all();
+    static volatile char *flush_buffer = NULL;
+
+    if (!flush_buffer) {
+        flush_buffer = malloc(CACHE_FLUSH_SIZE);
+        if (!flush_buffer) {
+            fprintf(stderr, "Failed to allocate cache flush buffer\n");
+            return;
+        }
+    }
+    #pragma omp parallel for
+    for (size_t i = 0; i < CACHE_FLUSH_SIZE; i += 64) {
+        flush_buffer[i] = (char)i;
+    }
+}
+
+static void benchmark_kernel(int64_t in_dim, int64_t out_dim)
+{
+    membw_init_all();
+    Dataset *ds = dataset_alloc(DATASET_ARXIV, "/global/D1/homes/sboyar/paragnn-dataset", SPARSE_CS, SPLIT_NONE);
 
     BenchKernel funcs[] = {
-        BENCH_FUNC(naive),
+        // BENCH_FUNC(naive),
         BENCH_FUNC(cblas_gemm),
-        BENCH_FUNC(outer_tn_kernel_v1),
-        BENCH_FUNC(outer_tn_kernel_v2),
-        BENCH_FUNC(outer_tn_kernel_v3),
+        BENCH_FUNC(outer_tn_v1),
+        BENCH_FUNC(outer_tn_v2),
+        BENCH_FUNC(outer_tn_v3),
     };
     size_t func_count = sizeof(funcs)/sizeof(funcs[0]);
 
 #if !defined(SKIP_VALID)
-    validate(in_dim, out_dim, ds, funcs, sizeof(funcs)/sizeof(funcs[0]));
+    validate(in_dim, out_dim, ds, funcs, func_count);
 #endif // SKIP_VALID
 
     SageLayer *l = NULL;
-    for (size_t i = 0; i < sizeof(funcs)/sizeof(funcs[0]); i++)
+#if !defined(MANUAL_FIRST_TOUCH) // numactl --interleave=all
+    l = sage_layer_alloc(ds->node_count, ds->edge_count, ds->graph, in_dim, out_dim, SOURCE_TO_TARGET);
+    l->input = cache_aligned_alloc(ds->node_count * l->in_dim * sizeof(Real));
+    l->grad_output = cache_aligned_alloc(ds->node_count * l->out_dim * sizeof(Real));
+    sage_layer_reset_parameters(l);
+#endif
+
+    for (size_t i = 0; i < func_count; i++)
     {
-        // NUMA first touch
-        printf("First touch: %s ", funcs[i].name);
-        fflush(stdout);
+#if defined(MANUAL_FIRST_TOUCH)
+       printf("Performing NUMA first touch: %s...\n", funcs[i].name);
         if (l != NULL)
         {
             free(l->input);
             sage_layer_free(&l);
         }
-        l = sage_layer_create(ds->num_nodes, ds->num_edges, ds->graph, in_dim, out_dim, SOURCE_TO_TARGET);
-
-#if 0
-        Real *input = cache_aligned_alloc(ds->num_nodes * l->in_dim * sizeof(Real));
-        fill_uniform(input, ds->num_nodes * l->in_dim);
-        l->input = input;
-        Real *grad_output = cache_aligned_alloc(ds->num_nodes * l->out_dim * sizeof(Real));
-        fill_uniform(grad_output, ds->num_nodes * l->out_dim);
-        l->grad_output = grad_output;
+        l = sage_layer_alloc(ds->node_count, ds->edge_count, ds->graph, in_dim, out_dim, SOURCE_TO_TARGET);
+        l->input = cache_aligned_alloc(ds->node_count * l->in_dim * sizeof(Real));
+        l->grad_output = cache_aligned_alloc(ds->node_count * l->out_dim * sizeof(Real));
+        funcs[i].func_touch(l->in_dim, l->out_dim, l->num_nodes,
+                            l->input,       l->in_dim,
+                            l->grad_output, l->out_dim,
+                            l->grad_Wroot,  l->ldW);
 #else
-        l->input = cache_aligned_alloc(ds->num_nodes * l->in_dim * sizeof(Real));
-        l->grad_output = cache_aligned_alloc(ds->num_nodes * l->out_dim * sizeof(Real));
-        funcs[i].func(l);
+        memset(l->input, 0, ds->node_count * l->in_dim * sizeof(Real));
+        memset(l->grad_output, 0, ds->node_count * l->out_dim * sizeof(Real));
 #endif
-
-        printf("\r\033[KFirst touch: %s (ok)\n", funcs[i].name);
-        fflush(stdout);
+        sage_layer_reset_parameters(l);
 
 #if !defined(SKIP_WARMUP)
         const int warmup_count = 10;
@@ -280,12 +266,10 @@ static void benchmark_kernel(int64_t in_dim, int64_t out_dim, Dataset *ds)
                 printf("\r\033[KWarmup: %s (%d/%d)", funcs[i].name, j+1, warmup_count);
                 fflush(stdout);
             }
-
-            real_zero_out(l->grad_Wroot, in_dim * l->ldW);
-            real_zero_out(l->grad_Wagg, in_dim * l->ldW);
-            real_zero_out(l->grad_input, l->num_nodes * in_dim);
-            real_zero_out(l->grad_scatter, l->num_nodes * in_dim);
-            funcs[i].func(l);
+            funcs[i].func(l->in_dim, l->out_dim, l->num_nodes,
+                          l->input,       l->in_dim,
+                          l->grad_output, l->out_dim,
+                          l->grad_Wroot,  l->ldW);
         }
 
         if (isatty(STDOUT_FILENO)) printf("\r\033[K");
@@ -295,10 +279,6 @@ static void benchmark_kernel(int64_t in_dim, int64_t out_dim, Dataset *ds)
 #endif // SKIP_WARMUP
 
         double min_time = DBL_MAX;
-        uint64_t bytes = 0, l3_local = 0, l3_remote = 0;
-        uint64_t flops = 2 * l->num_nodes * in_dim * out_dim;
-
-        // Run
         if (!isatty(STDOUT_FILENO))
         {
             printf("Run: %s", funcs[i].name);
@@ -308,18 +288,19 @@ static void benchmark_kernel(int64_t in_dim, int64_t out_dim, Dataset *ds)
         double sum_time = 0.0;
         for (int64_t j = 0; j < ntimes; j++)
         {
-            real_zero_out(l->grad_Wroot, in_dim * l->ldW);
-            real_zero_out(l->grad_Wagg, in_dim * l->ldW);
-            real_zero_out(l->grad_input, l->num_nodes * in_dim);
+            flush_cache();
 
             timer_enable();
-            cache_counter_start_all(thread_counters);
+            membw_start_all();
             double start_time = omp_get_wtime();
 
-            funcs[i].func(l);
+            funcs[i].func(l->in_dim, l->out_dim, l->num_nodes,
+                          l->input,       l->in_dim,
+                          l->grad_output, l->out_dim,
+                          l->grad_Wroot,  l->ldW);
 
             double elapsed_time = omp_get_wtime()-start_time;
-            cache_counter_stop_all(thread_counters);
+            membw_stop_all();
             timer_record(funcs[i].name, elapsed_time, NULL);
             timer_disable();
 
@@ -334,34 +315,37 @@ static void benchmark_kernel(int64_t in_dim, int64_t out_dim, Dataset *ds)
 
             if (elapsed_time < min_time)
             {
+                uint64_t flop = (2 * l->num_nodes * in_dim * out_dim);
                 min_time = elapsed_time;
-                bytes = 0, l3_local = 0, l3_remote = 0;
-                for (int tid = 0; tid < omp_get_max_threads(); tid++)
-                {
-                    bytes += cache_counter_get_bytes_loaded(&thread_counters[tid]);
-                    long long local = 0, remote = 0;
-                    cache_counter_get_cache_misses(&thread_counters[tid], &local, &remote);
-                    l3_local += (uint64_t)local;
-                    l3_remote += (uint64_t)remote;
-                }
+                funcs[i].flops_per_sec = ((double)flop)/elapsed_time;
+                funcs[i].bw = membw_get_bw_all(elapsed_time);
+                funcs[i].ai = flop / membw_get_bytes_loaded_all();
+                funcs[i].llc_load_miss = membw_get_llc_load_miss_all();
+                funcs[i].llc_store_miss = membw_get_llc_store_miss_all();
+                funcs[i].l3_local_miss = membw_get_l3_local_cache_miss_all();
+                funcs[i].l3_remote_miss = membw_get_l3_remote_cache_miss_all();
+                funcs[i].bytes_loaded = membw_get_bytes_loaded_all();
             }
         }
 
         if (isatty(STDOUT_FILENO)) printf("\r\033[KRun: %s", funcs[i].name);
         printf(" (ok)\n");
         fflush(stdout);
-        timer_enable();
-        timer_record_counters(funcs[i].name, flops, l3_local, l3_remote, bytes);
-        timer_disable();
+        // timer_enable();
+        // timer_record_counters(funcs[i].name, flops, l3_local, l3_remote, bytes);
+        // timer_disable();
     }
 
     timer_print();
+    printf("\n");
+    stat_print(funcs, func_count);
     // timer_export_csv("stdout");
 
-    cache_counter_close_all(thread_counters);
+    membw_close_all();
     timer_reset();
     free(l->input);
     sage_layer_free(&l);
+    dataset_free(&ds);
 }
 
 enum {
@@ -501,15 +485,10 @@ int main(int argc, char** argv)
     printf("Using %d threads(omp), %d threads(openblas), and %d NUMA node(s)\n",
            omp_num_threads, openblas_num_threads, get_active_sockets());
 
-    Dataset *ds = dataset_load(dataset, datadir, SPARSE_CSX);
-    Dataset *ds_train = dataset_split(ds, SPLIT_TRAIN);
-    ds = ds_train;
-    printf("num nodes: %ld\n", ds->num_nodes);
-
     for (int64_t i = 0; i < n_dims; i++)
     {
         printf("in_dim: %zu, out_dim: %zu\n", dims[i], dims[i]);
-        benchmark_kernel(dims[i], dims[i], ds);
+        benchmark_kernel(dims[i], dims[i]);
     }
 
     free(datadir);

@@ -8,9 +8,137 @@
 #include <threads.h>
 #include <omp.h>
 
-#include "outer_tn_params.h"
 #include "core.h"
+#include "layers.h"
+#include "params.h"
 #include "vreg.h"
+
+static void pack_A(const Real *restrict A, int64_t lda, Real *restrict Ap, int64_t cols, int64_t rows);
+static void pack_B(const Real *restrict B, int64_t ldb, Real *restrict Bp, int64_t rows, int64_t cols);
+static void microkernel_MRxNR(int64_t k, const Real *restrict A, const Real *restrict B, Real *restrict C, int64_t ldc, int first_time);
+static void reduction(int64_t M, int64_t N, int64_t M_pad, int64_t N_pad, int nthreads, Real *restrict C, int64_t ldc, Real *restrict Cl, int64_t ldcl, Real *all_Cl[]);
+
+void outer_tn_v3_touch(int64_t M, int64_t N, int64_t K,
+                       Real *restrict A, int64_t lda,
+                       Real *restrict B, int64_t ldb,
+                       Real *restrict C, int64_t ldc)
+{
+#pragma omp parallel
+    {
+#pragma omp for
+        for (int64_t kk = 0; kk < K; kk += KC)
+        {
+            Real *A_kk = &A[kk * lda];
+            memset(A_kk, 0, M * sizeof(*A_kk));
+            Real *B_kk = &B[kk * ldb];
+            memset(B_kk, 0, N * sizeof(*B_kk));
+        }
+
+#pragma omp for
+        for (int64_t i = 0; i < M; i++)
+        {
+            Real *C_i = &C[i * ldc];
+            memset(C_i, 0, N * sizeof(*C_i));
+        }
+    }
+}
+
+void outer_tn_v3(int64_t M, int64_t N, int64_t K,
+                 const Real *restrict A, int64_t lda,
+                 const Real *restrict B, int64_t ldb,
+                 Real *restrict C, int64_t ldc)
+{
+    int nthreads = omp_get_max_threads();
+
+    const int64_t M_pad = ((M + MR - 1) / MR) * MR;
+    const int64_t N_pad = ((N + NR - 1) / NR) * NR;
+    const int64_t ldcl  = N_pad;
+
+    Real *all_Cl[nthreads];
+
+#pragma omp parallel
+    {
+        int tid = omp_get_thread_num();
+
+        static thread_local Real* Ap = NULL;
+        static thread_local Real* Bp = NULL;
+        static thread_local Real* Cl = NULL;
+
+        static thread_local int64_t local_M_pad = 0;
+        static thread_local int64_t local_N_pad = 0;
+        bool needs_cl_realloc = 0;
+
+        if (M_pad != local_M_pad)
+        {
+            free(Ap);
+            Ap = cache_aligned_alloc((size_t)KC * M_pad * sizeof(Real));
+            needs_cl_realloc = 1;
+        }
+
+        if (N_pad != local_N_pad)
+        {
+            free(Bp);
+            Bp = cache_aligned_alloc((size_t)KC * N_pad * sizeof(Real));
+            needs_cl_realloc = 1;
+        }
+
+        if (needs_cl_realloc)
+        {
+            free(Cl);
+            Cl = cache_aligned_alloc((size_t)M_pad * ldcl * sizeof(Real));
+        }
+
+        local_M_pad = M_pad;
+        local_N_pad = N_pad;
+
+        all_Cl[tid] = Cl;
+
+        // NUMA First-Touch initialization
+        int first_time = 1;
+
+#pragma omp for
+        for (int64_t kk = 0; kk < K; kk += KC)
+        {
+            int64_t kb = MIN(KC, K - kk);
+
+            const Real *A_kk = &A[kk * lda];
+            pack_A(A_kk, lda, Ap, kb, M);
+            const Real *B_kk = &B[kk * ldb];
+            pack_B(B_kk, ldb, Bp, kb, N);
+
+            // TODO: try withoug NC here
+            for (int64_t jj_outer = 0; jj_outer < N_pad; jj_outer += NC)
+            {
+                int64_t j_end = MIN(jj_outer + NC, N_pad);
+
+                for (int64_t ii = 0; ii < M_pad; ii += MR)
+                {
+                    for (int64_t jj = jj_outer; jj < j_end; jj += NR)
+                    {
+                        microkernel_MRxNR(kb,
+                                          &Ap[ii * kb],
+                                          &Bp[jj * kb],
+                                          &Cl[ii*ldcl + jj], ldcl,
+                                          first_time);
+                    } // end for jj
+                } // end for ii
+            } // end for jj_outer
+            first_time = 0;
+        } // end for kk
+
+        // If this thread did no work, its buffer contains garbage. Zero it out
+        // before the reduction reads from it
+        if (first_time)
+        {
+            memset(Cl, 0, (size_t)M_pad * ldcl * sizeof(Real));
+        }
+
+#pragma omp barrier
+
+        // Reduction
+        reduction(M, N, M_pad, N_pad, nthreads, C, ldc, Cl, ldcl, all_Cl);
+    }
+}
 
 static void pack_A(const Real *restrict A, int64_t lda, Real *restrict Ap,
                    int64_t cols, int64_t rows)
@@ -213,101 +341,5 @@ static void reduction(int64_t M, int64_t N,
             }
             out_row[j] = sum_scalar;
         }
-    }
-}
-
-void outer_tn_v3(int64_t M, int64_t N, int64_t K,
-                 const Real *restrict A, int64_t lda,
-                 const Real *restrict B, int64_t ldb,
-                 Real *restrict C, int64_t ldc)
-{
-    int nthreads = omp_get_max_threads();
-
-    const int64_t M_pad = ((M + MR - 1) / MR) * MR;
-    const int64_t N_pad = ((N + NR - 1) / NR) * NR;
-    const int64_t ldcl  = N_pad;
-
-    Real *all_Cl[nthreads];
-
-#pragma omp parallel
-    {
-        int tid = omp_get_thread_num();
-
-        static thread_local Real* Ap = NULL;
-        static thread_local Real* Bp = NULL;
-        static thread_local Real* Cl = NULL;
-
-        static thread_local int64_t local_M_pad = 0;
-        static thread_local int64_t local_N_pad = 0;
-        bool needs_cl_realloc = 0;
-
-        if (M_pad != local_M_pad)
-        {
-            free(Ap);
-            Ap = cache_aligned_alloc((size_t)KC * M_pad * sizeof(Real));
-            needs_cl_realloc = 1;
-        }
-
-        if (N_pad != local_N_pad)
-        {
-            free(Bp);
-            Bp = cache_aligned_alloc((size_t)KC * N_pad * sizeof(Real));
-            needs_cl_realloc = 1;
-        }
-
-        if (needs_cl_realloc)
-        {
-            free(Cl);
-            Cl = cache_aligned_alloc((size_t)M_pad * ldcl * sizeof(Real));
-        }
-
-        local_M_pad = M_pad;
-        local_N_pad = N_pad;
-
-        all_Cl[tid] = Cl;
-
-        // NUMA First-Touch initialization
-        int first_time = 1;
-
-#pragma omp for
-        for (int64_t kk = 0; kk < K; kk += KC)
-        {
-            int64_t kb = MIN(KC, K - kk);
-
-            const Real *A_kk = &A[kk * lda];
-            pack_A(A_kk, lda, Ap, kb, M);
-            const Real *B_kk = &B[kk * ldb];
-            pack_B(B_kk, ldb, Bp, kb, N);
-
-            for (int64_t jj_outer = 0; jj_outer < N_pad; jj_outer += NC)
-            {
-                int64_t j_end = MIN(jj_outer + NC, N_pad);
-
-                for (int64_t ii = 0; ii < M_pad; ii += MR)
-                {
-                    for (int64_t jj = jj_outer; jj < j_end; jj += NR)
-                    {
-                        microkernel_MRxNR(kb,
-                                          &Ap[ii * kb],
-                                          &Bp[jj * kb],
-                                          &Cl[ii*ldcl + jj], ldcl,
-                                          first_time);
-                    } // end for jj
-                } // end for ii
-            } // end for jj_outer
-            first_time = 0;
-        } // end for kk
-
-        // If this thread did no work, its buffer contains garbage. Zero it out
-        // before the reduction reads from it
-        if (first_time)
-        {
-            memset(Cl, 0, (size_t)M_pad * ldcl * sizeof(Real));
-        }
-
-        #pragma omp barrier
-
-        // Reduction
-        reduction(M, N, M_pad, N_pad, nthreads, C, ldc, Cl, ldcl, all_Cl);
     }
 }

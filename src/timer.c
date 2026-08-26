@@ -295,8 +295,7 @@ static bool has_any_counters(TimerEntry** entries, size_t count)
 }
 
 static void print_tree(TimerEntry** all_entries, size_t total_count,
-                       const TimerEntry* parent, int depth, int name_col_width,
-                       bool show_counters)
+                       const TimerEntry* parent, int depth, int name_col_width)
 {
     TimerEntry** children = malloc(total_count * sizeof(TimerEntry*));
     size_t num_children = 0;
@@ -325,24 +324,9 @@ static void print_tree(TimerEntry** all_entries, size_t total_count,
             indented_name[name_col_width] = '\0';
         }
 
-        printf("%-*s %-12.6f %-12.6f %-12.6f %-12.6f %-8zu",
+        printf("%-*s %-12.6f %-12.6f %-12.6f %-12.6f %-8zu\n",
                name_col_width, indented_name, avg, e->total_time, e->min_time, e->max_time, e->count);
-
-        if (show_counters)
-        {
-            double gflops = (e->flops > 0 && e->min_time > 0)
-                ? (e->flops / e->min_time) / 1e9 : 0;
-            double ai = (e->bytes_loaded > 0)
-                ? e->flops / (double)e->bytes_loaded : 0;
-            printf(" %-12.2f %-12lu %-12lu %-12.2f",
-                   gflops,
-                   (unsigned long)e->l3_local,
-                   (unsigned long)e->l3_remote,
-                   ai);
-        }
-        printf("\n");
-
-        print_tree(all_entries, total_count, e, depth + 1, name_col_width, show_counters);
+        print_tree(all_entries, total_count, e, depth + 1, name_col_width);
     }
 
     free(children);
@@ -352,20 +336,12 @@ void timer_print(void)
 {
     TimerEntry** all_entries = malloc(reg.capacity * sizeof(TimerEntry*));
     size_t count = get_valid_entry_ptrs(all_entries);
-    bool show_counters = has_any_counters(all_entries, count);
 
     char fixed_cols[TIMER_MAX_LINE_WIDTH+1];
     int fixed_cols_width;
-    if (show_counters) {
-        fixed_cols_width = snprintf(fixed_cols, sizeof(fixed_cols),
-            "%-12s %-12s %-12s %-12s %-8s %-12s %-12s %-12s %-12s",
-            "avg(s)", "total(s)", "min(s)", "max(s)", "calls",
-            "GFLOP/s", "L3_local", "L3_remote", "AI");
-    } else {
-        fixed_cols_width = snprintf(fixed_cols, sizeof(fixed_cols),
-            "%-12s %-12s %-12s %-12s %-8s",
-            "avg(s)", "total(s)", "min(s)", "max(s)", "calls");
-    }
+    fixed_cols_width = snprintf(fixed_cols, sizeof(fixed_cols),
+                                "%-12s %-12s %-12s %-12s %-8s",
+                                "avg(s)", "total(s)", "min(s)", "max(s)", "calls");
 
     int name_col_width = 30;
     for (size_t i = 0; i < reg.capacity; i++) {
@@ -380,7 +356,7 @@ void timer_print(void)
         }
     }
 
-    int max_line_width = show_counters ? 180 : 120;
+    int max_line_width = 120;
     int max_name_width = max_line_width - fixed_cols_width - 1;
     if (name_col_width > max_name_width) {
         name_col_width = max_name_width;
@@ -395,7 +371,7 @@ void timer_print(void)
     for (size_t i = 0; i < strlen(heading); i++) printf("-");
     printf("\n");
 
-    print_tree(all_entries, count, NULL, 0, name_col_width, show_counters);
+    print_tree(all_entries, count, NULL, 0, name_col_width);
 
     free(all_entries);
 }
@@ -417,7 +393,7 @@ void timer_export_csv(FILE *fd)
     char path[(TIMER_MAX_NAME_LEN+1)*TIMER_MAX_STACK_DEPTH];
 
     if (fd == stdout) fprintf(fd, "\n--- CSV_OUTPUT_BEGIN ---\n");
-    fprintf(fd, "name,parent,avg(s),total(s),min(s),max(s),calls,flops,gflop/s,l3_local,l3_remote,bytes_loaded,arith_intensity\n");
+    fprintf(fd, "name,parent,avg(s),total(s),min(s),max(s),calls\n");
 
     for (size_t i = 0; i < reg.capacity; i++) {
         if (reg.entries[i].name != NULL && reg.entries[i].count > 0) {

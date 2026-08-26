@@ -71,14 +71,15 @@ PARAGNN_SRCS = src/main.c src/core.c src/nn.c src/sageconv.c src/matmul_naive.c 
                src/ds.c src/dsinfo.c src/layers.c src/optim.c src/timer.c src/sparsegraph.c
 
 GRAD_SAGECONV_SRCS := kernels/grad_sageconv/bench.c \
-                      kernels/grad_sageconv/outer_tn/outer_tn_kernel.c \
-                      kernels/grad_sageconv/outer_tn/outer_tn_v1.c \
-                      kernels/grad_sageconv/outer_tn/outer_tn_v2.c \
-                      kernels/grad_sageconv/outer_tn/outer_tn_v3.c \
-                      kernels/grad_sageconv/grad_mean_aggregate.c \
-                      kernels/cache_counter.c \
+                      kernels/grad_sageconv/naive.c \
+                      kernels/grad_sageconv/blas.c \
+                      kernels/grad_sageconv/outer_tn_v1.c \
+                      kernels/grad_sageconv/outer_tn_v2.c \
+                      kernels/grad_sageconv/outer_tn_v3.c \
+                      kernels/membw.c \
                       src/core.c \
                       src/ds.c \
+                      src/sparsegraph.c \
                       src/timer.c \
                       src/dsinfo.c \
                       src/layers.c

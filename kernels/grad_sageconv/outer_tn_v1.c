@@ -9,6 +9,32 @@
 
 #include "core.h"
 
+void outer_tn_v1_touch(int64_t M, int64_t N, int64_t K,
+                       Real *restrict A, int64_t lda,
+                       Real *restrict B, int64_t ldb,
+                       Real *restrict C, int64_t ldc)
+{
+#pragma omp parallel
+    {
+#pragma omp for
+        for (int64_t kk = 0; kk < K; kk++)
+        {
+            Real *A_kk = &A[kk*lda];
+            memset(A_kk, 0, M * sizeof(*A_kk));
+            Real *B_kk = &B[kk*ldb];
+            memset(B_kk, 0, N * sizeof(*B_kk));
+        }
+
+#pragma omp for
+        for (int64_t i = 0; i < M; i++)
+        {
+            Real *C_i = &C[i * ldc];
+            memset(C_i, 0, N);
+        }
+
+    }
+}
+
 void outer_tn_v1(int64_t M, int64_t N, int64_t K,
                  const Real *restrict A, int64_t lda,
                  const Real *restrict B, int64_t ldb,
@@ -31,36 +57,34 @@ void outer_tn_v1(int64_t M, int64_t N, int64_t K,
 #pragma omp for
         for (int64_t k = 0; k < K; k++)
         {
-            const Real *a_row = &A[k*lda];
-            const Real *b_row = &B[k*ldb];
+            const Real *A_k = &A[k*lda];
+            const Real *B_k = &B[k*ldb];
             for (int64_t i = 0; i < M; i++)
             {
-                Real a = a_row[i];
-                Real *c_row = &Cl[i*ldcl];
+                Real a = A_k[i];
+                Real *Cl_i = &Cl[i*ldcl];
 #pragma omp simd
                 for (int64_t j = 0; j < N; j++)
                 {
-                    c_row[j] += a * b_row[j];
-                } // end for j
-            } // end for i
-        } // end for k
+                    Cl_i[j] += a * B_k[j];
+                } // end for jj
+            } // end for ii
+        } // end for kk
 
         // Reduction
 #pragma omp for
         for (int64_t i = 0; i < M; i++)
         {
-            Real *c_row = &C[i * ldc];
+            Real *C_i = &C[i * ldc];
             for (int t = 0; t < nthreads; t++)
             {
-                const Real *cl_row = &all_Cl[t][i * ldcl];
+                const Real *Cl_i = &all_Cl[t][i * ldcl];
 #pragma omp simd
                 for (int64_t j = 0; j < N; j++)
-                    c_row[j] += cl_row[j];
+                    C_i[j] += Cl_i[j];
             }
         }
-
         free(Cl);
     }
     free(all_Cl);
-
 }

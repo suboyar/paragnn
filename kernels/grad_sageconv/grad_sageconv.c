@@ -1,5 +1,44 @@
 #include <stdint.h>
+#include <cblas.h>
+
 #include "layers.h"
+
+static void grad_mean_aggregate(SageLayer *l);
+
+void grad_sageconv(SageLayer *l, outer_fn kernel)
+{
+    // grad_Wroot = input^T @ grad_output
+    kernel(l->in_dim, l->out_dim, l->num_nodes,
+           l->input,       l->in_dim,
+           l->grad_output, l->out_dim,
+           l->grad_Wroot,  l->ldW);
+
+    // grad_Wagg = agg^T @ grad_output
+    kernel(l->in_dim, l->out_dim, l->num_nodes,
+           l->agg,         l->in_dim,
+           l->grad_output, l->out_dim,
+           l->grad_Wagg,   l->ldW);
+
+    // grad_input = grad_output @ Wroot^T
+    cblas_rgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+                l->num_nodes, l->in_dim, l->out_dim,
+                1.0,
+                l->grad_output, l->out_dim,
+                l->Wroot,       l->out_dim,
+                0.0,
+                l->grad_input,  l->in_dim);
+
+    // grad_scatter = grad_output @ Wagg^T
+    cblas_rgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+                l->num_nodes, l->in_dim, l->out_dim,
+                1.0,
+                l->grad_output,  l->out_dim,
+                l->Wagg,         l->out_dim,
+                0.0,
+                l->grad_scatter, l->in_dim);
+
+    grad_mean_aggregate(l);
+}
 
 static void scale_by_inv_degree_coo(SageLayer *l)
 {
@@ -9,11 +48,11 @@ static void scale_by_inv_degree_coo(SageLayer *l)
     const Real *restrict inv_degree;
     if (l->flow == SOURCE_TO_TARGET) // e.g. src (citer) aggregates from dst (cited)
     {
-        inv_degree = l->graph.inv_in_degree;
+        inv_degree = l->graph->inv_in_degree;
     }
     else // flow == TARGET_TO_SOURCE // e.g. dst (cited) aggregates from src (citer)
     {
-        inv_degree = l->graph.inv_out_degree;
+        inv_degree = l->graph->inv_out_degree;
     }
 
     Real *restrict grad_scatter = l->grad_scatter;
@@ -38,11 +77,11 @@ static void scale_by_inv_degree_csx(SageLayer *l)
     const int64_t *restrict ptr;
     if (l->flow == SOURCE_TO_TARGET)
     {
-        ptr = l->graph.ptr_csc;
+        ptr = l->graph->ptr_csc;
     }
     else
     {
-        ptr = l->graph.ptr_csr;
+        ptr = l->graph->ptr_csr;
     }
 
     Real *restrict grad_scatter = l->grad_scatter;
@@ -69,13 +108,13 @@ static void scatter_coo(SageLayer *l)
     const int64_t *restrict nodes, *restrict peers;
     if (l->flow == SOURCE_TO_TARGET) // e.g. src (citer) aggregates from dst (cited)
     {
-        nodes = l->graph.dst;
-        peers = l->graph.src;
+        nodes = l->graph->dst;
+        peers = l->graph->src;
     }
     else // flow == TARGET_TO_SOURCE // e.g. dst (cited) aggregates from src (citer)
     {
-        nodes = l->graph.src;
-        peers = l->graph.dst;
+        nodes = l->graph->src;
+        peers = l->graph->dst;
     }
 
     const Real *restrict grad_scatter = l->grad_scatter;
@@ -95,7 +134,7 @@ static void scatter_coo(SageLayer *l)
     }
 }
 
-void scatter_csx(SageLayer *l)
+static void scatter_csx(SageLayer *l)
 {
     int64_t num_nodes = l->num_nodes;
     int64_t in_dim    = l->in_dim;
@@ -103,13 +142,13 @@ void scatter_csx(SageLayer *l)
     const int64_t *restrict ptr, *restrict idx;
     if (l->flow == SOURCE_TO_TARGET)
     {
-        ptr = l->graph.ptr_csr;
-        idx = l->graph.idx_csr;
+        ptr = l->graph->ptr_csr;
+        idx = l->graph->idx_csr;
     }
     else // flow == TARGET_TO_SOURCE
     {
-        ptr = l->graph.ptr_csc;
-        idx = l->graph.idx_csc;
+        ptr = l->graph->ptr_csc;
+        idx = l->graph->idx_csc;
     }
 
     const Real *restrict grad_scatter = l->grad_scatter;
@@ -130,9 +169,9 @@ void scatter_csx(SageLayer *l)
     }
 }
 
-void grad_mean_aggregate(SageLayer *l)
+static void grad_mean_aggregate(SageLayer *l)
 {
-    if (l->graph.format == SPARSE_COO)
+    if (l->graph->format == SPARSE_COO)
     {
         scale_by_inv_degree_coo(l);
         scatter_coo(l);
