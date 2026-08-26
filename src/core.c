@@ -13,23 +13,36 @@
 #include <omp.h>
 #include <numa.h>
 
-static long get_cache_line_size(void)
+long get_cache_line_size(void)
 {
     static long cache_line = 0;
-    if (__builtin_expect(cache_line == 0, 0))
+    long val;
+
+#pragma omp atomic read
+    val = cache_line;
+
+    if (__builtin_expect(val == 0, 0))
     {
-        long val;
-        if ((val = sysconf(_SC_LEVEL4_CACHE_LINESIZE)) > 0) cache_line = val;
-        else if ((val = sysconf(_SC_LEVEL3_CACHE_LINESIZE)) > 0) cache_line = val;
-        else if ((val = sysconf(_SC_LEVEL2_CACHE_LINESIZE)) > 0) cache_line = val;
-        else if ((val = sysconf(_SC_LEVEL1_DCACHE_LINESIZE)) > 0) cache_line = val;
-        else
+#pragma omp critical
         {
-            // Cache line size unavailable via sysconf(), using default of 64 bytes
-            cache_line = 64;
+#pragma omp atomic read
+            val = cache_line;
+
+            if (val == 0)
+            {
+                long tmp;
+                if ((tmp = sysconf(_SC_LEVEL4_CACHE_LINESIZE)) > 0) val = tmp;
+                else if ((tmp = sysconf(_SC_LEVEL3_CACHE_LINESIZE)) > 0) val = tmp;
+                else if ((tmp = sysconf(_SC_LEVEL2_CACHE_LINESIZE)) > 0) val = tmp;
+                else if ((tmp = sysconf(_SC_LEVEL1_DCACHE_LINESIZE)) > 0) val = tmp;
+                else val = 64;
+
+#pragma omp atomic write
+                cache_line = val;
+            }
         }
     }
-    return cache_line;
+    return val;
 }
 
 void *cache_aligned_alloc(size_t size)
