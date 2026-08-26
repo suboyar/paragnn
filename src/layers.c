@@ -391,35 +391,35 @@ SageNet* sage_net_alloc(LayerConf *conf, int64_t count, Dataset *ds, FlowDirecti
         switch (conf[i].type)
         {
             case LAYER_SAGE:
-                ctx = sage_layer_alloc(ds->num_nodes, ds->num_edges, ds->graph, conf[i].in_dim, conf[i].out_dim, flow);
+                ctx = sage_layer_alloc(ds->node_count, ds->edge_count, ds->graph, conf[i].in_dim, conf[i].out_dim, flow);
                 net->layers[i] = (Layer){
                     .type            = LAYER_SAGE,
                     .ctx             = ctx,
                 };
                 break;
             case LAYER_RELU:
-                ctx = (void*)relu_layer_alloc(ds->num_nodes, conf[i].in_dim);
+                ctx = (void*)relu_layer_alloc(ds->node_count, conf[i].in_dim);
                 net->layers[i] = (Layer){
                     .type            = LAYER_RELU,
                     .ctx             = ctx,
                 };
                 break;
             case LAYER_L2NORM:
-                ctx = (void*)l2norm_layer_alloc(ds->num_nodes, conf[i].in_dim);
+                ctx = (void*)l2norm_layer_alloc(ds->node_count, conf[i].in_dim);
                 net->layers[i] = (Layer){
                     .type            = LAYER_L2NORM,
                     .ctx             = ctx,
                 };
                 break;
             case LAYER_LINEAR:
-                ctx = (void*)linear_layer_alloc(ds->num_nodes, conf[i].in_dim, conf[i].out_dim);
+                ctx = (void*)linear_layer_alloc(ds->node_count, conf[i].in_dim, conf[i].out_dim);
                 net->layers[i] = (Layer){
                     .type            = LAYER_LINEAR,
                     .ctx             = ctx,
                 };
                 break;
             case LAYER_LOGSOFTMAX:
-                ctx = (void*)logsoft_layer_alloc(ds->num_nodes, conf[i].in_dim);
+                ctx = (void*)logsoft_layer_alloc(ds->node_count, conf[i].in_dim);
                 net->layers[i] = (Layer){
                     .type            = LAYER_LOGSOFTMAX,
                     .ctx             = ctx,
@@ -442,19 +442,19 @@ void sage_net_bind(SageNet *net, Dataset *ds)
         switch (layer->type)
         {
             case LAYER_SAGE:
-                sage_layer_bind(layer->ctx, ds->num_nodes, ds->num_edges, ds->graph);
+                sage_layer_bind(layer->ctx, ds->node_count, ds->edge_count, ds->graph);
                 break;
             case LAYER_RELU:
-                relu_layer_bind(layer->ctx, ds->num_nodes);
+                relu_layer_bind(layer->ctx, ds->node_count);
                 break;
             case LAYER_L2NORM:
-                l2norm_layer_bind(layer->ctx, ds->num_nodes);
+                l2norm_layer_bind(layer->ctx, ds->node_count);
                 break;
             case LAYER_LINEAR:
-                linear_layer_bind(layer->ctx, ds->num_nodes);
+                linear_layer_bind(layer->ctx, ds->node_count);
                 break;
             case LAYER_LOGSOFTMAX:
-                logsoft_layer_bind(layer->ctx, ds->num_nodes);
+                logsoft_layer_bind(layer->ctx, ds->node_count);
                 break;
             default:
                 ERROR("Unknown layer type %d", layer->type);

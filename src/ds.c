@@ -142,6 +142,20 @@ static int64_t *load_labels(const char *file, int64_t *dest)
     unmap_file(&info);
 }
 
+const char* dataset_split_name(Dataset *ds)
+{
+    static const char *strings[SPLIT_COUNT] = {
+        [SPLIT_NONE] = "full",
+        [SPLIT_TRAIN] = "train",
+        [SPLIT_VALID] = "valid",
+        [SPLIT_TEST] = "test",
+    };
+
+    if (ds->split <= SPLIT_INVALID || ds->split >= SPLIT_COUNT) ERROR("Invlid split value: %d\n", ds->split);
+    return strings[ds->split];
+}
+
+
 Dataset* dataset_alloc(DatasetKind dskind, char const *root, SparseFormat format, Split split)
 {
     Dataset *ds = ALLOC_OR_DIE(calloc(1, sizeof(*ds)));
@@ -182,22 +196,22 @@ Dataset* dataset_alloc(DatasetKind dskind, char const *root, SparseFormat format
     int64_t feature_count = ds->info->feature_count;
     int64_t class_count = ds->info->class_count;
 
-    ds->label_path = ALLOC_OR_DIE(strdup(label_bin_path));
-    ds->feat_path = ALLOC_OR_DIE(strdup(feat_bin_path));
-    ds->num_nodes    = node_count;
-    ds->num_features = feature_count;
-    ds->num_classes  = class_count;
-    ds->num_edges    = edge_count;
-    ds->split        = split;
-    ds->nodes        = ALLOC_OR_DIE(cache_aligned_alloc(node_count * feature_count * sizeof(*ds->nodes)));
-    ds->labels       = ALLOC_OR_DIE(cache_aligned_alloc(node_count * sizeof(*ds->labels)));
-    ds->graph        = sparsegraph_alloc(node_count, edge_count, ds->info->add_inverse_edge, edge_bin_path, format);
+    ds->label_path    = ALLOC_OR_DIE(strdup(label_bin_path));
+    ds->feat_path     = ALLOC_OR_DIE(strdup(feat_bin_path));
+    ds->node_count    = node_count;
+    ds->feature_count = feature_count;
+    ds->class_count   = class_count;
+    ds->edge_count    = edge_count;
+    ds->split         = split;
+    ds->nodes         = ALLOC_OR_DIE(cache_aligned_alloc(node_count * feature_count * sizeof(*ds->nodes)));
+    ds->labels        = ALLOC_OR_DIE(cache_aligned_alloc(node_count * sizeof(*ds->labels)));
+    ds->graph         = sparsegraph_alloc(node_count, edge_count, ds->info->add_inverse_edge, edge_bin_path, format);
 
     temp_free();
     return ds;
 }
 
-void dataset_load(Dataset *ds)
+void dataset_load_ex(Dataset *ds, bool verbose)
 {
     double start_time, label_time, feat_time, edge_time;
 
@@ -207,11 +221,33 @@ void dataset_load(Dataset *ds)
     TIMER_NORECORD(feat_time, load_feats(ds->feat_path, ds->nodes));
     TIMER_NORECORD(edge_time, sparsegraph_load(ds->graph));
 
-    printf("Loaded %s: node count: %ld, edge count: %ld, avg degree: %.2f)\n",
-           ds->info->name, ds->num_nodes, ds->num_edges, ds->graph->avg_degree);
-    printf("    loaded labels: %.2fs\n", label_time);
-    printf("    loaded features: %.2fs\n", feat_time);
-    printf("    loaded edges: %.2fs\n", edge_time);
+    if (verbose)
+    {
+        printf("Loaded %s [%s] (nodes: %ld, edges: %ld) | Times: label %.2fs, feat %.2fs, edge %.2fs\n",
+               ds->info->name, dataset_split_name(ds), ds->node_count, ds->edge_count,
+               label_time, feat_time, edge_time);
+    }
+}
+
+void dataset_load(Dataset *ds)
+{
+    dataset_load_ex(ds, true);
+}
+
+Dataset* dataset_alloc_and_load(DatasetKind dskind, char const *root, SparseFormat format, Split split)
+{
+    Dataset* ds = dataset_alloc(dskind, root, format, split);
+    dataset_load(ds);
+    return ds;
+}
+
+void dataset_reset_alloc(Dataset *ds)
+{
+    free(ds->nodes);
+    ds->nodes = ALLOC_OR_DIE(cache_aligned_alloc(ds->node_count * ds->feature_count * sizeof(*ds->nodes)));
+    free(ds->labels);
+    ds->labels = ALLOC_OR_DIE(cache_aligned_alloc(ds->node_count * sizeof(*ds->labels)));
+    sparsegraph_reset_alloc(ds->graph);
 }
 
 void dataset_free(Dataset **ds)

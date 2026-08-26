@@ -329,14 +329,14 @@ int main(int argc, char** argv)
     Dataset *ds_valid = dataset_alloc(datasetkind, datadir, sparse_format, SPLIT_VALID);
     Dataset *ds_test  = dataset_alloc(datasetkind, datadir, sparse_format, SPLIT_TEST);
 
-    int64_t num_features = ds_train->num_features;
-    int64_t num_classes = ds_train->num_classes;
+    int64_t feature_count = ds_train->feature_count;
+    int64_t class_count = ds_train->class_count;
     uint64_t num_entries = (layers - 1) * 3 + 2;
     LayerConf arch[num_entries];
     size_t n = 0;
 
     // First layer
-    arch[n++] = SAGE(num_features, channels);
+    arch[n++] = SAGE(feature_count, channels);
     arch[n++] = RELU(channels);
     arch[n++] = L2NORM(channels);
 
@@ -349,8 +349,8 @@ int main(int argc, char** argv)
     }
 
     // Last layers
-    arch[n++] = SAGE(channels, num_classes);
-    arch[n++] = LOGSOFTMAX(num_classes);
+    arch[n++] = SAGE(channels, class_count);
+    arch[n++] = LOGSOFTMAX(class_count);
 
     SageNet *net = SAGE_NET_ALLOC(arch, ds_train, flow);
     sage_net_info(net);

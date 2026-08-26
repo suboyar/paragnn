@@ -9,10 +9,12 @@
 #include "sparsegraph.h"
 
 typedef enum {
-    SPLIT_NONE = 0,
+    SPLIT_INVALID = 0,
+    SPLIT_NONE,
     SPLIT_TRAIN,
     SPLIT_VALID,
     SPLIT_TEST,
+    SPLIT_COUNT
 } Split;
 
 typedef struct {
@@ -21,10 +23,10 @@ typedef struct {
     Split        split;
     const DatasetInfo *info;
     // TODO: rename num_* -> *_count
-    int64_t      num_nodes;
-    int64_t      num_features;
-    int64_t      num_classes;
-    int64_t      num_edges;
+    int64_t      node_count;
+    int64_t      feature_count;
+    int64_t      class_count;
+    int64_t      edge_count;
     // TODO: rename nodes -> xs and lables -> ys
     Real        *nodes;            // Node features with shape [num_nodes, num_node_features]
     int64_t     *labels;           // Labels to each node [num_nodes]
