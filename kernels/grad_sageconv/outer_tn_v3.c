@@ -25,7 +25,7 @@ void outer_tn_v3_touch(int64_t M, int64_t N, int64_t K,
 {
 #pragma omp parallel
     {
-#pragma omp for
+#pragma omp for schedule(static)
         for (int64_t kk = 0; kk < K; kk += KC)
         {
             int64_t kb = MIN(KC, K - kk);
@@ -35,7 +35,7 @@ void outer_tn_v3_touch(int64_t M, int64_t N, int64_t K,
             memset(B_kk, 0, kb * N * sizeof(*B_kk));
         }
 
-#pragma omp for
+#pragma omp for schedule(static)
         for (int64_t i = 0; i < M; i++)
         {
             Real *C_i = &C[i * ldc];
@@ -43,6 +43,7 @@ void outer_tn_v3_touch(int64_t M, int64_t N, int64_t K,
         }
     }
 }
+
 
 void outer_tn_v3(int64_t M, int64_t N, int64_t K,
                  const Real *restrict A, int64_t lda,
@@ -92,38 +93,36 @@ void outer_tn_v3(int64_t M, int64_t N, int64_t K,
         local_M_pad = M_pad;
         local_N_pad = N_pad;
 
-        all_Cl[tid] = Cl;
+        Real *restrict local_Ap = __builtin_assume_aligned(Ap, VLEN_BYTES);
+        Real *restrict local_Bp = __builtin_assume_aligned(Bp, VLEN_BYTES);
+        Real *restrict local_Cl = __builtin_assume_aligned(Cl, VLEN_BYTES);
+
+        all_Cl[tid] = local_Cl;
 
         // NUMA First-Touch initialization
         int first_time = 1;
 
-#pragma omp for
+#pragma omp for schedule(static) nowait
         for (int64_t kk = 0; kk < K; kk += KC)
         {
             int64_t kb = MIN(KC, K - kk);
 
             const Real *A_kk = &A[kk * lda];
-            pack_A(A_kk, lda, Ap, kb, M);
+            pack_A(A_kk, lda, local_Ap, kb, M);
             const Real *B_kk = &B[kk * ldb];
-            pack_B(B_kk, ldb, Bp, kb, N);
+            pack_B(B_kk, ldb, local_Bp, kb, N);
 
-            // TODO: try withoug NC here
-            for (int64_t jj_outer = 0; jj_outer < N_pad; jj_outer += NC)
+            for (int64_t ii = 0; ii < M_pad; ii += MR)
             {
-                int64_t j_end = MIN(jj_outer + NC, N_pad);
-
-                for (int64_t ii = 0; ii < M_pad; ii += MR)
+                for (int64_t jj = 0; jj < N_pad; jj += NR)
                 {
-                    for (int64_t jj = jj_outer; jj < j_end; jj += NR)
-                    {
-                        microkernel_MRxNR(kb,
-                                          &Ap[ii * kb],
-                                          &Bp[jj * kb],
-                                          &Cl[ii*ldcl + jj], ldcl,
-                                          first_time);
-                    } // end for jj
-                } // end for ii
-            } // end for jj_outer
+                    microkernel_MRxNR(kb,
+                                      &local_Ap[ii * kb],
+                                      &local_Bp[jj * kb],
+                                      &local_Cl[ii*ldcl + jj], ldcl,
+                                      first_time);
+                } // end for jj
+            } // end for ii
             first_time = 0;
         } // end for kk
 
@@ -137,7 +136,7 @@ void outer_tn_v3(int64_t M, int64_t N, int64_t K,
 #pragma omp barrier
 
         // Reduction
-        reduction(M, N, M_pad, N_pad, nthreads, C, ldc, Cl, ldcl, all_Cl);
+        reduction(M, N, M_pad, N_pad, nthreads, C, ldc, local_Cl, ldcl, all_Cl);
     }
 }
 
@@ -299,7 +298,7 @@ static void reduction(int64_t M, int64_t N,
                       Real *restrict Cl, int64_t ldcl,
                       Real *all_Cl[])
 {
-#pragma omp for
+#pragma omp for schedule(static)
     for (int64_t i = 0; i < M; i++)
     {
         Real *out_row = &C[i * ldc];

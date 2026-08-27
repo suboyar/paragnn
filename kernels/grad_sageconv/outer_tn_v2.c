@@ -21,7 +21,7 @@ void outer_tn_v2_touch(int64_t M, int64_t N, int64_t K,
 {
 #pragma omp parallel
     {
-#pragma omp for
+#pragma omp for schedule(static)
         for (int64_t kk = 0; kk < K; kk += KC)
         {
             int64_t kb = MIN(KC, K - kk);
@@ -31,7 +31,7 @@ void outer_tn_v2_touch(int64_t M, int64_t N, int64_t K,
             memset(B_kk, 0, kb * N * sizeof(*B_kk));
         }
 
-#pragma omp for
+#pragma omp for schedule(static)
         for (int64_t i = 0; i < M; i++)
         {
             Real *C_i = &C[i * ldc];
@@ -93,7 +93,7 @@ void outer_tn_v2(int64_t M, int64_t N, int64_t K,
         // NUMA First-Touch initialization
         int first_time = 1;
 
-#pragma omp for
+#pragma omp for schedule(static)
         for (int64_t kk = 0; kk < K; kk += KC)
         {
             int64_t kb = MIN(KC, K - kk);
@@ -130,7 +130,7 @@ void outer_tn_v2(int64_t M, int64_t N, int64_t K,
 #pragma omp barrier
 
         // Reduction
-#pragma omp for
+#pragma omp for schedule(static)
         for (int64_t i = 0; i < M; i++)
         {
             Real *C_i = &C[i * ldc];

@@ -16,7 +16,7 @@ void outer_tn_v1_touch(int64_t M, int64_t N, int64_t K,
 {
 #pragma omp parallel
     {
-#pragma omp for
+#pragma omp for schedule(static)
         for (int64_t kk = 0; kk < K; kk++)
         {
             Real *A_kk = &A[kk*lda];
@@ -25,13 +25,12 @@ void outer_tn_v1_touch(int64_t M, int64_t N, int64_t K,
             memset(B_kk, 0, N * sizeof(*B_kk));
         }
 
-#pragma omp for
+#pragma omp for schedule(static)
         for (int64_t i = 0; i < M; i++)
         {
             Real *C_i = &C[i * ldc];
             memset(C_i, 0, N);
         }
-
     }
 }
 
@@ -54,7 +53,7 @@ void outer_tn_v1(int64_t M, int64_t N, int64_t K,
         memset(Cl, 0, (size_t)M * ldcl * sizeof(Real));
         all_Cl[tid] = Cl;
 
-#pragma omp for
+#pragma omp for schedule(static)
         for (int64_t k = 0; k < K; k++)
         {
             const Real *A_k = &A[k*lda];
@@ -72,7 +71,7 @@ void outer_tn_v1(int64_t M, int64_t N, int64_t K,
         } // end for kk
 
         // Reduction
-#pragma omp for
+#pragma omp for schedule(static)
         for (int64_t i = 0; i < M; i++)
         {
             Real *C_i = &C[i * ldc];

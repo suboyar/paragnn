@@ -7,7 +7,7 @@ void naive_touch(int64_t M, int64_t N, int64_t K,
                  Real *restrict B, int64_t ldb,
                  Real *restrict C, int64_t ldc)
 {
-#pragma omp parallel for
+#pragma omp parallel for schedule(static)
     for (int64_t i = 0; i < M; i++)
     {
         Real *C_i = &C[i*ldc];
@@ -29,7 +29,7 @@ void naive(int64_t M, int64_t N, int64_t K,
            const Real *restrict B, int64_t ldb,
            Real *restrict C, int64_t ldc)
 {
-#pragma omp parallel for
+#pragma omp parallel for schedule(static)
     for (int64_t i = 0; i < M; i++)
     {
         Real *C_i = &C[i*ldc];
