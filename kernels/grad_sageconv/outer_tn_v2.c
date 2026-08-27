@@ -24,10 +24,11 @@ void outer_tn_v2_touch(int64_t M, int64_t N, int64_t K,
 #pragma omp for
         for (int64_t kk = 0; kk < K; kk += KC)
         {
+            int64_t kb = MIN(KC, K - kk);
             Real *A_kk = &A[kk * lda];
-            memset(A_kk, 0, M * sizeof(*A_kk));
             Real *B_kk = &B[kk * ldb];
-            memset(B_kk, 0, N * sizeof(*B_kk));
+            memset(A_kk, 0, kb * M * sizeof(*A_kk));
+            memset(B_kk, 0, kb * N * sizeof(*B_kk));
         }
 
 #pragma omp for
