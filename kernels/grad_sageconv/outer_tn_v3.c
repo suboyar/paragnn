@@ -44,7 +44,6 @@ void outer_tn_v3_touch(int64_t M, int64_t N, int64_t K,
     }
 }
 
-
 void outer_tn_v3(int64_t M, int64_t N, int64_t K,
                  const Real *restrict A, int64_t lda,
                  const Real *restrict B, int64_t ldb,
@@ -61,6 +60,7 @@ void outer_tn_v3(int64_t M, int64_t N, int64_t K,
 #pragma omp parallel
     {
         int tid = omp_get_thread_num();
+        int actual_nthreads = omp_get_num_threads();
 
         static thread_local Real* Ap = NULL;
         static thread_local Real* Bp = NULL;
@@ -136,7 +136,7 @@ void outer_tn_v3(int64_t M, int64_t N, int64_t K,
 #pragma omp barrier
 
         // Reduction
-        reduction(M, N, M_pad, N_pad, nthreads, C, ldc, local_Cl, ldcl, all_Cl);
+        reduction(M, N, M_pad, N_pad, actual_nthreads, C, ldc, local_Cl, ldcl, all_Cl);
     }
 }
 

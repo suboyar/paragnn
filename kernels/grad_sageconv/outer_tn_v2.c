@@ -56,6 +56,7 @@ void outer_tn_v2(int64_t M, int64_t N, int64_t K,
 #pragma omp parallel
     {
         int tid = omp_get_thread_num();
+        int actual_nthreads = omp_get_num_threads();
 
         static thread_local Real* Ap = NULL;
         static thread_local Real* Bp = NULL;
@@ -134,7 +135,7 @@ void outer_tn_v2(int64_t M, int64_t N, int64_t K,
         for (int64_t i = 0; i < M; i++)
         {
             Real *C_i = &C[i * ldc];
-            for (int t = 0; t < nthreads; t++)
+            for (int t = 0; t < actual_nthreads; t++)
             {
                 const Real *cl_row = &all_Cl[t][i * ldcl];
 #pragma omp simd
@@ -142,7 +143,6 @@ void outer_tn_v2(int64_t M, int64_t N, int64_t K,
                     C_i[j] += cl_row[j];
             }
         }
-
     }
 }
 

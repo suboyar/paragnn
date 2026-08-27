@@ -48,6 +48,7 @@ void outer_tn_v1(int64_t M, int64_t N, int64_t K,
 #pragma omp parallel
     {
         int tid = omp_get_thread_num();
+        int actual_nthreads = omp_get_num_threads();
 
         Real *Cl = cache_aligned_alloc((size_t)M * ldcl * sizeof(Real));
         memset(Cl, 0, (size_t)M * ldcl * sizeof(Real));
@@ -75,7 +76,7 @@ void outer_tn_v1(int64_t M, int64_t N, int64_t K,
         for (int64_t i = 0; i < M; i++)
         {
             Real *C_i = &C[i * ldc];
-            for (int t = 0; t < nthreads; t++)
+            for (int t = 0; t < actual_nthreads; t++)
             {
                 const Real *Cl_i = &all_Cl[t][i * ldcl];
 #pragma omp simd
