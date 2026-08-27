@@ -38,10 +38,10 @@ typedef struct {
     double flops_per_sec;
     double bw;
     double ai;
-    uint64_t llc_load_miss;
-    uint64_t llc_store_miss;
-    uint64_t l3_local_miss;
-    uint64_t l3_remote_miss;
+    int64_t llc_load_miss;
+    int64_t llc_store_miss;
+    int64_t l3_local_miss;
+    int64_t l3_remote_miss;
     uint64_t bytes_loaded;
 } BenchKernel;
 #define BENCH_FUNC(fn) { .func = &(fn), .func_touch = &(fn##_touch), .name = #fn, 0}
@@ -74,7 +74,7 @@ static void stat_print(BenchKernel *funcs, size_t func_count)
 
     for(size_t i = 0; i < func_count; i++)
     {
-        printf("%-*s %-10.2f %-10.2f %-8.2f %-12lu %-12lu %-12lu %-12lu %-12lu\n",
+        printf("%-*s %-10.2f %-10.2f %-8.2f %-12ld %-12ld %-12ld %-12ld %-12lu\n",
                name_col_width, funcs[i].name,
                funcs[i].flops_per_sec / 1e9,
                funcs[i].bw / 1e6,

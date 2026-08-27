@@ -15,17 +15,17 @@ void membw_stop_all(void);
 void membw_close_1(void);
 void membw_close_all(void);
 
-uint64_t membw_get_llc_load_miss_1();
-uint64_t membw_get_llc_load_miss_all();
+int64_t membw_get_llc_load_miss_1();
+int64_t membw_get_llc_load_miss_all();
 
-uint64_t membw_get_llc_store_miss_1();
-uint64_t membw_get_llc_store_miss_all();
+int64_t membw_get_llc_store_miss_1();
+int64_t membw_get_llc_store_miss_all();
 
-uint64_t membw_get_l3_local_cache_miss_1();
-uint64_t membw_get_l3_local_cache_miss_all();
+int64_t membw_get_l3_local_cache_miss_1();
+int64_t membw_get_l3_local_cache_miss_all();
 
-uint64_t membw_get_l3_remote_cache_miss_1();
-uint64_t membw_get_l3_remote_cache_miss_all();
+int64_t membw_get_l3_remote_cache_miss_1();
+int64_t membw_get_l3_remote_cache_miss_all();
 
 uint64_t membw_get_bytes_loaded_1();
 uint64_t membw_get_bytes_loaded_all();

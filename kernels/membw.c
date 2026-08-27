@@ -66,8 +66,8 @@ static void start_events(MemBWMetrics* metric);
 static void stop_events(MemBWMetrics* metric);
 static void close_events(MemBWMetrics* metric);
 static void read_counter(PerfCounter *c, const char* name);
-static uint64_t get_metric_all(size_t offset);
-static uint64_t get_metric_1(size_t offset);
+static int64_t get_metric_all(size_t offset);
+static int64_t get_metric_1(size_t offset);
 
 
 static MemBWMetrics *global_metrics = NULL;
@@ -84,27 +84,27 @@ void membw_stop_all(void)  { apply_action_all(stop_events);  }
 void membw_close_1(void)   { apply_action_1(close_events);   }
 void membw_close_all(void) { apply_action_all(close_events); }
 
-uint64_t membw_get_llc_load_miss_1()          { return get_metric_1(offsetof(MemBWMetrics, llc_load_miss));    }
-uint64_t membw_get_llc_load_miss_all()        { return get_metric_all(offsetof(MemBWMetrics, llc_load_miss));  }
+int64_t membw_get_llc_load_miss_1()          { return get_metric_1(offsetof(MemBWMetrics, llc_load_miss));    }
+int64_t membw_get_llc_load_miss_all()        { return get_metric_all(offsetof(MemBWMetrics, llc_load_miss));  }
 
-uint64_t membw_get_llc_store_miss_1()         { return get_metric_1(offsetof(MemBWMetrics, llc_store_miss));   }
-uint64_t membw_get_llc_store_miss_all()       { return get_metric_all(offsetof(MemBWMetrics, llc_store_miss)); }
+int64_t membw_get_llc_store_miss_1()         { return get_metric_1(offsetof(MemBWMetrics, llc_store_miss));   }
+int64_t membw_get_llc_store_miss_all()       { return get_metric_all(offsetof(MemBWMetrics, llc_store_miss)); }
 
-uint64_t membw_get_l3_local_cache_miss_1()    { return get_metric_1(offsetof(MemBWMetrics, l3_miss_local));    }
-uint64_t membw_get_l3_local_cache_miss_all()  { return get_metric_all(offsetof(MemBWMetrics, l3_miss_local));  }
+int64_t membw_get_l3_local_cache_miss_1()    { return get_metric_1(offsetof(MemBWMetrics, l3_miss_local));    }
+int64_t membw_get_l3_local_cache_miss_all()  { return get_metric_all(offsetof(MemBWMetrics, l3_miss_local));  }
 
-uint64_t membw_get_l3_remote_cache_miss_1()   { return get_metric_1(offsetof(MemBWMetrics, l3_miss_remote));   }
-uint64_t membw_get_l3_remote_cache_miss_all() { return get_metric_all(offsetof(MemBWMetrics, l3_miss_remote)); }
+int64_t membw_get_l3_remote_cache_miss_1()   { return get_metric_1(offsetof(MemBWMetrics, l3_miss_remote));   }
+int64_t membw_get_l3_remote_cache_miss_all() { return get_metric_all(offsetof(MemBWMetrics, l3_miss_remote)); }
 
 uint64_t membw_get_bytes_loaded_1()
 {
-    uint64_t bytes_load = membw_get_llc_load_miss_1();
-    uint64_t bytes_store = membw_get_llc_store_miss_1();
+    int64_t bytes_load = membw_get_llc_load_miss_1();
+    int64_t bytes_store = membw_get_llc_store_miss_1();
     if (bytes_load != -1 && bytes_store != -1) return bytes_load + bytes_store;
 
     // Fallback to raw events if standard LLC events failed
-    uint64_t bytes_local = membw_get_l3_local_cache_miss_1();
-    uint64_t bytes_remote = membw_get_l3_remote_cache_miss_1();
+    int64_t bytes_local = membw_get_l3_local_cache_miss_1();
+    int64_t bytes_remote = membw_get_l3_remote_cache_miss_1();
     if (bytes_local != -1 || bytes_remote != -1) {
         uint64_t total = 0;
         if (bytes_local != -1) total += bytes_local;
@@ -117,20 +117,19 @@ uint64_t membw_get_bytes_loaded_1()
 
 uint64_t membw_get_bytes_loaded_all()
 {
-    uint64_t bytes_load = membw_get_llc_load_miss_all();
-    uint64_t bytes_store = membw_get_llc_store_miss_all();
+    int64_t bytes_load = membw_get_llc_load_miss_all();
+    int64_t bytes_store = membw_get_llc_store_miss_all();
     if (bytes_load != -1 && bytes_store != -1) return bytes_load + bytes_store;
 
     // Fallback to raw events if standard LLC events failed
-    uint64_t bytes_local = membw_get_l3_local_cache_miss_all();
-    uint64_t bytes_remote = membw_get_l3_remote_cache_miss_all();
+    int64_t bytes_local = membw_get_l3_local_cache_miss_all();
+    int64_t bytes_remote = membw_get_l3_remote_cache_miss_all();
     if (bytes_local != -1 || bytes_remote != -1) {
         uint64_t total = 0;
         if (bytes_local != -1) total += bytes_local;
         if (bytes_remote != -1) total += bytes_remote;
         return total;
     }
-
     return -1;
 }
 
@@ -319,7 +318,7 @@ static void close_events(MemBWMetrics* metric)
     COUNTER_OP(&metric->l3_miss_remote, close);
 }
 
-static uint64_t get_metric_1(size_t offset)
+static int64_t get_metric_1(size_t offset)
 {
     PerfCounter *pc = (PerfCounter *)((char *)&global_metrics[0] + offset);
     if (!pc->available) return -1;
@@ -327,12 +326,12 @@ static uint64_t get_metric_1(size_t offset)
     return pc->count * get_cache_linesize();
 }
 
-static uint64_t get_metric_all(size_t offset)
+static int64_t get_metric_all(size_t offset)
 {
     PerfCounter *pc0 = (PerfCounter *)((char *)&global_metrics[0] + offset);
     if (!pc0->available) return -1;
 
-    uint64_t total_miss = 0;
+    int64_t total_miss = 0;
     int num_threads = omp_get_max_threads();
 
 #pragma omp parallel for reduction(+:total_miss)
