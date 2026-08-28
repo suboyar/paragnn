@@ -13,6 +13,7 @@
 #include "kernels.h"
 #include "../membw.h"
 #include "timer.h"
+#include "params.h"
 #include "vreg.h"
 
 // Default flag values
@@ -258,7 +259,7 @@ static void benchmark_kernel(int64_t M, int64_t N, int64_t K)
                 fflush(stdout);
             }
 
-#if defined(NO_FIRST_TOUCH)
+#if defined(DONT_FLUSH_MEMORY)
 #else
             flush_memory_region(A, K * lda * sizeof(Real));
             flush_memory_region(B, K * ldb * sizeof(Real));
@@ -458,9 +459,13 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    printf("OpenBLAS config: %s\n", openblas_get_config());
-    printf("Using %d threads(omp), %d threads(openblas), and %d NUMA node(s)\n",
-           omp_num_threads, openblas_num_threads, get_active_sockets());
+    omp_set_dynamic(0);
+    omp_set_num_threads(omp_num_threads);
+
+    printf("BLAS Config : %s\n"
+           "Environment : %d OMP threads, %d OpenBLAS threads, %d NUMA node(s)\n"
+           "Kernel      : KC=%d, MR=%d, NR=%d\n",
+           openblas_get_config(), omp_num_threads, openblas_num_threads, get_active_sockets(), KC, MR, NR);
 
     benchmark_kernel(256, 256, node_counts[SPLIT_NONE]);
 }
