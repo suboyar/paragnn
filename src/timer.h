@@ -8,9 +8,15 @@
 #include <omp.h>
 
 enum TimerMetric {
-    TIMER_TOTAL_TIME,
+    TIMER_INVALID,
     TIMER_MIN_TIME,
     TIMER_MAX_TIME,
+    TIMER_TOTAL_TIME,
+    TIMER_AVG_TIME,
+    TIMER_STD_TIME,
+    TIMER_P99_TIME,
+    TIMER_P95_TIME,
+    TIMER_COUNT,
 };
 
 typedef struct TimerEntry TimerEntry;
@@ -46,6 +52,7 @@ void __timer_scope_end(TimerScope* scope);
         (time_var) = omp_get_wtime() - _start;  \
     } while(0)
 
+void timer_set_timer_sample_size(size_t size);
 void timer_record(const char* name, double elapsed, TimerEntry* entry);
 void timer_record_parallel(const char* name, double* elapsed, int nthreads);
 void timer_enable(void);

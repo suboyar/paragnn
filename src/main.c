@@ -374,10 +374,10 @@ int main(int argc, char** argv)
     Real old_loss = REAL_MAX;
     Real *loss_hist = NULL;
     size_t loss_hist_len = 0;
-    if (loss_track)
-    {
-        loss_hist = malloc(epochs * sizeof(*loss_hist));
-    }
+
+    if (loss_track) loss_hist = malloc(epochs * sizeof(*loss_hist));
+
+    timer_set_timer_sample_size(epochs);
     for (size_t epoch = 1; epoch <= epochs; epoch++)
     {
         Real train_acc = 0.0;

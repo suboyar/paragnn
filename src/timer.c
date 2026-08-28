@@ -32,24 +32,26 @@
 #define FNV_OFFSET 14695981039346656037UL
 #define FNV_PRIME 1099511628211UL
 
+static size_t timer_sample_size = 1000;
+
 typedef struct TimerEntry TimerEntry;
 
 struct TimerEntry {
-    const char* name;
-    TimerEntry* parent;
-    double      total_time;
-    double      min_time;
-    double      max_time;
-    double      current_start;
-    int         thread_count;
+    const char *name;
+    TimerEntry *parent;
+    double     *samples;
     size_t      count;
+    double      current_start;
     bool        is_active;
-
-    // Optional perf counters
-    uint64_t    flops;
-    uint64_t    l3_local;
-    uint64_t    l3_remote;
-    uint64_t    bytes_loaded;
+    // After sampling
+    bool        metrics_computed;
+    double      min;
+    double      max;
+    double      total;
+    double      avg;
+    double      std;
+    double      p99;
+    double      p95;
 };
 
 typedef struct {
@@ -120,6 +122,8 @@ static inline size_t get_idx(const TimerEntry* parent, const char* key) {
     return (size_t)(hash & (reg.capacity-1));
 }
 
+void timer_set_timer_sample_size(size_t size) { timer_sample_size = size; }
+
 TimerEntry* find_entry(const char* name)
 {
     TimerEntry* parent = stack_top();
@@ -156,28 +160,47 @@ static TimerEntry* find_or_create_entry(const char* name) {
 
     p->name = name;
     p->parent = stack_top();
-    p->total_time = 0.0;
-    p->min_time = DBL_MAX;
-    p->max_time = 0.0;
-    p->thread_count = omp_in_parallel() ? omp_get_thread_num() : 1;
+    p->samples = malloc(timer_sample_size * sizeof(*p->samples));
     p->count = 0;
+    p->min = -1;
+    p->max = -1;
+    p->total = -1;
+    p->avg = -1;
+    p->std = -1;
+    p->p99 = -1;
+    p->p95 = -1;
     reg.count++;
 
     return p;
 }
 
+#ifndef LOG_ERROR
+#define LOG_ERROR(fmt, ...) do {                                        \
+        fflush(stdout);                                                 \
+        fprintf(stderr, "%s:%d: error: " fmt "\n", __FILE__, __LINE__, ##__VA_ARGS__); \
+    } while(0)
+#endif
+
+#ifndef NDEBUG
+#define ERROR(fmt, ...) do {                                            \
+        LOG_ERROR(fmt, ##__VA_ARGS__);                                  \
+        __builtin_trap();                                               \
+    } while(0)
+#else
+#define ERROR(fmt, ...) do {                                            \
+        LOG_ERROR(fmt, ##__VA_ARGS__);                                  \
+        _exit(1);                                                       \
+    } while(0)
+#endif
+
 void timer_record(const char* name, double elapsed, TimerEntry* entry)
 {
     if (!timer_enabled) return;
-
-    if (!entry && (entry = find_or_create_entry(name)) == NULL) {
-        ERROR("Timer '%s': registry full", name);
-    }
-
-    entry->total_time += elapsed;
-    entry->min_time = fmin(elapsed, entry->min_time);
-    entry->max_time = fmax(elapsed, entry->max_time);
-    entry->count++;
+    if (!entry && (entry = find_or_create_entry(name)) == NULL)
+        ERROR("registry full for timer '%s'", name);
+    if (entry->count >= timer_sample_size)
+        ERROR("sample limit (%zu) exceeded for timer '%s' (increase with timer_set_timer_sample_size)", timer_sample_size, name);
+    entry->samples[entry->count++] = elapsed;
 }
 
 void timer_record_parallel(const char* name, double* elapsed, int nthreads)
@@ -211,14 +234,8 @@ void timer_reset(void)
 TimerEntry* __timer_scope_push(const char* name)
 {
     if (!timer_enabled) return NULL;
-
     TimerEntry* entry = find_or_create_entry(name);
-
-    if (entry == NULL) {
-        ERROR("Timer '%s': registry full", name);
-        abort();
-    }
-
+    if (entry == NULL) ERROR("registry full for timer '%s'", name);
     stack_push(entry);
     return entry;
 }
@@ -233,43 +250,71 @@ void __timer_scope_end(TimerScope* scope)
     timer_record(scope->name, elapsed, scope->entry);
 }
 
-void timer_record_counters(const char* name, uint64_t flops, uint64_t l3_local, uint64_t l3_remote, uint64_t bytes_loaded)
+static int cmp_double(const void* a, const void* b)
 {
-    if (!timer_enabled) return;
-    TimerEntry* entry = find_entry(name);
-    if (!entry) return;
+    const double da = *(const double*)a;
+    const double db = *(const double*)b;
+    if (da > db) return 1;
+    if (da < db) return -1;
+    return 0;
+}
 
-    entry->flops         = flops;
-    entry->l3_local      = l3_local;
-    entry->l3_remote     = l3_remote;
-    entry->bytes_loaded  = bytes_loaded;
+static void compute_metrics(TimerEntry *entry)
+{
+    if (entry->metrics_computed || entry->count == 0) return;
+    entry->metrics_computed = true;
+    qsort(entry->samples, entry->count, sizeof(double), cmp_double);
+
+    double local_total = 0.0;
+#pragma omp parallel for reduction(+:local_total) if (entry->count > 1000)
+    for (size_t i = 0; i < entry->count; i++)
+        local_total += entry->samples[i];
+    entry->total = local_total;
+    entry->min = entry->samples[0];
+    entry->max = entry->samples[entry->count - 1];
+    entry->avg = local_total / entry->count;
+    if (entry->count > 1)
+    {
+        double sum_sq_diff = 0.0;
+#pragma omp parallel for reduction(+:sum_sq_diff) if(entry->count > 1000)
+        for (size_t i = 0; i < entry->count; i++)
+        {
+            double diff = entry->samples[i] - entry->avg;
+            sum_sq_diff += diff * diff;
+        }
+        entry->std = sqrt(sum_sq_diff / entry->count);
+    }
+    // Nearest Rank
+    entry->p95 = entry->samples[(size_t)((entry->count - 1) * 0.95)];
+    entry->p99 = entry->samples[(size_t)((entry->count - 1) * 0.99)];
+
 }
 
 double timer_get_time(const char* name, enum TimerMetric metric)
 {
     TimerEntry* entry = find_entry(name);
-    if (entry == NULL) {
-        ERROR("Timer entry '%s' not found", name);
-    }
+    if (entry == NULL) ERROR("timer entry '%s' not found", name);
 
-    switch (metric) {
-    case TIMER_TOTAL_TIME:
-        return entry->total_time;
-    case TIMER_MIN_TIME:
-        return entry->min_time;
-    case TIMER_MAX_TIME:
-        return entry->max_time;
+    compute_metrics(entry);
+    switch (metric)
+    {
+        case TIMER_MIN_TIME: return entry->min;
+        case TIMER_MAX_TIME: return entry->max;
+        case TIMER_TOTAL_TIME: return entry->total;
+        case TIMER_AVG_TIME: return entry->avg;
+        case TIMER_STD_TIME: return entry->std;
+        case TIMER_P99_TIME: return entry->p99;
+        case TIMER_P95_TIME: return entry->p95;
+        default: ERROR("invalid metric %d for timer '%s'", metric, name);
     }
-    abort();
 }
-
-static int cmp_entry_ptr_by_total_time(const void* a, const void* b)
+static int cmp_entry_min_time_desc(const void* a, const void* b)
 {
     const TimerEntry* ea = *(const TimerEntry**)a;
     const TimerEntry* eb = *(const TimerEntry**)b;
 
-    if (eb->total_time > ea->total_time) return 1;
-    if (eb->total_time < ea->total_time) return -1;
+    if (eb->min > ea->min) return 1;
+    if (eb->min < ea->min) return -1;
     return 0;
 }
 
@@ -284,16 +329,6 @@ static size_t get_valid_entry_ptrs(TimerEntry** out)
     return count;
 }
 
-static bool has_any_counters(TimerEntry** entries, size_t count)
-{
-    for (size_t i = 0; i < count; i++)
-    {
-        if (entries[i]->flops > 0 || entries[i]->bytes_loaded > 0)
-            return true;
-    }
-    return false;
-}
-
 static void print_tree(TimerEntry** all_entries, size_t total_count,
                        const TimerEntry* parent, int depth, int name_col_width)
 {
@@ -306,11 +341,10 @@ static void print_tree(TimerEntry** all_entries, size_t total_count,
         }
     }
 
-    qsort(children, num_children, sizeof(TimerEntry*), cmp_entry_ptr_by_total_time);
+    qsort(children, num_children, sizeof(TimerEntry*), cmp_entry_min_time_desc);
 
     for (size_t i = 0; i < num_children; i++) {
         TimerEntry* e = children[i];
-        double avg = e->total_time / e->count;
 
         char indented_name[TIMER_MAX_LINE_WIDTH+1];
         int indent = depth * TIMER_INDENT_SPACE;
@@ -323,9 +357,8 @@ static void print_tree(TimerEntry** all_entries, size_t total_count,
             indented_name[name_col_width - 1] = '.';
             indented_name[name_col_width] = '\0';
         }
-
-        printf("%-*s %-12.6f %-12.6f %-12.6f %-12.6f %-8zu\n",
-               name_col_width, indented_name, avg, e->total_time, e->min_time, e->max_time, e->count);
+        printf("%-*s %-12.6f %-12.6f %-12.6f %-12.6f %-12.6f %-12.6f %-12.6f %-8zu\n",
+               name_col_width, indented_name, e->min, e->max, e->avg, e->total, e->std, e->p95, e->p99, e->count);
         print_tree(all_entries, total_count, e, depth + 1, name_col_width);
     }
 
@@ -336,12 +369,14 @@ void timer_print(void)
 {
     TimerEntry** all_entries = malloc(reg.capacity * sizeof(TimerEntry*));
     size_t count = get_valid_entry_ptrs(all_entries);
+    for (size_t i = 0; i < count; i++)
+        compute_metrics(all_entries[i]);
 
     char fixed_cols[TIMER_MAX_LINE_WIDTH+1];
     int fixed_cols_width;
     fixed_cols_width = snprintf(fixed_cols, sizeof(fixed_cols),
-                                "%-12s %-12s %-12s %-12s %-8s",
-                                "avg(s)", "total(s)", "min(s)", "max(s)", "calls");
+                                "%-12s %-12s %-12s %-12s %-12s %-12s %-12s %-8s",
+                                "min(s)", "max(s)", "avg(s)", "total(s)", "std", "95th", "99th", "calls");
 
     int name_col_width = 30;
     for (size_t i = 0; i < reg.capacity; i++) {
@@ -393,33 +428,17 @@ void timer_export_csv(FILE *fd)
     char path[(TIMER_MAX_NAME_LEN+1)*TIMER_MAX_STACK_DEPTH];
 
     if (fd == stdout) fprintf(fd, "\n--- CSV_OUTPUT_BEGIN ---\n");
-    fprintf(fd, "name,parent,avg(s),total(s),min(s),max(s),calls\n");
-
+    fprintf(fd, "name,parent,min(s),max(s),avg(s),total(s),std,95th,99th,calls\n");
     for (size_t i = 0; i < reg.capacity; i++) {
         if (reg.entries[i].name != NULL && reg.entries[i].count > 0) {
             TimerEntry* e = &reg.entries[i];
+            compute_metrics(e);
             path[0] = '\0';
             if (e->parent) build_path(e->parent, path, sizeof(path)/sizeof(path[0]));
 
-            double avg = e->total_time / e->count;
-            fprintf(fd, "%s,%s,%f,%f,%f,%f,%zu",
-                    e->name, path, avg, e->total_time, e->min_time, e->max_time, e->count);
-
-            if (e->flops > 0 || e->bytes_loaded > 0)
-            {
-                double gflops = (e->min_time > 0) ? (e->flops / e->min_time) / 1e9 : 0;
-                double ai = (e->bytes_loaded > 0) ? e->flops / (double)e->bytes_loaded : 0;
-                fprintf(fd, ",%lu,%.2f,%lu,%lu,%lu,%.2f",
-                        e->flops, gflops,
-                        e->l3_local,
-                        e->l3_remote,
-                        e->bytes_loaded, ai);
-            } else {
-                fprintf(fd, ",,,,,,");
-            }
-            fprintf(fd, "\n");
+            fprintf(fd, "%s,%s,%f,%f,%f,%f,%f,%f,%f,%zu\n",
+                    e->name, path, e->min, e->max, e->avg, e->total, e->std, e->p95, e->p99, e->count);
         }
     }
-
     if (fd == stdout) fprintf(fd, "--- CSV_OUTPUT_END ---\n");
 }

@@ -190,6 +190,7 @@ void flush_memory_region(void *ptr, size_t size)
 
 static void benchmark_kernel(int64_t M, int64_t N, int64_t K)
 {
+    timer_set_timer_sample_size(ntimes);
     membw_init_all();
     int is_tty = isatty(STDOUT_FILENO);
 
