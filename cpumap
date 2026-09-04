@@ -16,14 +16,21 @@ Prints a taskset-compatible CPU range to stdout.
 Partition defaults to \$SLURM_JOB_PARTITION.
 
 Pinning modes:
-  socket        One socket, no SMT
-  socket-smt    One socket, with SMT
-  cores         All physical cores, no SMT
-  all           All hardware threads
+  1s                  One socket, no SMT
+  1s-smt              One socket, with SMT
+  2s                  All physical cores, no SMT
+  2s-smt              All hardware threads
+  max                 All available physical cores (auto-fallback)
+  max-smt             All available hardware threads (auto-fallback)
 
-Scaling modes (space-separated list of ranges, 1 2 4 8 ... cores):
-  scale-single  Scale across one socket
-  scale-dual    Scale across both sockets
+Scaling modes:
+  scale-1s            One socket, no SMT
+  scale-1s-smt        One socket, with SMT
+  scale-2s            All physical cores, no SMT
+  scale-2s-smt        All hardware threads
+  scale-max           All available physical cores (auto-fallback)
+  scale-max-smt       All available hardware threads (auto-fallback)
+
 EOF
     exit "${1:-1}"
 }
@@ -31,97 +38,146 @@ EOF
 part=${2:-${SLURM_JOB_PARTITION:-}}
 [[ -z "$part" ]] && { echo >&2 "error: no partition (set SLURM_JOB_PARTITION or pass as arg)"; exit 1; }
 
+function core_set() {
+    local mode=$1
+    case $mode in
+        1s)
+            case $part in
+                armq)     echo 0-31  ;;
+                defq)     echo 0-31  ;;
+                fpgaq)    echo 0-23  ;;
+                genoaxq)  echo 0-95  ;;
+                gh200q)   echo 0-71  ;;
+                h200q)    echo 0-71  ;;
+                habanaq)  echo 0-35  ;;
+                huaq)     echo 0-63  ;;
+                milanq)   echo 0-63  ;;
+                rome16q)  echo 0-15  ;;
+                xeonmaxq) echo 0-55  ;;
+                *) echo >&2 "error: unknown partition: $part"; return 1 ;;
+            esac
+            ;;
+        1s-smt)
+            case $part in
+                armq)     echo 0-127        ;;
+                defq)     echo 0-31,64-95   ;;
+                fpgaq)    echo 0-23,48-71   ;;
+                genoaxq)  echo 0-95,192-287 ;;
+                h200q)    echo 0-71,144-215 ;;
+                habanaq)  echo 0-35,72-107  ;;
+                milanq)   echo 0-63,128-191 ;;
+                rome16q)  echo 0-31         ;;
+                xeonmaxq) echo 0-55,112-167 ;;
+                gh200q|huaq)  echo >&2 "error: $part does not support $mode"; return 1 ;;
+                *) echo >&2 "error: unknown partition: $part"; return 1 ;;
+            esac
+            ;;
+        2s)
+            case $part in
+                armq)     echo 0-31,128-159 ;;
+                defq)     echo 0-63         ;;
+                fpgaq)    echo 0-47         ;;
+                genoaxq)  echo 0-191        ;;
+                h200q)    echo 0-143        ;;
+                habanaq)  echo 0-71         ;;
+                huaq)     echo 0-127        ;;
+                milanq)   echo 0-127        ;;
+                xeonmaxq) echo 0-111        ;;
+                gh200q|rome16q)  echo >&2 "error: $part does not support $mode"; return 1 ;;
+                *) echo >&2 "error: unknown partition: $part"; return 1 ;;
+            esac
+            ;;
+        2s-smt)
+            case $part in
+                armq)     echo 0-255 ;;
+                defq)     echo 0-127 ;;
+                fpgaq)    echo 0-95  ;;
+                genoaxq)  echo 0-383 ;;
+                h200q)    echo 0-287 ;;
+                habanaq)  echo 0-143 ;;
+                milanq)   echo 0-255 ;;
+                xeonmaxq) echo 0-223 ;;
+                gh200q|huaq|rome16q)  echo >&2 "error: $part does not support $mode"; return 1 ;;
+                *) echo >&2 "error: unknown partition: $part"; return 1 ;;
+             esac
+            ;;
+    esac
+}
+
+function scaling() {
+    local mode=$1
+    case $mode in
+        1s)
+            case $part in
+                armq)     echo 0 0-1 0-3 0-5 0-7 0-15 0-31 ;;
+                defq)     echo 0 0-1 0-3 0-7 0-15 0-23 0-31 ;;
+                fpgaq)    echo "TBD"; return 1 ;;
+                genoaxq)  echo 0 0-1 0-3 0-7 0-15 0-31 0-63 0-95 ;;
+                gh200q)   echo 0 0-1 0-3 0-7 0-15 0-31 0-63 0-71 ;;
+                h200q)    echo "TBD"; return 1 ;;
+                habanaq)  echo 0 0-1 0-3 0-7 0-15 0-31 0-35 ;;
+                huaq)     echo 0 0-1 0-3 0-5 0-7 0-15 0-31 0-63 ;;
+                milanq)   echo 0 0-1 0-3 0-7 0-15 0-31 0-63 ;;
+                rome16q)  echo 0 0-1 0-3 0-7 0-15 ;;
+                xeonmaxq) echo 0 0-1 0-3 0-7 0-13 0-27 0-41 0-55 ;;
+                *) echo >&2 "error: unknown partition: $part"; return 1 ;;
+            esac
+            ;;
+        1s-smt)
+            case $part in
+                armq)     echo 0 0-1 0-3 0-7 0-15 0-31 0-63 0-127 ;;
+                defq)     echo 0-31,64-95 ;;
+                defq)     echo 0,64 0-1,64-65 0-3,64-67 0-7,64-71 0-15,64-79 0-23,64-87 0-31,64-95 ;;
+                fpgaq)    echo 0-23,48-71 ;;
+                genoaxq)  echo 0,192 0-1,192-193 0-3,192-195 0-7,192-199 0-15,192-207 0-31,192-223 0-63,192-255 0-95,192-287 ;;
+                h200q)    echo 0-71,144-215 ;;
+                habanaq)  echo 0,72 0-1,72-73 0-3,72-75 0-7,72-79 0-15,72-87 0-31,72-103 0-35,72-107 ;;
+                milanq)   echo 0,128 0-1,128-129 0-3,128-131 0-7,128-135 0-15,128-143 0-31,128-159 0-63,128-191 ;;
+                rome16q)  echo 0 0-1 0-3 0-7 0-15 0-31 ;;
+                xeonmaxq) echo 0,112 0-1,112-113 0-3,112-115 0-7,112-119 0-13,112-125 0-27,112-129 0-41,112-153 0-55,112-167 ;;
+                gh200q|huaq)  echo >&2 "error: $part does not support $mode"; return 1 ;;
+                *) echo >&2 "error: unknown partition: $part"; return 1 ;;
+            esac
+            ;;
+        2s)
+            case $part in
+                armq)     echo 0,128 0-1,128-129 0-3,128-131 0-7,128-135 0-15,128-143 0-31,128-159 ;;
+                defq)     echo 0 0-1 0-3 0-7 0-15 0-23 0-31 0-39 0-47 0-55 0-63 ;;
+                fpgaq)    echo "TBD"; return 1 ;;
+                genoaxq)  echo 0 0-1 0-3 0-7 0-15 0-31 0-63 0-127 0-191 ;;
+                h200q)    echo "TBD"; return 1 ;;
+                habanaq)  echo 0 0-1 0-3 0-7 0-15 0-31 0-63 0-71 ;;
+                huaq)     echo 0 0-1 0-3 0-5 0-7 0-15 0-31 0-63 0-95 0-127 ;;
+                milanq)   echo 0 0-1 0-3 0-7 0-15 0-31 0-63 0-127 ;;
+                xeonmaxq) echo 0 0-1 0-3 0-7 0-13 0-27 0-41 0-55 0-69 0-83 0-97 0-111 ;;
+                gh200q|rome16q)  echo >&2 "error: $part does not support $mode"; return 1 ;;
+                *) echo >&2 "error: unknown partition: $part"; return 1 ;;
+            esac
+            ;;
+        2s-smt)
+            case $part in
+                armq)     echo 0,128 0-1,128-129 0-3,128-131 0-7,128-135 0-15,128-143 0-31,128-159 0-63,128-191 0-127,128-255 ;;
+                defq)     echo 0,64 0-1,64-65 0-3,64-67 0-7,64-71 0-15,64-79 0-23,64-87 0-31,64-95 0-39,64-103 0-47,64-111 0-55,64-119 0-63,64-127 ;;
+                fpgaq)    echo "TBD"; return 1 ;;
+                genoaxq)  echo 0 0-1 0-3 0-7 0-15 0-31 0-63 0-127 0-255 0-383 ;;
+                h200q)    echo "TBD"; return 1 ;;
+                habanaq)  echo 0 0-1 0-3 0-7 0-15 0-31 0-63 0-127 0-143 ;;
+                milanq)   echo 0 0-1 0-3 0-7 0-15 0-31 0-63 0-127 0-255 ;;
+                xeonmaxq) echo 0,112 0-1,112-113 0-3,112-115 0-7,112-119 0-13,112-125 0-27,112-129 0-41,112-153 0-55,112-167 0-69,112-181 0-83,112-195 0-97,112-209 0-111,112-223 ;;
+                gh200q|huaq|rome16q)  echo >&2 "error: $part does not support $mode"; return 1 ;;
+                *) echo >&2 "error: unknown partition: $part"; return 1 ;;
+             esac
+            ;;
+    esac
+}
+
 case "${1:--h}" in
-socket)
-    case $part in
-        armq)     echo 0-31  ;;
-        defq)     echo 0-31  ;;
-        fpgaq)    echo 0-23  ;;
-        genoaxq)  echo 0-95  ;;
-        gh200q)   echo 0-71  ;;
-        habanaq)  echo 0-35  ;;
-        huaq)     echo 0-63  ;;
-        milanq)   echo 0-63  ;;
-        rome16q)  echo 0-15  ;;
-        xeonmaxq) echo 0-55  ;;
-        *) echo >&2 "error: unknown partition: $part"; exit 1 ;;
-    esac
-    ;;
-socket-smt)
-    case $part in
-        armq)     echo 0-127        ;;
-        defq)     echo 0-31,64-95   ;;
-        fpgaq)    echo 0-23,48-71   ;;
-        genoaxq)  echo 0-95,192-287 ;;
-        gh200q)   echo 0-71         ;;
-        habanaq)  echo 0-35,72-107  ;;
-        huaq)     echo 0-63         ;;
-        milanq)   echo 0-63,128-191 ;;
-        rome16q)  echo 0-31         ;;
-        xeonmaxq) echo 0-55,112-167 ;;
-        *) echo >&2 "error: unknown partition: $part"; exit 1 ;;
-    esac
-    ;;
-cores)
-    case $part in
-        armq)     echo 0-31,128-159 ;;
-        defq)     echo 0-63         ;;
-        fpgaq)    echo 0-47         ;;
-        genoaxq)  echo 0-191        ;;
-        gh200q)   echo 0-71         ;;
-        habanaq)  echo 0-71         ;;
-        huaq)     echo 0-127        ;;
-        milanq)   echo 0-127        ;;
-        rome16q)  echo 0-15         ;;
-        xeonmaxq) echo 0-111        ;;
-        *) echo >&2 "error: unknown partition: $part"; exit 1 ;;
-    esac
-    ;;
-all)
-    case $part in
-        armq)     echo 0-255 ;;
-        defq)     echo 0-127 ;;
-        fpgaq)    echo 0-95  ;;
-        genoaxq)  echo 0-383 ;;
-        gh200q)   echo 0-71  ;;
-        habanaq)  echo 0-143 ;;
-        huaq)     echo 0-127 ;;
-        milanq)   echo 0-255 ;;
-        rome16q)  echo 0-31  ;;
-        xeonmaxq) echo 0-223 ;;
-        *) echo >&2 "error: unknown partition: $part"; exit 1 ;;
-    esac
-    ;;
-scale-single)
-    case $part in
-        armq)     echo 0 0-1 0-3 0-7 0-15 0-31  ;;
-        defq)     echo 0 0-1 0-3 0-7 0-15 0-31  ;;
-        fpgaq)    echo 0 0-1 0-3 0-7 0-15 0-23  ;;
-        genoaxq)  echo 0 0-1 0-3 0-7 0-15 0-31 0-63 0-95  ;;
-        gh200q)   echo 0 0-1 0-3 0-7 0-15 0-31 0-63 0-71  ;;
-        habanaq)  echo 0 0-1 0-3 0-7 0-15 0-31 0-35       ;;
-        huaq)     echo 0 0-1 0-3 0-7 0-15 0-31 0-63       ;;
-        milanq)   echo 0 0-1 0-3 0-7 0-15 0-31 0-63       ;;
-        rome16q)  echo 0 0-1 0-3 0-7 0-15                 ;;
-        xeonmaxq) echo 0 0-1 0-3 0-7 0-15 0-31 0-55       ;;
-        *) echo >&2 "error: unknown partition: $part"; exit 1 ;;
-    esac
-    ;;
-scale-dual)
-    case $part in
-        armq)     echo 0,128 0-1,128-129 0-3,128-131 0-7,128-135 0-15,128-143 0-31,128-159 ;;
-        defq)     echo 0,32 0-1,32-33 0-3,32-35 0-7,32-39 0-15,32-47 0-31,32-63            ;;
-        fpgaq)    echo 0,24 0-1,24-25 0-3,24-27 0-7,24-31 0-15,24-39 0-23,24-47            ;;
-        genoaxq)  echo 0,96 0-1,96-97 0-3,96-99 0-7,96-103 0-15,96-111 0-31,96-127 0-63,96-159 0-95,96-191 ;;
-        gh200q)   echo >&2 "error: gh200q is single socket"; exit 1 ;;
-        habanaq)  echo 0,36 0-1,36-37 0-3,36-39 0-7,36-43 0-15,36-51 0-31,36-67 0-35,36-71 ;;
-        huaq)     echo 0,64 0-1,64-65 0-3,64-67 0-7,64-71 0-15,64-79 0-31,64-95 0-63,64-127 ;;
-        milanq)   echo 0,64 0-1,64-65 0-3,64-67 0-7,64-71 0-15,64-79 0-31,64-95 0-63,64-127 ;;
-        rome16q)  echo >&2 "error: rome16q is single socket"; exit 1 ;;
-        xeonmaxq) echo 0,56 0-1,56-57 0-3,56-59 0-7,56-63 0-15,56-71 0-31,56-87 0-55,56-111 ;;
-        *) echo >&2 "error: unknown partition: $part"; exit 1 ;;
-    esac
-    ;;
--h|--help) usage 0 ;;
-*) usage 1 ;;
+    1s|1s-smt|2s|2s-smt) core_set "$1" ;;
+    max) core_set "2s" 2>/dev/null || core_set "1s" ;;
+    max-smt) core_set "2s-smt" 2>/dev/null || core_set "2s" 2>/dev/null || core_set "1s-smt" 2>/dev/null || core_set "1s" ;;
+    scale-max) scaling "2s" 2>/dev/null || scaling "1s" ;;
+    scale-max-smt) scaling "2s-smt" 2>/dev/null || scaling "2s" 2>/dev/null || scaling "1s-smt" 2>/dev/null || scaling "1s" ;;
+    scale-*) scaling "${1#scale-}" ;;
+    -h|--help) usage 0 ;;
+    *) usage 1 ;;
 esac
