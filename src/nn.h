@@ -13,7 +13,7 @@ void logsoftmax(LogSoftmaxLayer* const l);
 Real nll_loss(LogSoftmaxLayer *l, const int64_t *labels);
 Real accuracy(const LogSoftmaxLayer *l, const int64_t *labels);
 
-void grad_cross_entropy(LogSoftmaxLayer *const l, int64_t *labels);
+void grad_logsoftmax_nll(LogSoftmaxLayer *const l, int64_t *labels);
 void grad_linear(LinearLayer* const l);
 void grad_l2norm(L2NormLayer* const l);
 void grad_relu(ReluLayer* const l);

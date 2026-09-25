@@ -288,7 +288,7 @@ Real accuracy(const LogSoftmaxLayer *l, const int64_t *labels)
 
 // Computes gradient flow from both NLLLoss and LogSoftmax.
 // NOTE: we assume mean reduction from NLLLoss
-void grad_cross_entropy(LogSoftmaxLayer *const l, int64_t *labels)
+void grad_logsoftmax_nll(LogSoftmaxLayer *const l, int64_t *labels)
 {
     TIMER_FUNC();
 
@@ -309,15 +309,9 @@ void grad_cross_entropy(LogSoftmaxLayer *const l, int64_t *labels)
         for (int64_t j = 0; j < dim; j++)
         {
             Real softmax_val = real_exp(out_row[j]);
-            if (j == target)
-            {
-                gi_row[j] = (softmax_val - 1) * scale;
-            }
-            else
-            {
-                gi_row[j] = softmax_val * scale;
-            }
+            gi_row[j] = softmax_val * scale;
         }
+        gi_row[target] -= scale;
     }
 }
 

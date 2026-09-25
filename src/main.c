@@ -131,7 +131,7 @@ static void train(SageNet *net, Dataset *ds, Optim *optim, OptimKind kind)
             grad_l2norm((L2NormLayer*)layer.ctx);
             break;
         case LAYER_LOGSOFTMAX:
-            grad_cross_entropy((LogSoftmaxLayer*)layer.ctx, ds->labels);
+            grad_logsoftmax_nll((LogSoftmaxLayer*)layer.ctx, ds->labels);
             break;
         case LAYER_LINEAR:
             grad_linear((LinearLayer*)layer.ctx);
