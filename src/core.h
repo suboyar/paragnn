@@ -167,6 +167,7 @@ typedef struct {
 
 size_t get_cache_linesize(void);
 void *cache_aligned_alloc(size_t size);
+void *interleaved_aligned_alloc(size_t size);
 int get_active_sockets(void);
 void real_zero_out(Real *a, size_t n);
 

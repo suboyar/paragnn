@@ -12,6 +12,7 @@
 
 #include <omp.h>
 #include <numa.h>
+#include <numaif.h>
 
 size_t get_cache_linesize(void)
 {
@@ -48,9 +49,31 @@ size_t get_cache_linesize(void)
 void *cache_aligned_alloc(size_t size)
 {
     size_t alignment = get_cache_linesize();
-    size_t padded_size = (size + alignment - 1) & ~(alignment - 1);
+    return aligned_alloc(alignment, size);
+}
 
-    return aligned_alloc(alignment, padded_size);
+/* A page is typical 4KB, such that its also cachline aligned */
+void *interleaved_aligned_alloc(size_t size)
+{
+    void *ptr = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (ptr == MAP_FAILED)
+        goto failure;
+
+    struct bitmask *nodes = numa_get_run_node_mask();
+    if (!nodes)
+        goto failure;
+
+    // Apply NUMA interleave policy
+    if (mbind(ptr, size, MPOL_INTERLEAVE, nodes->maskp, nodes->size, 0) < 0)
+        goto failure;
+
+    mbind(ptr, size, MPOL_INTERLEAVE, nodes->maskp, nodes->size, 0);
+    return ptr;
+
+failure:
+    if (ptr != MAP_FAILED) munmap(ptr, size);
+    if (nodes) numa_bitmask_free(nodes);
+    return NULL;
 }
 
 int get_active_sockets(void)
