@@ -81,8 +81,8 @@ void membw_start_all(void) { apply_action_all(start_events); }
 void membw_stop_1(void)    { apply_action_1(stop_events);    }
 void membw_stop_all(void)  { apply_action_all(stop_events);  }
 
-void membw_close_1(void)   { apply_action_1(close_events);   }
-void membw_close_all(void) { apply_action_all(close_events); }
+void membw_close_1(void) { apply_action_1(close_events); free(global_metrics); global_metrics = NULL; }
+void membw_close_all(void) { apply_action_all(close_events); free(global_metrics); global_metrics = NULL; }
 
 int64_t membw_get_llc_load_miss_1()          { return get_metric_1(offsetof(MemBWMetrics, llc_load_miss));    }
 int64_t membw_get_llc_load_miss_all()        { return get_metric_all(offsetof(MemBWMetrics, llc_load_miss));  }

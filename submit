@@ -18,7 +18,6 @@ case "$QUEUE_ALIAS" in
     *) PARTITION="$QUEUE_ALIAS" ;;
 esac
 
-set -x
 SBATCH_NAME=$(basename "$SBATCH_PATH" ".sbatch")
 RUN_DIR="$HOME/runs/${SBATCH_NAME}"
 LOG_DIR="logs/${SBATCH_NAME}"
@@ -26,11 +25,11 @@ RESULT_DIR="results/${SBATCH_NAME}"
 mkdir -p "$RUN_DIR" "$LOG_DIR" "$RESULT_DIR"
 git ls-files -z | rsync -a -0 --exclude="logs/" --exclude="results/" --files-from=- ./ "$RUN_DIR/"
 rsync -a --exclude ".git/" --exclude "build/" --exclude "logs/" --exclude "results/" ./ "$RUN_DIR/"
-ln -sf $(realpath "$LOG_DIR") "${RUN_DIR}/logs"
-ln -sf $(realpath "$RESULT_DIR") "${RUN_DIR}/results"
+ln -snf $(realpath "$LOG_DIR") "${RUN_DIR}/logs"
+ln -snf $(realpath "$RESULT_DIR") "${RUN_DIR}/results"
 
 cd "$RUN_DIR"
 IFS=',' read -ra PARTS <<< "$PARTITION"
 for P in "${PARTS[@]}"; do
-    sbatch --partition="$P" --output "${LOG_DIR}/$P.out" --error "${LOG_DIR}/${P}.err" "$SBATCH_PATH"
+    (set -x ; sbatch --partition="$P" --output "logs/${P}.out" --error "logs/${P}.err" "$SBATCH_PATH")
 done

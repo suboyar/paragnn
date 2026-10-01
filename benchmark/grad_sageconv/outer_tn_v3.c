@@ -9,8 +9,9 @@
 #include <omp.h>
 
 #include "core.h"
+#include "grad_mean_aggregate.h"
 #include "layers.h"
-#include "params.h"
+#include "outer_tn_params.h"
 #include "vreg.h"
 
 static void pack_A(const Real *restrict A, int64_t lda, Real *restrict Ap, int64_t cols, int64_t rows);
@@ -138,6 +139,41 @@ void outer_tn_v3(int64_t M, int64_t N, int64_t K,
         // Reduction
         reduction(M, N, M_pad, N_pad, actual_nthreads, C, ldc, local_Cl, ldcl, all_Cl);
     }
+}
+
+void grad_sageconv_outer_tn_v3(SageLayer *l)
+{
+    // grad_Wroot = input^T @ grad_output
+    outer_tn_v3(l->in_dim, l->out_dim, l->num_nodes,
+                l->input,       l->in_dim,
+                l->grad_output, l->out_dim,
+                l->grad_Wroot,  l->ldW);
+
+    // grad_Wagg = agg^T @ grad_output
+    outer_tn_v3(l->in_dim, l->out_dim, l->num_nodes,
+                l->agg,         l->in_dim,
+                l->grad_output, l->out_dim,
+                l->grad_Wagg,   l->ldW);
+
+    // grad_input = grad_output @ Wroot^T
+    cblas_rgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+                l->num_nodes, l->in_dim, l->out_dim,
+                1.0,
+                l->grad_output, l->out_dim,
+                l->Wroot,       l->out_dim,
+                0.0,
+                l->grad_input,  l->in_dim);
+
+    // grad_scatter = grad_output @ Wagg^T
+    cblas_rgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+                l->num_nodes, l->in_dim, l->out_dim,
+                1.0,
+                l->grad_output,  l->out_dim,
+                l->Wagg,         l->out_dim,
+                0.0,
+                l->grad_scatter, l->in_dim);
+
+    grad_mean_aggregate(l);
 }
 
 static void pack_A(const Real *restrict A, int64_t lda, Real *restrict Ap,

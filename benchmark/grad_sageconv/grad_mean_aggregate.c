@@ -3,43 +3,6 @@
 
 #include "layers.h"
 
-static void grad_mean_aggregate(SageLayer *l);
-
-void grad_sageconv(SageLayer *l, outer_fn kernel)
-{
-    // grad_Wroot = input^T @ grad_output
-    kernel(l->in_dim, l->out_dim, l->num_nodes,
-           l->input,       l->in_dim,
-           l->grad_output, l->out_dim,
-           l->grad_Wroot,  l->ldW);
-
-    // grad_Wagg = agg^T @ grad_output
-    kernel(l->in_dim, l->out_dim, l->num_nodes,
-           l->agg,         l->in_dim,
-           l->grad_output, l->out_dim,
-           l->grad_Wagg,   l->ldW);
-
-    // grad_input = grad_output @ Wroot^T
-    cblas_rgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
-                l->num_nodes, l->in_dim, l->out_dim,
-                1.0,
-                l->grad_output, l->out_dim,
-                l->Wroot,       l->out_dim,
-                0.0,
-                l->grad_input,  l->in_dim);
-
-    // grad_scatter = grad_output @ Wagg^T
-    cblas_rgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
-                l->num_nodes, l->in_dim, l->out_dim,
-                1.0,
-                l->grad_output,  l->out_dim,
-                l->Wagg,         l->out_dim,
-                0.0,
-                l->grad_scatter, l->in_dim);
-
-    grad_mean_aggregate(l);
-}
-
 static void scale_by_inv_degree_coo(SageLayer *l)
 {
     int64_t num_nodes = l->num_nodes;
@@ -169,7 +132,7 @@ static void scatter_csx(SageLayer *l)
     }
 }
 
-static void grad_mean_aggregate(SageLayer *l)
+void grad_mean_aggregate(SageLayer *l)
 {
     if (l->graph->format == SPARSE_COO)
     {

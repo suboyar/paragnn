@@ -8,7 +8,8 @@
 #include <omp.h>
 
 #include "core.h"
-#include "params.h"
+#include "grad_mean_aggregate.h"
+#include "outer_tn_params.h"
 #include "vreg.h"
 
 static void pack_panel(const Real *restrict X, int64_t ldx, Real *restrict Xp, int64_t rows, int64_t cols, int64_t cols_aligned, int64_t panel);
@@ -144,6 +145,41 @@ void outer_tn_v2(int64_t M, int64_t N, int64_t K,
             }
         }
     }
+}
+
+void grad_sageconv_outer_tn_v2(SageLayer *l)
+{
+    // grad_Wroot = input^T @ grad_output
+    outer_tn_v2(l->in_dim, l->out_dim, l->num_nodes,
+                l->input,       l->in_dim,
+                l->grad_output, l->out_dim,
+                l->grad_Wroot,  l->ldW);
+
+    // grad_Wagg = agg^T @ grad_output
+    outer_tn_v2(l->in_dim, l->out_dim, l->num_nodes,
+                l->agg,         l->in_dim,
+                l->grad_output, l->out_dim,
+                l->grad_Wagg,   l->ldW);
+
+    // grad_input = grad_output @ Wroot^T
+    cblas_rgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+                l->num_nodes, l->in_dim, l->out_dim,
+                1.0,
+                l->grad_output, l->out_dim,
+                l->Wroot,       l->out_dim,
+                0.0,
+                l->grad_input,  l->in_dim);
+
+    // grad_scatter = grad_output @ Wagg^T
+    cblas_rgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+                l->num_nodes, l->in_dim, l->out_dim,
+                1.0,
+                l->grad_output,  l->out_dim,
+                l->Wagg,         l->out_dim,
+                0.0,
+                l->grad_scatter, l->in_dim);
+
+    grad_mean_aggregate(l);
 }
 
 // Packs a block of 'panel' columns from each row sequentially into Xp.
