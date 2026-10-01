@@ -22,8 +22,10 @@
 
 static void sage_mean_aggregate_coo(SageLayer *l)
 {
-    int64_t  num_nodes  = l->num_nodes;
-    int64_t  num_edges  = l->num_edges;
+    TIMER_FUNC();
+
+    int64_t  node_count  = l->node_count;
+    int64_t  edge_count  = l->edge_count;
     int64_t  in_dim     = l->in_dim;
 
     const int64_t *restrict nodes, *restrict peers;
@@ -41,28 +43,26 @@ static void sage_mean_aggregate_coo(SageLayer *l)
         inv_degree = l->graph->inv_out_degree;
     }
 
-    const Real *restrict input = l->input;
-    Real       *restrict agg = l->agg;
+    const Real *restrict x_in = l->x_in;
+    Real       *restrict x_neigh = l->x_neigh;
 
-#pragma omp parallel for
-    for (int64_t i = 0; i < num_nodes; i++)
+#pragma omp parallel for schedule(static)
+    for (int64_t n = 0; n < node_count; n++)
     {
-        Real *agg_row = &agg[i * in_dim];
-        memset(agg_row, 0, in_dim * sizeof(*agg_row));
+        Real *x_neigh_ptr = &x_neigh[n*in_dim];
+        memset(x_neigh_ptr, 0, in_dim * sizeof(*x_neigh_ptr));
 
-        Real scale = inv_degree[i];
+        Real scale = inv_degree[n];
         if (scale == REAL(0.0)) continue;
 
-        for (int64_t e = 0; e < num_edges; e++)
+        for (int64_t e = 0; e < edge_count; e++)
         {
-            if (i == nodes[e])
+            if (n == nodes[e])
             {
-                const Real *in_row = &input[peers[e] * in_dim];
+                const Real *x_in_ptr = &x_in[peers[e]*in_dim];
 #pragma omp simd
-                for (int64_t j = 0; j < in_dim; j++)
-                {
-                    agg_row[j] += in_row[j] * scale;
-                }
+                for (int64_t d = 0; d < in_dim; d++)
+                    x_neigh_ptr[d] += x_in_ptr[d] * scale;
             }
         }
     }
@@ -70,7 +70,9 @@ static void sage_mean_aggregate_coo(SageLayer *l)
 
 static void sage_mean_aggregate_cs(SageLayer *l)
 {
-    int64_t num_nodes = l->num_nodes;
+    TIMER_FUNC();
+
+    int64_t node_count = l->node_count;
     int64_t in_dim    = l->in_dim;
 
     const int64_t *restrict ptr, *restrict idx;
@@ -85,41 +87,25 @@ static void sage_mean_aggregate_cs(SageLayer *l)
         idx = l->graph->idx_csr;
     }
 
-    const Real *restrict input = l->input;
-    Real       *restrict agg   = l->agg;
+    const Real *restrict x_in = l->x_in;
+    Real       *restrict x_neigh   = l->x_neigh;
 
-#pragma omp parallel for
-    for (int64_t i = 0; i < num_nodes; i++)
+#pragma omp parallel for schedule(static)
+    for (int64_t n = 0; n < node_count; n++)
     {
-        Real *agg_row = &agg[i*in_dim];
-        memset(agg_row, 0, in_dim * sizeof(*agg_row));
+        Real *x_neigh_ptr = &x_neigh[n*in_dim];
+        memset(x_neigh_ptr, 0, in_dim * sizeof(*x_neigh_ptr));
 
         // TODO: compare it with using inv_degree directly
-        int64_t degree = ptr[i+1] - ptr[i];
-        if (degree == 0) continue; // since we memset agg_row with 0 by default we can just skip here
+        int64_t degree = ptr[n+1] - ptr[n];
+        if (degree == 0) continue; // since we memset x_neigh_ptr with 0 by default we can just skip here
         Real scale = (Real)1.0 / degree;
-        for (int64_t j = ptr[i]; j < ptr[i+1]; j++)
+        for (int64_t e = ptr[n]; e < ptr[n+1]; e++)
         {
-            const Real *in_row = &input[idx[j] * in_dim];
-            for (int64_t k = 0; k < in_dim; k++)
-            {
-                agg_row[k] += in_row[k] * scale;
-            }
+            const Real *x_in_ptr = &x_in[idx[e]*in_dim];
+            for (int64_t d = 0; d < in_dim; d++)
+                x_neigh_ptr[d] += x_in_ptr[d] * scale;
         }
-    }
-}
-
-static void sage_mean_aggregate(SageLayer *const l)
-{
-    TIMER_FUNC();
-
-    if (l->graph->format == SPARSE_COO)
-    {
-        sage_mean_aggregate_coo(l);
-    }
-    else // format == SPARSE_CSX
-    {
-        sage_mean_aggregate_cs(l);
     }
 }
 
@@ -127,36 +113,43 @@ void sageconv(SageLayer *const l)
 {
     TIMER_FUNC();
 
-    int64_t num_nodes = l->num_nodes;
+    int64_t node_count = l->node_count;
     int64_t in_dim    = l->in_dim;
     int64_t out_dim   = l->out_dim;
+    int64_t W_stride  = l->W_stride;
 
-    // output = input @ Wroot
-    TIMER_BLOCK("self_transform", {
-            GEMM_NN(num_nodes, out_dim, in_dim,
+    // x_out = x_in @ W_self
+    TIMER_BLOCK("x_out_self", {
+            GEMM_NN(node_count, out_dim, in_dim,
                     1.0,
-                    l->input, in_dim,
-                    l->Wroot, out_dim,
+                    l->x_in,   in_dim,
+                    l->W_self, W_stride,
                     0.0,
-                    l->output,out_dim);
+                    l->x_out,  out_dim);
         });
 
-    sage_mean_aggregate(l);
+#if defined(SPARSE_COO)
+        sage_mean_aggregate_coo(l);
+#else
+        sage_mean_aggregate_cs(l);
+#endif
 
-    // output += agg @ Wagg
-    TIMER_BLOCK("neigh_transform", {
-            GEMM_NN(num_nodes, out_dim, in_dim,
+    // x_out += x_neigh @ W_neighagg
+    TIMER_BLOCK("x_out_neigh", {
+            GEMM_NN(node_count, out_dim, in_dim,
                     1.0,
-                    l->agg,    in_dim,
-                    l->Wagg,   out_dim,
+                    l->x_neigh, in_dim,
+                    l->W_neigh, W_stride,
                     1.0,
-                    l->output, out_dim);
+                    l->x_out,   out_dim);
         });
 }
 
 static void scale_by_inv_degree_coo(SageLayer *l)
 {
-    int64_t num_nodes = l->num_nodes;
+    TIMER_FUNC();
+
+    int64_t node_count = l->node_count;
     int64_t in_dim    = l->in_dim;
 
     const Real *restrict inv_degree;
@@ -169,23 +162,23 @@ static void scale_by_inv_degree_coo(SageLayer *l)
         inv_degree = l->graph->inv_out_degree;
     }
 
-    Real *restrict grad_scatter = l->grad_scatter;
-#pragma omp parallel for
-    for (int64_t i = 0; i < num_nodes; i++)
+    Real *restrict dx_scatter = l->dx_scatter;
+#pragma omp parallel for schedule(static)
+    for (int64_t n = 0; n < node_count; n++)
     {
-        Real scale   = inv_degree[i];
-        Real *gs_row = &grad_scatter[i * in_dim];
+        const Real scale     = inv_degree[n];
+        Real *dx_scatter_ptr = &dx_scatter[n*in_dim];
 #pragma omp simd
-        for (int64_t j = 0; j < in_dim; j++)
-        {
-            gs_row[j] *= scale;
-        }
+        for (int64_t d = 0; d < in_dim; d++)
+            dx_scatter_ptr[d] *= scale;
     }
 }
 
 static void scale_by_inv_degree_csx(SageLayer *l)
 {
-    int64_t num_nodes = l->num_nodes;
+    TIMER_FUNC();
+
+    int64_t node_count = l->node_count;
     int64_t in_dim    = l->in_dim;
 
     const int64_t *restrict ptr;
@@ -198,25 +191,25 @@ static void scale_by_inv_degree_csx(SageLayer *l)
         ptr = l->graph->ptr_csr;
     }
 
-    Real *restrict grad_scatter = l->grad_scatter;
-#pragma omp parallel for
-    for (int64_t i = 0; i < num_nodes; i++)
+    Real *restrict dx_scatter = l->dx_scatter;
+#pragma omp parallel for schedule(static)
+    for (int64_t n = 0; n < node_count; n++)
     {
         Real scale = 0.0;
-        int64_t degree = ptr[i+1] - ptr[i];
+        int64_t degree = ptr[n+1] - ptr[n];
         if (degree != 0) scale = REAL(1.0) / degree;
-        Real *gs_row = &grad_scatter[i * in_dim];
+        Real *dx_scatter_ptr = &dx_scatter[n*in_dim];
 #pragma omp simd
-        for (int64_t j = 0; j < in_dim; j++)
-        {
-            gs_row[j] *= scale;
-        }
+        for (int64_t d = 0; d < in_dim; d++)
+            dx_scatter_ptr[d] *= scale;
     }
 }
 
 static void scatter_coo(SageLayer *l)
 {
-    int64_t num_edges = l->num_edges;
+    TIMER_FUNC();
+
+    int64_t edge_count = l->edge_count;
     int64_t in_dim    = l->in_dim;
 
     const int64_t *restrict nodes, *restrict peers;
@@ -231,26 +224,28 @@ static void scatter_coo(SageLayer *l)
         peers = l->graph->dst;
     }
 
-    const Real *restrict grad_scatter = l->grad_scatter;
-    Real       *restrict grad_input   = l->grad_input;
+    const Real *restrict dx_scatter = l->dx_scatter;
+    Real       *restrict dx_in      = l->dx_in;
 
-#pragma omp parallel for
-    for (int64_t e = 0; e < num_edges; e++)
+#pragma omp parallel for schedule(static)
+    for (int64_t e = 0; e < edge_count; e++)
     {
-        const Real *gs_row = &grad_scatter[nodes[e] * in_dim];
-        Real       *gi_row = &grad_input[peers[e] * in_dim];
+        const Real *dx_scatter_ptr = &dx_scatter[nodes[e]*in_dim];
+        Real       *dx_in_ptr      = &dx_in[peers[e]*in_dim];
 
         for (int64_t i = 0; i < in_dim; i++)
         {
 #pragma omp atomic
-            gi_row[i] += gs_row[i];
+            dx_in_ptr[i] += dx_scatter_ptr[i];
         }
     }
 }
 
 static void scatter_csx(SageLayer *l)
 {
-    int64_t num_nodes = l->num_nodes;
+    TIMER_FUNC();
+
+    int64_t node_count = l->node_count;
     int64_t in_dim    = l->in_dim;
 
     const int64_t *restrict ptr, *restrict idx;
@@ -265,35 +260,19 @@ static void scatter_csx(SageLayer *l)
         idx = l->graph->idx_csc;
     }
 
-    const Real *restrict grad_scatter = l->grad_scatter;
-    Real       *restrict grad_input   = l->grad_input;
+    const Real *restrict dx_scatter = l->dx_scatter;
+    Real       *restrict dx_in   = l->dx_in;
 
-#pragma omp parallel for
-    for (int64_t i = 0; i < num_nodes; i++)
+#pragma omp parallel for schedule(static)
+    for (int64_t n = 0; n < node_count; n++)
     {
-        Real *gi_row = &grad_input[i * in_dim];
-        for (int64_t j = ptr[i]; j < ptr[i+1]; j++)
+        Real *dx_in_ptr = &dx_in[n*in_dim];
+        for (int64_t e = ptr[n]; e < ptr[n+1]; e++)
         {
-            const Real *gs_row = &grad_scatter[idx[j] * in_dim];
-            for (int64_t k = 0; k < l->in_dim; k++)
-            {
-                gi_row[k] += gs_row[k];
-            }
+            const Real *dx_scatter_ptr = &dx_scatter[idx[e]*in_dim];
+            for (int64_t d = 0; d < l->in_dim; d++)
+                dx_in_ptr[d] += dx_scatter_ptr[d];
         }
-    }
-}
-
-void grad_mean_aggregate(SageLayer *l)
-{
-    if (l->graph->format == SPARSE_COO)
-    {
-        scale_by_inv_degree_coo(l);
-        scatter_coo(l);
-    }
-    else // format == SPARSE_CSX
-    {
-        scale_by_inv_degree_csx(l);
-        scatter_csx(l);
     }
 }
 
@@ -301,47 +280,51 @@ void grad_sageconv(SageLayer *l)
 {
     TIMER_FUNC();
 
-    // grad_Wroot = input^T @ grad_output
-    TIMER_BLOCK("dWroot", {
-            GEMM_TN(l->in_dim, l->out_dim, l->num_nodes,
+    // dx_Wroot = x_in^T @ dx_output
+    TIMER_BLOCK("dW_self", {
+            GEMM_TN(l->in_dim, l->out_dim, l->node_count,
                     1.0,
-                    l->input,       l->in_dim,
-                    l->grad_output, l->out_dim,
+                    l->x_in,    l->in_dim,
+                    l->dx_out,  l->out_dim,
                     0.0,
-                    l->grad_Wroot,  l->ldW);
+                    l->dW_self, l->W_stride);
         });
 
-    // grad_Wagg = agg^T @ grad_output
-    TIMER_BLOCK("dWagg", {
-            GEMM_TN(l->in_dim, l->out_dim, l->num_nodes,
+    // dW_neigh = x_neigh^T @ dx_output
+    TIMER_BLOCK("dW_neigh", {
+            GEMM_TN(l->in_dim, l->out_dim, l->node_count,
                     1.0,
-                    l->agg,         l->in_dim,
-                    l->grad_output, l->out_dim,
+                    l->x_neigh,  l->in_dim,
+                    l->dx_out,   l->out_dim,
                     0.0,
-                    l->grad_Wagg,   l->ldW);
+                    l->dW_neigh, l->W_stride);
         });
 
-    // grad_input  = grad_output @ Wroot^T
-    TIMER_BLOCK("dinput", {
-            GEMM_NT(l->num_nodes, l->in_dim, l->out_dim,
+    // dx_in  = dx_out @ W_self^T
+    TIMER_BLOCK("dx_in", {
+            GEMM_NT(l->node_count, l->in_dim, l->out_dim,
                     1.0,
-                    l->grad_output, l->out_dim,
-                    l->Wroot,       l->ldW,
+                    l->dx_out, l->out_dim,
+                    l->W_self, l->W_stride,
                     0.0,
-                    l->grad_input,  l->in_dim);
+                    l->dx_in,  l->in_dim);
         });
 
     // grad_scatter = grad_output @ Wagg^T
-    TIMER_BLOCK("grad_scatter_matmul", {
-            GEMM_NT(l->num_nodes, l->in_dim, l->out_dim,
+    TIMER_BLOCK("dx_scatter", {
+            GEMM_NT(l->node_count, l->in_dim, l->out_dim,
                     1.0,
-                    l->grad_output,  l->out_dim,
-                    l->Wagg,         l->ldW,
+                    l->dx_out,     l->out_dim,
+                    l->W_neigh,    l->W_stride,
                     0.0,
-                    l->grad_scatter, l->in_dim);
+                    l->dx_scatter, l->in_dim);
         });
 
-    double t = omp_get_wtime();
-    grad_mean_aggregate(l);
-    timer_record("grad_aggregate", omp_get_wtime() - t, NULL);
+#if defined(SPARSE_COO)
+        scale_by_inv_degree_coo(l);
+        scatter_coo(l);
+#else
+        scale_by_inv_degree_csx(l);
+        scatter_csx(l);
+#endif
 }

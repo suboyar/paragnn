@@ -180,7 +180,7 @@ void parse_feats(char *input, size_t input_size, char *output, int64_t total_nod
 
     if (split_idx == NULL)
     {
-#pragma omp parallel for
+#pragma omp parallel for schedule(static)
         for (int64_t i = 0; i < total_nodes; i++)
         {
             char *p = line_starts[i];
@@ -193,7 +193,7 @@ void parse_feats(char *input, size_t input_size, char *output, int64_t total_nod
     }
     else
     {
-#pragma omp parallel for
+#pragma omp parallel for schedule(static)
         for (int64_t i = 0; i < split_size; i++)
         {
             char *p = line_starts[split_idx[i]];
@@ -220,7 +220,7 @@ void parse_labels(char *input, size_t input_size, char *output, int64_t total_no
 
     if (split_idx == NULL)
     {
-#pragma omp parallel for
+#pragma omp parallel for schedule(static)
         for (int64_t i = 0; i < total_nodes; i++)
         {
             char *p = line_starts[i];
@@ -229,7 +229,7 @@ void parse_labels(char *input, size_t input_size, char *output, int64_t total_no
     }
     else
     {
-#pragma omp parallel for
+#pragma omp parallel for schedule(static)
         for (int64_t i = 0; i < split_size; i++)
         {
             char *p = line_starts[split_idx[i]];
@@ -303,7 +303,7 @@ void parse_edges(char *input, size_t input_size, char *output, size_t edge_count
 
 
     int64_t *dest = (int64_t *)output;
-#pragma omp parallel for
+#pragma omp parallel for schedule(static)
     for (size_t i = 0; i < unique; i++)
     {
 #if INTERLEAVED_EDGES // src0, dst0, src1, dst1
@@ -402,7 +402,7 @@ int64_t load_split(const char *path, int64_t **split)
     if (data == MAP_FAILED) ERROR("mmap failed: %s", strerror(errno));
     *split = malloc(sb.st_size);
     size_t count = sb.st_size / sizeof(*data);
-#pragma omp parallel for
+#pragma omp parallel for schedule(static)
     for (size_t i = 0; i < count; i++)
     {
         (*split)[i] = data[i];
@@ -570,7 +570,7 @@ void process_npy(const char *npy_path, const char *bin_path, const char *split_p
 #define EXTRACT_EDGES(stype) do {                                       \
             const stype *s = (const stype *)src;                        \
             if (!ctx->add_inverse_edge && !node_map) {                  \
-                _Pragma("omp parallel for")                             \
+                _Pragma("omp parallel for schedule(static)")            \
                     for (size_t i = 0; i < ctx->total_edges; i++) {       \
                         int64_t u = s[i], v = s[ctx->total_edges + i];    \
                         packed[i] = ((signed __int128)u << 64) | (uint64_t)v; \
@@ -614,7 +614,7 @@ void process_npy(const char *npy_path, const char *bin_path, const char *split_p
         output = mmap(NULL, out_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd_out, 0);
 
         int64_t *dest = (int64_t *)output;
-#pragma omp parallel for
+#pragma omp parallel for schedule(static)
         for (size_t i = 0; i < unique; i++)
         {
 #if INTERLEAVED_EDGES // src0, dst0, src1, dst1
@@ -642,14 +642,14 @@ void process_npy(const char *npy_path, const char *bin_path, const char *split_p
         output = mmap(NULL, out_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd_out, 0); // no font-lock-function-name-face
         if (output == MAP_FAILED) ERROR("mmap output failed: %s", strerror(errno))
 ;
-        #define COPY_NPY(stype, dtype) do { \
-            stype *s = (stype*)src; dtype *d = (dtype*)output; \
-            _Pragma("omp parallel for") \
-            for (size_t i = 0; i < split_nodes; i++) { \
-                size_t row = split_idx ? split_idx[i] : i; \
-                for (size_t j = 0; j < cols; j++) \
-                    d[i * cols + j] = (dtype)s[row * cols + j]; \
-            } \
+#define COPY_NPY(stype, dtype) do {                                 \
+            stype *s = (stype*)src; dtype *d = (dtype*)output;      \
+            _Pragma("omp parallel for schedule(static)")            \
+                for (size_t i = 0; i < split_nodes; i++) {          \
+                    size_t row = split_idx ? split_idx[i] : i;      \
+                    for (size_t j = 0; j < cols; j++)               \
+                        d[i * cols + j] = (dtype)s[row * cols + j]; \
+                }                                                   \
         } while(0)
 
         if (hdr.type_char == 'i' && hdr.elem_size == 8 && dst_elem_size == 4) COPY_NPY(int64_t, uint32_t);
@@ -681,7 +681,7 @@ int64_t count_lines_gz(const char *path)
     if (!buf) ERROR("Failed to decompress %s for line counting", path);
 
     int64_t count = 0;
-#pragma omp parallel for reduction(+:count)
+#pragma omp parallel for schedule(static) reduction(+:count)
     for (size_t i = 0; i < size; i++)
     {
         if (buf[i] == '\n') count++;

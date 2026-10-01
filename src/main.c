@@ -1,4 +1,3 @@
-#define _GNU_SOURCE
 #include <errno.h>
 #include <float.h>
 #include <math.h>
@@ -24,28 +23,37 @@
 #include "optim.h"
 
 // Default values
-#define DEFAULT_EPOCHS      100
+#if defined(BENCHMARK_MODE)
+#define DEFAULT_EPOCHS      10
+#else
+#define DEFAULT_EPOCHS      1000
+#endif
 #define DEFAULT_LAYERS      4
 #define DEFAULT_CHANNELS    256
-#define DEFAULT_LR          REAL(0.01)
+#define DEFAULT_LR          0.01
 #define DEFAULT_DATASET     "arxiv"
 #define DEFAULT_DATADIR     "~/D1/paragnn-dataset"
-#define DEFAULT_CSV         "stdout"
+#define DEFAULT_CSV         stdout
 
-static uint64_t     epochs        = DEFAULT_EPOCHS;
-static uint64_t     layers        = DEFAULT_LAYERS;
-static uint64_t     channels      = DEFAULT_CHANNELS;
-static Real         lr            = DEFAULT_LR;
-static SparseFormat sparse_format = SPARSE_CS;
-static bool         quick         = false;
-static bool         early_stop    = false;
-static bool         loss_track    = false;
-static FILE        *csv_fd        = NULL; // Set in main, since stdout ins't compile-time constant
-static DatasetKind  datasetkind   = DATASET_ARXIV;
-static char        *datadir       = NULL; // Set in main, since it might need to be expanded
+static uint64_t     epochs;
+static uint64_t     layers;
+static uint64_t     channels;
+static Real         lr;
+static bool         quick;
+static bool         early_stop;
+static bool         loss_track;
+static FILE        *csv_fd;
+static DatasetKind  datasetkind;
+static char        *datadir;
 
 void print_config(void)
 {
+#if defined(BENCHMARK_MODE)
+    const char *mode = "benchmark";
+#else
+    const char *mode = "convergence";
+#endif
+
 #if defined(SAGECONV_NAIVE_IMPL)
     const char *impl = "naive";
 #elif defined(SAGECONV_BLAS_IMPL)
@@ -54,12 +62,19 @@ void print_config(void)
     const char *impl = "tuned";
 #endif
 
-    printf("impl=%s prec=%s epochs=%zu lr=%g layers=%zu hidden=%zu data=%s "
+#if defined(SPARSE_COO)
+    const char *sparse_format_name = "SPARSE_FORMAT_COO";
+#else
+    const char *sparse_format_name = "SPARSE_FORMAT_CS";
+#endif
+
+
+    printf("mode=%s impl=%s prec=%s epochs=%zu lr=%g layers=%zu hidden=%zu sparse=%s data=%s "
            "omp=%d blas=%d partition=%s\n"
            "openblas: %s\n",
-           impl,
+           mode, impl,
            sizeof(Real) == sizeof(double) ? "dp" : "sp",
-           epochs, lr, layers, channels, ds_infos[datasetkind].name,
+           epochs, lr, layers, channels, sparse_format_name, ds_infos[datasetkind].name,
            omp_get_max_threads(), openblas_get_num_threads(),
            getenv("SLURM_JOB_PARTITION"),
            openblas_get_config());
@@ -86,7 +101,7 @@ static void inference(SageNet *net)
 {
     TIMER_FUNC();
 
-    for (int64_t i = 0; i < net->num_layers; i++)
+    for (int64_t i = 0; i < net->layer_count; i++)
     {
         Layer layer = net->layers[i];
         switch(layer.type)
@@ -103,9 +118,6 @@ static void inference(SageNet *net)
         case LAYER_LOGSOFTMAX:
             logsoftmax((LogSoftmaxLayer*)layer.ctx);
             break;
-        case LAYER_LINEAR:
-            linear((LinearLayer*)layer.ctx);
-            break;
         default:
             ERROR("Unknown layer type %d", layer.type);
         }
@@ -116,13 +128,12 @@ static void train(SageNet *net, Dataset *ds, Optim *optim, OptimKind kind)
 {
     TIMER_FUNC();
 
-    for (size_t i = net->num_layers; i-- > 0; ) {
+    for (size_t i = net->layer_count; i-- > 0; ) {
         Layer layer = net->layers[i];
         switch(layer.type)
         {
         case LAYER_SAGE:
             grad_sageconv((SageLayer*)layer.ctx);
-            // sage_layer_update_weights((SageLayer*)layer.ctx, (float)lr);
             break;
         case LAYER_RELU:
             grad_relu((ReluLayer*)layer.ctx);
@@ -131,11 +142,7 @@ static void train(SageNet *net, Dataset *ds, Optim *optim, OptimKind kind)
             grad_l2norm((L2NormLayer*)layer.ctx);
             break;
         case LAYER_LOGSOFTMAX:
-            grad_logsoftmax_nll((LogSoftmaxLayer*)layer.ctx, ds->labels);
-            break;
-        case LAYER_LINEAR:
-            grad_linear((LinearLayer*)layer.ctx);
-            // linear_layer_update_weights((LinearLayer*)layer.ctx, (float)lr);
+            grad_logsoftmax_nll((LogSoftmaxLayer*)layer.ctx, ds->y);
             break;
         default:
             ERROR("Unknown layer type %d", layer.type);
@@ -143,55 +150,12 @@ static void train(SageNet *net, Dataset *ds, Optim *optim, OptimKind kind)
     }
 
     optim_update(optim, kind, net);
-}
-
-static void zero_grad(SageNet *net)
-{
-    for (size_t i = net->num_layers; i-- > 0; ) {
+    for (size_t i = net->layer_count; i-- > 0; )
+    {
         Layer layer = net->layers[i];
-        switch (layer.type)
-        {
-        case LAYER_SAGE:
-            sage_layer_zero_gradients((SageLayer*)layer.ctx);
-            break;
-        case LAYER_RELU:
-            relu_layer_zero_gradients((ReluLayer*)layer.ctx);
-            break;
-        case LAYER_L2NORM:
-            normalize_layer_zero_gradients((L2NormLayer*)layer.ctx);
-            break;
-        case LAYER_LINEAR:
-            linear_layer_zero_gradients((LinearLayer*)layer.ctx);
-            break;
-        case LAYER_LOGSOFTMAX:
-            logsoft_layer_zero_gradients((LogSoftmaxLayer*)layer.ctx);
-            break;
-        default:
-            ERROR("Unknown layer type %d", layer.type);
-        }
+        if (layer.type == LAYER_SAGE)
+            sage_layer_reset_gradient((SageLayer*)layer.ctx);
     }
-}
-
-static void dry_run(SageNet *net, Optim *optim, OptimKind optim_kind, Dataset *ds_train, Dataset *ds_valid, Dataset *ds_test)
-{
-    if (ds_train)
-    {
-        sage_net_bind(net, ds_train);
-        inference(net);
-        train(net, ds_train, optim, optim_kind);
-    }
-    if (ds_valid)
-    {
-        sage_net_bind(net, ds_valid);
-        inference(net);
-    }
-    if (ds_test)
-    {
-        sage_net_bind(net, ds_test);
-        inference(net);
-    }
-
-    if (ds_train) sage_net_bind(net, ds_train);
 }
 
 enum {
@@ -205,7 +169,6 @@ enum {
     OPT_DATASET,
     OPT_DATADIR,
     OPT_CSV,
-    OPT_COO,
     OPT_QUICK,
     OPT_EARLYSTOP,
     OPT_LOSSTRACK,
@@ -219,7 +182,6 @@ static struct option long_options[] = {
     {"dataset",    required_argument, NULL, OPT_DATASET},
     {"datadir",    required_argument, NULL, OPT_DATADIR},
     {"csv",        required_argument, NULL, OPT_CSV},
-    {"coo",        no_argument,       NULL, OPT_COO},
     {"quick",      no_argument,       NULL, OPT_QUICK},
     {"earlystop",  no_argument,       NULL, OPT_EARLYSTOP},
     {"losstrack",  no_argument,       NULL, OPT_LOSSTRACK},
@@ -232,14 +194,13 @@ static void usage(const char *progname)
             "Usage: %s [OPTIONS]\n"
             "\n"
             "OPTIONS:\n"
-            "  -epochs N       Number of epochs                [" STRINGIFY(DEFAULT_EPOCHS) "]\n"
-            "  -layers N       Number of layers                [" STRINGIFY(DEFAULT_LAYERS) "]\n"
-            "  -channels N     Number of channels              [" STRINGIFY(DEFAULT_CHANNELS) "]\n"
-            "  -lr F           Learning rate                   [" STRINGIFY(DEFAULT_LR) "]\n"
+            "  -epochs N       Number of epochs                [" XSTR(DEFAULT_EPOCHS) "]\n"
+            "  -layers N       Number of layers                [" XSTR(DEFAULT_LAYERS) "]\n"
+            "  -channels N     Number of channels              [" XSTR(DEFAULT_CHANNELS) "]\n"
+            "  -lr F           Learning rate                   [" XSTR(DEFAULT_LR) "]\n"
             "  -dataset NAME   Dataset name                    [" DEFAULT_DATASET "]\n"
             "  -datadir PATH   Dataset directory               [" DEFAULT_DATADIR "]\n"
-            "  -csv FILE       CSV output (stdout/stderr/path) [" DEFAULT_CSV "]\n"
-            "  -coo            Use COO edge format             [off]\n"
+            "  -csv FILE       CSV output (stdout/stderr/path) [" XSTR(DEFAULT_CSV) "]\n"
             "  -quick          Quick mode                      [off]\n"
             "  -earlystop      Enable early stopping           [off]\n"
             "  -losstrack      Track loss of each epoch        [off]\n"
@@ -251,6 +212,17 @@ int main(int argc, char** argv)
 {
     srand(0);
 
+    epochs = DEFAULT_EPOCHS;
+    layers = DEFAULT_LAYERS;
+    channels = DEFAULT_CHANNELS;
+    lr = REAL(DEFAULT_LR);
+    csv_fd = DEFAULT_CSV;
+    datasetkind = DATASET_ARXIV;
+    datadir = DEFAULT_DATADIR;
+    quick = false;
+    early_stop = false;
+    loss_track = false;
+
     int opt;
     while ((opt = getopt_long_only(argc, argv, "h", long_options, NULL)) != -1)
     {
@@ -259,7 +231,7 @@ int main(int argc, char** argv)
         case OPT_EPOCHS: epochs = strtoull(optarg, NULL, 10); break;
         case OPT_LAYERS: layers = strtoull(optarg, NULL, 10); break;
         case OPT_CHANNELS: channels = strtoull(optarg, NULL, 10); break;
-        case OPT_LR: lr = strtoull(optarg, NULL, 10); break;
+        case OPT_LR: lr = strtof(optarg, NULL); break;
         case OPT_DATASET:
         {
             datasetkind = str_to_dataset_kind(optarg);
@@ -297,7 +269,6 @@ int main(int argc, char** argv)
         case OPT_QUICK:      quick       = true;     break;
         case OPT_EARLYSTOP:  early_stop  = true;     break;
         case OPT_LOSSTRACK:  loss_track  = true;     break;
-        case OPT_COO:        sparse_format = SPARSE_COO; break;
         case OPT_HELP:
             usage(argv[0]);
             return 0;
@@ -307,10 +278,6 @@ int main(int argc, char** argv)
         }
     }
 
-    if (!datadir)
-    {
-        datadir = DEFAULT_DATADIR;
-    }
     datadir = expand_path(datadir);
 
     if (quick)
@@ -320,14 +287,17 @@ int main(int argc, char** argv)
         if (channels == DEFAULT_CHANNELS) channels = 4;
     }
 
-    FlowDirection flow = SOURCE_TO_TARGET;
-
     openblas_set_num_threads(omp_get_max_threads());
     print_config();
 
-    Dataset *ds_train = dataset_alloc(datasetkind, datadir, sparse_format, SPLIT_TRAIN);
-    Dataset *ds_valid = dataset_alloc(datasetkind, datadir, sparse_format, SPLIT_VALID);
-    Dataset *ds_test  = dataset_alloc(datasetkind, datadir, sparse_format, SPLIT_TEST);
+#if defined(SPARSE_COO)
+    SparseFormat sparse_format = SPARSE_FORMAT_COO;
+#else
+    SparseFormat sparse_format = SPARSE_FORMAT_CS;
+#endif
+    Dataset *ds_train = dataset_load(datasetkind, datadir, sparse_format, SPLIT_TRAIN);
+    Dataset *ds_valid = dataset_load(datasetkind, datadir, sparse_format, SPLIT_VALID);
+    Dataset *ds_test  = dataset_load(datasetkind, datadir, sparse_format, SPLIT_TEST);
 
     int64_t feature_count = ds_train->feature_count;
     int64_t class_count = ds_train->class_count;
@@ -352,84 +322,80 @@ int main(int argc, char** argv)
     arch[n++] = SAGE(channels, class_count);
     arch[n++] = LOGSOFTMAX(class_count);
 
+    FlowDirection flow = SOURCE_TO_TARGET;
     SageNet *net = SAGE_NET_ALLOC(arch, ds_train, flow);
+    sage_net_reset_parameters(net);
     sage_net_info(net);
 
-    LogSoftmaxLayer *log_prob_layer = (LogSoftmaxLayer *)net->layers[net->num_layers - 1].ctx;
+    LogSoftmaxLayer *log_prob_layer = (LogSoftmaxLayer *)net->layers[net->layer_count - 1].ctx;
 
     OptimKind optim_kind = OPTIM_ADAM;
     Optim *optim = optim_create(optim_kind, net, lr);
 
-    printf("Dry running for NUMA first touch...\n");
-    dry_run(net, optim, optim_kind, ds_train, ds_valid, ds_test);
-
-    printf("Load dataset and initializing GraphSAGE parameters...\n");
-    dataset_load(ds_train);
-    dataset_load(ds_valid);
-    dataset_load(ds_test);
-    sage_net_reset_parameters(net);
-
     printf("GraphSAGE starting...\n");
+
+#if defined(BENCHMARK_MODE)
     timer_enable();
-    Real old_loss = REAL_MAX;
-    Real *loss_hist = NULL;
-    size_t loss_hist_len = 0;
 
-    if (loss_track) loss_hist = malloc(epochs * sizeof(*loss_hist));
-
-    timer_set_timer_sample_size(epochs);
     for (size_t epoch = 1; epoch <= epochs; epoch++)
     {
-        Real train_acc = 0.0;
         TIMER_BLOCK("epoch", {
                 inference(net);
-                Real loss = nll_loss(log_prob_layer, ds_train->labels);
-                if (early_stop && old_loss < loss)
-                {
-                    printf("Early stopping at epoch %zu/%zu: loss increased (%.6f -> %.6f)\n",
-                           epoch, epochs, old_loss, loss);
-                    break;
-                }
-                if (loss_track)
-                {
-                    loss_hist[loss_hist_len++] = loss;
-                }
-                old_loss = loss;
-                train_acc = accuracy(log_prob_layer, ds_train->labels);
+                accuracy(log_prob_layer, ds_train->y);
+                nll_loss(log_prob_layer, ds_train->y);
                 train(net, ds_train, optim, optim_kind);
             });
-        double total_elapsed = timer_get_time("epoch", TIMER_TOTAL_TIME);
-        double avg_eps = epoch / total_elapsed;
-        printf("Epoch: %zu/%zu, Loss: %f, Train: %.2f%%, Avg Epochs/s: %.2f\n",
-               epoch, epochs, old_loss, 100*train_acc, avg_eps);
-        // printf("Epoch: %zu/%zu, Loss: %f, Train: %.2f%%\n",
-        //        epoch, epochs, loss, 100*train_acc);
     }
-
-    timer_disable();
-    Real val_acc, test_acc;
-    TIMER_BLOCK("valid-inference", {
-            sage_net_bind(net, ds_valid);
-            inference(net);
-            val_acc = accuracy(log_prob_layer, ds_valid->labels);
-        });
-    TIMER_BLOCK("test-inference", {
-            sage_net_bind(net, ds_test);
-            inference(net);
-            test_acc = accuracy(log_prob_layer, ds_test->labels);
-        });
-    printf("Valid: %.2f%%, Test: %.2f%%\n", 100*val_acc, 100*test_acc);
 
     timer_print();
     timer_export_csv(csv_fd);
-    if (loss_track)
+#else
+    timer_disable();
+    Real *loss_hist = malloc(epochs * sizeof(Real));
+    Real *train_hist = malloc(epochs * sizeof(Real));
+    Real *valid_hist = malloc(epochs * sizeof(Real));
+    Real *test_hist = malloc(epochs * sizeof(Real));
+
+    for (size_t epoch = 1; epoch <= epochs; epoch++)
     {
-        printf("Loss history:\n");
-        for (size_t i = 0; i < loss_hist_len; i++)
-        {
-            printf("%f%s", loss_hist[i], i < loss_hist_len-1 ? "," : "\n");
-        }
+        sage_net_bind(net, ds_train);
+        inference(net);
+
+        train_hist[epoch-1] = accuracy(log_prob_layer, ds_train->y);
+        loss_hist[epoch-1] = nll_loss(log_prob_layer, ds_train->y);
+
+        train(net, ds_train, optim, optim_kind);
+
+        sage_net_bind(net, ds_valid);
+        inference(net);
+        valid_hist[epoch-1] = accuracy(log_prob_layer, ds_valid->y);
+
+        sage_net_bind(net, ds_test);
+        inference(net);
+        test_hist[epoch-1] = accuracy(log_prob_layer, ds_test->y);
+
+        printf("Epoch: %zu/%zu, Loss: %f, Train: %.2f%%, Valid: %.2f%%, Test: %.2f%%\n",
+               epoch, epochs, loss_hist[epoch-1],
+               100*train_hist[epoch-1], 100*valid_hist[epoch-1], 100*test_hist[epoch-1]);
     }
+
+    if (csv_fd)
+    {
+        if (csv_fd == stdout) fprintf(csv_fd, "\n--- CSV_OUTPUT_BEGIN ---\n");
+        fprintf(csv_fd, "epoch,loss,train,valid,test\n");
+        for (size_t e = 1; e <= epochs; e++)
+        {
+            fprintf(csv_fd, "%zu,%f,%f,%f,%f\n",
+                    e, loss_hist[e-1], 100*train_hist[e-1], 100*valid_hist[e-1], 100*test_hist[e-1]);
+        }
+        if (csv_fd == stdout) fprintf(csv_fd, "--- CSV_OUTPUT_END ---\n");
+    }
+    free(loss_hist);
+    free(train_hist);
+    free(valid_hist);
+    free(test_hist);
+#endif
+
 
     optim_free(&optim, optim_kind);
     sage_net_free(&net);

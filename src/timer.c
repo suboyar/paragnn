@@ -32,7 +32,7 @@
 #define FNV_OFFSET 14695981039346656037UL
 #define FNV_PRIME 1099511628211UL
 
-static size_t timer_sample_size = 1000;
+static size_t timer_sample_size = 10000;
 
 typedef struct TimerEntry TimerEntry;
 
@@ -122,8 +122,6 @@ static inline size_t get_idx(const TimerEntry* parent, const char* key) {
     return (size_t)(hash & (reg.capacity-1));
 }
 
-void timer_set_timer_sample_size(size_t size) { timer_sample_size = size; }
-
 TimerEntry* find_entry(const char* name)
 {
     TimerEntry* parent = stack_top();
@@ -199,8 +197,12 @@ void timer_record(const char* name, double elapsed, TimerEntry* entry)
     if (!entry && (entry = find_or_create_entry(name)) == NULL)
         ERROR("registry full for timer '%s'", name);
     if (entry->count >= timer_sample_size)
-        ERROR("sample limit (%zu) exceeded for timer '%s' (increase with timer_set_timer_sample_size)", timer_sample_size, name);
+    {
+        timer_sample_size *= 2;
+        entry->samples = ALLOC_OR_DIE(realloc(entry->samples, timer_sample_size * sizeof(double)));
+    }
     entry->samples[entry->count++] = elapsed;
+    entry->metrics_computed = false;
 }
 
 void timer_record_parallel(const char* name, double* elapsed, int nthreads)
@@ -266,7 +268,7 @@ static void compute_metrics(TimerEntry *entry)
     qsort(entry->samples, entry->count, sizeof(double), cmp_double);
 
     double local_total = 0.0;
-#pragma omp parallel for reduction(+:local_total) if (entry->count > 1000)
+#pragma omp parallel for schedule(static) reduction(+:local_total) if (entry->count > 1000)
     for (size_t i = 0; i < entry->count; i++)
         local_total += entry->samples[i];
     entry->total = local_total;
@@ -276,7 +278,7 @@ static void compute_metrics(TimerEntry *entry)
     if (entry->count > 1)
     {
         double sum_sq_diff = 0.0;
-#pragma omp parallel for reduction(+:sum_sq_diff) if(entry->count > 1000)
+#pragma omp parallel for schedule(static) reduction(+:sum_sq_diff) if(entry->count > 1000)
         for (size_t i = 0; i < entry->count; i++)
         {
             double diff = entry->samples[i] - entry->avg;

@@ -28,13 +28,12 @@ typedef struct {
     int64_t      class_count;
     int64_t      edge_count;
     // TODO: rename nodes -> xs and lables -> ys
-    Real        *nodes;            // Node features with shape [num_nodes, num_node_features]
-    int64_t     *labels;           // Labels to each node [num_nodes]
+    Real        *x;            // Node features with shape [num_nodes, num_node_features]
+    int64_t     *y;           // Labels to each node [num_nodes]
     SparseGraph *graph;
 } Dataset;
 
-Dataset* dataset_alloc(DatasetKind dskind, char const *root, SparseFormat format, Split split);
-void dataset_load(Dataset *ds);
+Dataset* dataset_load(DatasetKind dskind, char const *root, SparseFormat format, Split split);
 void dataset_free(Dataset **ds);
 
 #endif // DATASET_H_

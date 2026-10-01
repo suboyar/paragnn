@@ -20,16 +20,10 @@
 
 #define INVALID_IDX -1          // assumes signed node indecies
 
-static const char *split_name[] = {
-    [SPLIT_TRAIN] = "train",
-    [SPLIT_VALID] = "valid",
-    [SPLIT_TEST]  = "test",
-};
-
 SparseFormat parse_edge_format(const char* str)
 {
-    if (strcmp(str, "coo") == 0)        return SPARSE_COO;
-    if (strcmp(str, "compressed") == 0) return SPARSE_CS;
+    if (strcmp(str, "coo") == 0)        return SPARSE_FORMAT_COO;
+    if (strcmp(str, "compressed") == 0) return SPARSE_FORMAT_CS;
     ERROR("Not a valid edge format: %s", str);
 }
 
@@ -83,8 +77,8 @@ static int64_t load_split(const char *path, int64_t **split)
     fstat(fd, &sb);
     int64_t* data = mmap(NULL, sb.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
     size_t count = sb.st_size / sizeof(*data);
-    *split = cache_aligned_alloc(sb.st_size);
-#pragma omp parallel for
+    *split = alloc_local(sb.st_size);
+#pragma omp parallel for schedule(static)
     for (size_t i = 0; i < count; i++)
     {
         (*split)[i] = data[i];
@@ -121,7 +115,7 @@ static void load_feats(const char *file, Real *dest)
     MmapInfo info = map_file(file, PROT_READ, MAP_PRIVATE | MAP_POPULATE);
     double *data = (double*)info.data;
     size_t count = info.bytes / sizeof(*data);
-#pragma omp parallel for
+#pragma omp parallel for schedule(static)
     for(size_t i = 0; i < count; i++)
     {
         dest[i] = (Real)data[i];
@@ -129,12 +123,12 @@ static void load_feats(const char *file, Real *dest)
     unmap_file(&info);
 }
 
-static int64_t *load_labels(const char *file, int64_t *dest)
+static void load_labels(const char *file, int64_t *dest)
 {
     MmapInfo info = map_file(file, PROT_READ, MAP_PRIVATE | MAP_POPULATE);
     int64_t *data = (int64_t*)info.data;
     size_t count = info.bytes / sizeof(*data);
-#pragma omp parallel for
+#pragma omp parallel for schedule(static)
     for (size_t i = 0; i < count; i++)
     {
         dest[i] = data[i];
@@ -156,7 +150,7 @@ const char* dataset_split_name(Dataset *ds)
 }
 
 
-Dataset* dataset_alloc(DatasetKind dskind, char const *root, SparseFormat format, Split split)
+Dataset* dataset_load(DatasetKind dskind, char const *root, SparseFormat format, Split split)
 {
     Dataset *ds = ALLOC_OR_DIE(calloc(1, sizeof(*ds)));
 
@@ -203,51 +197,21 @@ Dataset* dataset_alloc(DatasetKind dskind, char const *root, SparseFormat format
     ds->class_count   = class_count;
     ds->edge_count    = edge_count;
     ds->split         = split;
-    ds->nodes         = ALLOC_OR_DIE(cache_aligned_alloc(node_count * feature_count * sizeof(*ds->nodes)));
-    ds->labels        = ALLOC_OR_DIE(cache_aligned_alloc(node_count * sizeof(*ds->labels)));
-    ds->graph         = sparsegraph_alloc(node_count, edge_count, ds->info->add_inverse_edge, edge_bin_path, format);
+    ds->x             = ALLOC_OR_DIE(alloc_shared(node_count * feature_count * sizeof(*ds->x)));
+    ds->y             = ALLOC_OR_DIE(alloc_local(node_count * sizeof(*ds->y)));
+
+    double label_time, feat_time, graph_time;
+    TIMER_NORECORD(label_time, load_labels(ds->label_path, ds->y));
+    TIMER_NORECORD(feat_time, load_feats(ds->feat_path, ds->x));
+    TIMER_NORECORD(graph_time,
+                   ds->graph = sparsegraph_load(node_count, edge_count, ds->info->add_inverse_edge, edge_bin_path, format));
+
+    printf("Loaded %s [%s] (nodes: %ld, edges: %ld) | Times: label %.2fs, feat %.2fs, graph %.2fs\n",
+           ds->info->name, dataset_split_name(ds), ds->node_count, ds->edge_count,
+           label_time, feat_time, graph_time);
 
     temp_free();
     return ds;
-}
-
-void dataset_load_ex(Dataset *ds, bool verbose)
-{
-    double start_time, label_time, feat_time, edge_time;
-
-    if (!ds) ERROR("Dataset has not been allocated, dataset_alloc needs to be run first");
-
-    TIMER_NORECORD(label_time, load_labels(ds->label_path, ds->labels));
-    TIMER_NORECORD(feat_time, load_feats(ds->feat_path, ds->nodes));
-    TIMER_NORECORD(edge_time, sparsegraph_load(ds->graph));
-
-    if (verbose)
-    {
-        printf("Loaded %s [%s] (nodes: %ld, edges: %ld) | Times: label %.2fs, feat %.2fs, edge %.2fs\n",
-               ds->info->name, dataset_split_name(ds), ds->node_count, ds->edge_count,
-               label_time, feat_time, edge_time);
-    }
-}
-
-void dataset_load(Dataset *ds)
-{
-    dataset_load_ex(ds, true);
-}
-
-Dataset* dataset_alloc_and_load(DatasetKind dskind, char const *root, SparseFormat format, Split split)
-{
-    Dataset* ds = dataset_alloc(dskind, root, format, split);
-    dataset_load(ds);
-    return ds;
-}
-
-void dataset_reset_alloc(Dataset *ds)
-{
-    free(ds->nodes);
-    ds->nodes = ALLOC_OR_DIE(cache_aligned_alloc(ds->node_count * ds->feature_count * sizeof(*ds->nodes)));
-    free(ds->labels);
-    ds->labels = ALLOC_OR_DIE(cache_aligned_alloc(ds->node_count * sizeof(*ds->labels)));
-    sparsegraph_reset_alloc(ds->graph);
 }
 
 void dataset_free(Dataset **ds)
@@ -255,8 +219,8 @@ void dataset_free(Dataset **ds)
     if (!*ds) return;
     free((*ds)->label_path);
     free((*ds)->feat_path);
-    free((*ds)->nodes);
-    free((*ds)->labels);
+    free((*ds)->x);
+    free((*ds)->y);
     sparsegraph_free(&(*ds)->graph);
     free(*ds);
     *ds = NULL;

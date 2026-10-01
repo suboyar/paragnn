@@ -52,7 +52,6 @@ void __timer_scope_end(TimerScope* scope);
         (time_var) = omp_get_wtime() - _start;  \
     } while(0)
 
-void timer_set_timer_sample_size(size_t size);
 void timer_record(const char* name, double elapsed, TimerEntry* entry);
 void timer_record_parallel(const char* name, double* elapsed, int nthreads);
 void timer_enable(void);

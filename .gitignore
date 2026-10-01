@@ -3,6 +3,7 @@ logs/
 arxiv/
 asm/
 .cache/
+__pycache__/
 
 .gdb_history
 main

@@ -7,9 +7,9 @@
 #include "core.h"
 
 typedef enum {
-    SPARSE_COO = 1 << 0,
-    SPARSE_CS  = 1 << 1, // Compressed Sparse (CSR & CSC)
-    SPARSE_ALL = SPARSE_COO | SPARSE_CS
+    SPARSE_FORMAT_COO = 1 << 0,
+    SPARSE_FORMAT_CS  = 1 << 1, // Compressed Sparse (CSR & CSC)
+    SPARSE_FORMAT_ALL = SPARSE_FORMAT_COO | SPARSE_FORMAT_CS
 } SparseFormat;
 
 typedef struct {
@@ -37,21 +37,14 @@ typedef struct {
     int64_t *ptr_csc;  // [num_nodes + 1]
     int64_t *idx_csc;  // [num_edges]
 
-    uint8_t *self_loop; // O(1) lookup for node self-loops, NULL if none exist
-    // Which degree (inward or outward) this holds is determined by SageLayer.flow:
-    //   SOURCE_TO_TARGET: inv_in_degree[v] = 1/deg_in(v)
+    // Which degree (inward or outward) to use is determined by SageLayer.flow:
+    //   SOURCE_TO_TARGET: inv_in_degree[v]  = 1/deg_in(v)
     //   TARGET_TO_SOURCE: inv_out_degree[v] = 1/deg_out(v)
     Real    *inv_in_degree;
     Real    *inv_out_degree;
-
-    // Statistics
-    float avg_self_loop;
-    float avg_degree;
 } SparseGraph;
 
-SparseGraph* sparsegraph_alloc(int64_t node_count, int64_t edge_count, bool is_undirected, const char *edge_path, SparseFormat initial_format);
-void sparsegraph_load(SparseGraph *graph);
-void sparsegraph_update_format_alloc(SparseGraph *graph, SparseFormat format);
+SparseGraph* sparsegraph_load(int64_t node_count, int64_t edge_count, bool is_undirected, const char *edge_path, SparseFormat initial_format);
 void sparsegraph_free(SparseGraph **graph);
 
 #endif // EDGES_H

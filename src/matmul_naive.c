@@ -4,7 +4,7 @@
 
 static void beta_kernel(int64_t M, int64_t N, Real beta, Real *restrict C, int64_t ldc)
 {
-#pragma omp parallel for simd
+#pragma omp parallel for simd schedule(static)
     for (int64_t i = 0; i < M; i++)
     {
         for (int64_t j = 0; j < N; j++)
@@ -28,7 +28,7 @@ static void matmul_nn(int64_t M, int64_t N, int64_t K,
 
     if (beta == 0.0)
     {
-#pragma omp parallel for
+#pragma omp parallel for schedule(static)
         for (int64_t i = 0; i < M; i++)
         {
             const Real *restrict a_row = &A[i*lda];
@@ -47,7 +47,7 @@ static void matmul_nn(int64_t M, int64_t N, int64_t K,
     }
     else
     {
-#pragma omp parallel for
+#pragma omp parallel for schedule(static)
         for (int64_t i = 0; i < M; i++)
         {
             const Real *restrict a_row = &A[i*lda];
@@ -80,7 +80,7 @@ static void matmul_nt(int64_t M, int64_t N, int64_t K,
 
     if (beta == 0.0)
     {
-#pragma omp parallel for
+#pragma omp parallel for schedule(static)
         for (int64_t i = 0; i < M; i++)
         {
             const Real *restrict a_row = &A[i*lda];
@@ -100,7 +100,7 @@ static void matmul_nt(int64_t M, int64_t N, int64_t K,
     }
     else
     {
-#pragma omp parallel for
+#pragma omp parallel for schedule(static)
         for (int64_t i = 0; i < M; i++)
         {
             const Real *restrict a_row = &A[i*lda];
@@ -135,7 +135,7 @@ static void matmul_tn(int64_t M, int64_t N, int64_t K,
 
     if (beta == 0.0)
     {
-#pragma omp parallel for
+#pragma omp parallel for schedule(static)
         for (int64_t i = 0; i < M; i++)
         {
             Real *restrict c_row = &C[i*ldc];
@@ -153,7 +153,7 @@ static void matmul_tn(int64_t M, int64_t N, int64_t K,
     }
     else
     {
-#pragma omp parallel for
+#pragma omp parallel for schedule(static)
         for (int64_t i = 0; i < M; i++)
         {
             Real *c_row = &C[i*ldc];
@@ -185,7 +185,7 @@ static void matmul_tt(int64_t M, int64_t N, int64_t K,
 
     if (beta == 0.0)
     {
-#pragma omp parallel for
+#pragma omp parallel for schedule(static)
         for (int64_t i = 0; i < M; i++)
         {
             Real *restrict c_row = &C[i*ldc];
@@ -204,7 +204,7 @@ static void matmul_tt(int64_t M, int64_t N, int64_t K,
     }
     else
     {
-#pragma omp parallel for
+#pragma omp parallel for schedule(static)
         for (int64_t i = 0; i < M; i++)
         {
             Real *restrict c_row = &C[i*ldc];

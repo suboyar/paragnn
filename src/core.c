@@ -14,6 +14,33 @@
 #include <numa.h>
 #include <numaif.h>
 
+int get_active_numa_nodes(void)
+{
+    static int _numa_nodes = 0;
+    int numa_nodes;
+#pragma omp atomic read
+    numa_nodes = _numa_nodes;
+
+    if (__builtin_expect(numa_nodes == 0, 0))
+    {
+#pragma omp critical
+        {
+#pragma omp atomic read
+            numa_nodes = _numa_nodes;
+            if (numa_nodes == 0)
+            {
+                struct bitmask *nodes = numa_get_run_node_mask();
+                numa_nodes = numa_bitmask_weight(nodes);
+                free(nodes);
+#pragma omp atomic write
+                _numa_nodes = numa_nodes;
+            }
+        }
+    }
+
+    return numa_nodes;
+}
+
 size_t get_cache_linesize(void)
 {
     static size_t cache_linesize = 0;
@@ -46,69 +73,58 @@ size_t get_cache_linesize(void)
     return val;
 }
 
-void *cache_aligned_alloc(size_t size)
+void *alloc_local(size_t size)
 {
     size_t alignment = get_cache_linesize();
     return aligned_alloc(alignment, size);
 }
 
 /* A page is typical 4KB, such that its also cachline aligned */
-void *interleaved_aligned_alloc(size_t size)
+void *alloc_interleaved(size_t size)
 {
-    void *ptr = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (ptr == MAP_FAILED)
-        goto failure;
+    int page_size = getpagesize();
+    size_t aligned_size = (size + page_size - 1) & ~(page_size - 1);
+    void *ptr = aligned_alloc(page_size, aligned_size);
+    if (!ptr) return NULL;
 
     struct bitmask *nodes = numa_get_run_node_mask();
-    if (!nodes)
-        goto failure;
-
-    // Apply NUMA interleave policy
-    if (mbind(ptr, size, MPOL_INTERLEAVE, nodes->maskp, nodes->size, 0) < 0)
-        goto failure;
-
-    mbind(ptr, size, MPOL_INTERLEAVE, nodes->maskp, nodes->size, 0);
-    return ptr;
-
-failure:
-    if (ptr != MAP_FAILED) munmap(ptr, size);
-    if (nodes) numa_bitmask_free(nodes);
-    return NULL;
-}
-
-int get_active_sockets(void)
-{
-    static int active_sockets = 0;
-    static int is_initialized = 0;
-
-    if (__builtin_expect(!is_initialized, 0))
-    {
-        struct bitmask *run_nodes = numa_get_run_node_mask();
-        active_sockets = numa_bitmask_weight(run_nodes);
-        numa_bitmask_free(run_nodes);
-        is_initialized = 1;
+    if (!nodes) {
+        free(ptr);
+        return NULL;
     }
 
-    return active_sockets;
+    // Apply NUMA interleave policy
+    if (mbind(ptr, aligned_size, MPOL_INTERLEAVE, nodes->maskp, nodes->size, 0) < 0) {
+        free(ptr);
+        numa_bitmask_free(nodes);
+        return NULL;
+    }
+
+    numa_bitmask_free(nodes);
+    return ptr;
+}
+
+void *alloc_shared(size_t size)
+{
+    if (get_active_numa_nodes() > 1) return alloc_interleaved(size);
+    else return alloc_local(size);
 }
 
 #ifndef PARALLEL_ZERO_THRESHOLD
 #ifdef USE_DOUBLE
-#define PARALLEL_ZERO_THRESHOLD 32768  // 256KB of doubles i.e L2 cache
+#define PARALLEL_ZERO_THRESHOLD 32768  // 256KB of doubles i.e ~L2 cache
 #else
-#define PARALLEL_ZERO_THRESHOLD 65536 // 256KB of floats i.e L2 cache
+#define PARALLEL_ZERO_THRESHOLD 65536 // 256KB of floats i.e ~L2 cache
 #endif
 #endif
 
 void real_zero_out(Real *a, size_t n)
 {
     if (n < PARALLEL_ZERO_THRESHOLD || omp_in_parallel())
-    {
         memset(a, 0, n * sizeof(Real));
-    }
     else
     {
-#pragma omp parallel for simd
+#pragma omp parallel for simd schedule(static)
         for (size_t i = 0; i < n; i++)
         {
             a[i] = 0.0;
@@ -132,18 +148,13 @@ char *expand_path(const char *path)
 void mkdir_recursive(const char *path)
 {
     if (path == NULL || path[0] == '\0')
-    {
         ERROR("cannot create directory from empty path");
-    }
 
     struct stat st;
     if (stat(path, &st) == 0 && S_ISDIR(st.st_mode))
-    {
         return;
-    }
 
     char *tmp = strdup(path);
-
     for (char *p = tmp + 1; *p; p++)
     {
         if (*p == '/')
@@ -159,11 +170,8 @@ void mkdir_recursive(const char *path)
 
     // create the final component
     if (mkdir(tmp, 0755) < 0 && errno != EEXIST)
-    {
         ERROR("could not create directory '%s': %s", tmp, strerror(errno));
-    }
 
-cleanup:
     free(tmp);
 }
 

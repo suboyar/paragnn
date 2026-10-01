@@ -10,8 +10,9 @@
 
 #include <cblas.h>
 
-#define STRINGIFY(x) #x
-#define PRAGMA_UNROLL(n) _Pragma(STRINGIFY(GCC unroll n))
+#define STR(x) #x
+#define XSTR(a) STR(a)
+#define PRAGMA_UNROLL(n) _Pragma(STR(GCC unroll n))
 
 #if defined(USE_DOUBLE)
 #define Real      double
@@ -165,10 +166,13 @@ typedef struct {
     int fd;
 } MmapInfo;
 
+int get_active_numa_nodes(void);
 size_t get_cache_linesize(void);
-void *cache_aligned_alloc(size_t size);
-void *interleaved_aligned_alloc(size_t size);
-int get_active_sockets(void);
+
+void *alloc_local(size_t size);
+void *alloc_interleaved(size_t size);
+void *alloc_shared(size_t size);
+
 void real_zero_out(Real *a, size_t n);
 
 char *expand_path(const char *path);

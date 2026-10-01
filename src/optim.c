@@ -12,7 +12,7 @@
 
 static inline void sgd_step(SGD *restrict sgd, Real *restrict param, const Real *restrict grad, int64_t n)
 {
-#pragma omp parallel for simd
+#pragma omp parallel for simd schedule(static)
     for (int64_t i = 0; i < n; i++)
     {
         param[i] -= sgd->lr * grad[i];
@@ -23,29 +23,21 @@ void sgd_update(SGD *sgd, SageNet *net)
 {
     TIMER_FUNC();
 
-    for (int64_t i = 0; i < net->num_layers; i++)
+    for (int64_t i = 0; i < net->layer_count; i++)
     {
         Layer layer = net->layers[i];
         if (layer.type == LAYER_SAGE)
         {
             SageLayer *l = (SageLayer*)layer.ctx;
-            sgd_step(sgd, l->Wroot, l->grad_Wroot, l->in_dim * l->ldW);
-            sgd_step(sgd, l->Wagg, l->grad_Wagg, l->in_dim * l->ldW);
-        }
-
-        else if (layer.type == LAYER_LINEAR)
-        {
-            LinearLayer *l = (LinearLayer*)layer.ctx;
-            sgd_step(sgd, l->W, l->grad_W, l->in_dim * l->out_dim);
-            sgd_step(sgd, l->bias, l->grad_bias, l->out_dim);
+            sgd_step(sgd, l->W_self, l->dW_self, l->in_dim * l->W_stride);
+            sgd_step(sgd, l->W_neigh, l->dW_neigh, l->in_dim * l->W_stride);
         }
     }
 }
 
 SGD* sgd_create(Real lr)
 {
-    SGD *sgd = malloc(sizeof(*sgd));
-    if (!sgd) ERROR("Could not allocate SGD");
+    SGD *sgd = ALLOC_OR_DIE(malloc(sizeof(*sgd)));
     sgd->kind = OPTIM_SGD;
     sgd->lr = lr;
     return sgd;
@@ -66,7 +58,7 @@ static void adam_step(AdamState *restrict s, Real *restrict param, const Real *r
     s->beta2_t *= s->beta2;
     const Real bc = real_sqrt((REAL(1.0) - s->beta2_t) / (REAL(1.0) - s->beta1_t));
     const Real lr_t = s->lr * bc;
-#pragma omp parallel for simd
+#pragma omp parallel for simd schedule(static)
     for (int64_t i = 0; i < n; i++)
     {
         const Real g = grad[i];
@@ -76,78 +68,61 @@ static void adam_step(AdamState *restrict s, Real *restrict param, const Real *r
     }
 }
 
-static void adam_state_reset(AdamState *s, int64_t n, Real lr)
-{
-    memset(s->m, 0, n * sizeof(*s->m));
-    memset(s->v, 0, n * sizeof(*s->v));
-    s->t          = 0;
-    s->lr         = lr;
-    s->beta1      = REAL(0.9);
-    s->beta2      = REAL(0.999);
-    s->epsilon    = REAL(1e-8);
-    s->beta1_comp = REAL(1.0) - s->beta1;
-    s->beta2_comp = REAL(1.0) - s->beta2;
-    s->beta1_t    = REAL(1.0);
-    s->beta2_t    = REAL(1.0);
-}
-
 static AdamState *adam_state_create(int64_t n, Real lr)
 {
-    AdamState *s  = malloc(sizeof(*s));
-    if (!s) ERROR("Could not allocate AdamState");
-    s->kind       = OPTIM_ADAM;
-    s->m          = cache_aligned_alloc(n*sizeof(Real));
-    s->v          = cache_aligned_alloc(n*sizeof(Real));
-    adam_state_reset(s, n, lr);
+    Real beta1 = REAL(0.9), beta2 = REAL(0.999);
+    AdamState *state  = ALLOC_OR_DIE(malloc(sizeof(*state)));
+    *state = (AdamState) {
+        .kind       = OPTIM_ADAM,
+        .t          = 0,
+        .lr         = lr,
+        .beta1      = beta1,
+        .beta2      = beta2,
+        .epsilon    = REAL(1e-8),
+        .beta1_comp = REAL(1.0) - beta1,
+        .beta2_comp = REAL(1.0) - beta2,
+        .beta1_t    = REAL(1.0),
+        .beta2_t    = REAL(1.0),
+        .m          = ALLOC_OR_DIE(alloc_local(n*sizeof(Real))),
+        .v          = ALLOC_OR_DIE(alloc_local(n*sizeof(Real))),
+    };
 
-    // First touch
-    Real *dummy_grad = calloc(n, sizeof(*dummy_grad));
-    Real *dummy_param = calloc(n, sizeof(*dummy_param));
-    if (!dummy_grad || !dummy_param) ERROR("Could not allocate dummy arrays");
-    adam_step(s, dummy_param, dummy_grad, n);
-    free(dummy_grad);
-    free(dummy_param);
+#pragma omp parallel for simd schedule(static)
+    for (int64_t i = 0; i < n; i++)
+    {
+        state->m[i] = REAL(0.0);
+        state->v[i] = REAL(0.0);
+    }
 
-    // Reset state back to clean
-    adam_state_reset(s, n, lr);
-
-    return s;
+    return state;
 }
 
 Adam* adam_create(SageNet *net, Real lr)
 {
-    Adam *adam = malloc(sizeof(*adam));
-    if (!adam) ERROR("Could not allocate Adam");
+    Adam *adam = ALLOC_OR_DIE(malloc(sizeof(*adam)));
 
     int64_t count = 0;
-    for (int64_t i = 0; i < net->num_layers; i++)
+    for (int64_t i = 0; i < net->layer_count; i++)
     {
         switch (net->layers[i].type)
         {
-        case LAYER_SAGE:   count += 2; break;  // Wroot, Wagg
-        case LAYER_LINEAR: count += 2; break;  // W, bias
+        case LAYER_SAGE:   count += 2; break;  // W_self, W_neigh
         default: break;
         }
     }
 
     adam->num_states = count;
-    adam->states = malloc(count * sizeof(*adam->states));
+    adam->states = ALLOC_OR_DIE(malloc(count * sizeof(*adam->states)));
 
     // Allocate a state for each parameter matrix
     int64_t s = 0;
-    for (int64_t i = 0; i < net->num_layers; i++) {
+    for (int64_t i = 0; i < net->layer_count; i++) {
         Layer layer = net->layers[i];
         if (layer.type == LAYER_SAGE)
         {
             SageLayer *l = (SageLayer*)layer.ctx;
-            adam->states[s++] = adam_state_create(l->in_dim * l->ldW, lr);
-            adam->states[s++] = adam_state_create(l->in_dim  * l->ldW,  lr);
-        }
-        else if (layer.type == LAYER_LINEAR)
-        {
-            LinearLayer *l = (LinearLayer*)layer.ctx;
-            adam->states[s++] = adam_state_create(l->in_dim * l->out_dim, lr);
-            adam->states[s++] = adam_state_create(l->out_dim, lr);
+            adam->states[s++] = adam_state_create(l->in_dim * l->W_stride, lr);
+            adam->states[s++] = adam_state_create(l->in_dim  * l->W_stride,  lr);
         }
     }
 
@@ -157,20 +132,14 @@ Adam* adam_create(SageNet *net, Real lr)
 void adam_update(Adam *adam, SageNet *net)
 {
     int64_t s = 0;
-    for (int64_t i = 0; i < net->num_layers; i++)
+    for (int64_t i = 0; i < net->layer_count; i++)
     {
         Layer layer = net->layers[i];
         if (layer.type == LAYER_SAGE)
         {
             SageLayer *l = (SageLayer*)layer.ctx;
-            adam_step(adam->states[s++], l->Wroot, l->grad_Wroot, l->in_dim * l->ldW);
-            adam_step(adam->states[s++], l->Wagg, l->grad_Wagg, l->in_dim * l->ldW);
-        }
-        else if (layer.type == LAYER_LINEAR)
-        {
-            LinearLayer *l = (LinearLayer*)layer.ctx;
-            adam_step(adam->states[s++], l->W, l->grad_W, l->in_dim * l->out_dim);
-            adam_step(adam->states[s++], l->bias, l->grad_bias, l->out_dim);
+            adam_step(adam->states[s++], l->W_self, l->dW_self, l->in_dim * l->W_stride);
+            adam_step(adam->states[s++], l->W_neigh, l->dW_neigh, l->in_dim * l->W_stride);
         }
     }
 }

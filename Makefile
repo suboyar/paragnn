@@ -9,94 +9,107 @@ PARTITION ?= $(or $(SLURM_JOB_PARTITION),default)
 CC         ?= gcc
 CFLAGS     ?=
 LDFLAGS    ?=
+LDLIBS     ?=
 DEBUG      ?= 0
 OPENMP     ?= 1
 USE_DOUBLE ?= 0
-IMPL       ?= naive
+IMPL       ?= blas
 BUILDDIR   ?= build
 TARGET_CPU ?= TARGET_CPU_GENERIC
 MARCH      ?= native
-DEFS       ?=
 V          ?= 0
 DATADIR ?= ~/D1/paragnn-ds
 
 # remove trailing slash if included
 BUILDDIR := $(patsubst %/,%,$(BUILDDIR))
-BENCHDIR = $(BUILDDIR)/benchmark
 
-BASIC_CFLAGS += -Wfloat-conversion \
-                -Werror=implicit-function-declaration \
-                -Werror=strict-prototypes \
-                -Werror=incompatible-pointer-types
-BASIC_CFLAGS += -D$(TARGET_CPU)
-BASIC_CFLAGS += $(DEFS)
+DEFAULT_CFLAGS += -std=gnu23
+DEFAULT_CFLAGS += -Wall \
+                  -Wextra \
+                  -Wfloat-conversion \
+                 -Werror=implicit-function-declaration \
+                 -Werror=strict-prototypes \
+                 -Werror=incompatible-pointer-types \
+                 -Wno-unused-function
+DEFAULT_CFLAGS += -D$(TARGET_CPU)
 # Add dummy targets for local header files
-BASIC_CFLAGS += -MMD -MP
+DEFAULT_CFLAGS += -MMD -MP
+
+DEFAULT_LDLIBS = -lm -lopenblas -lnuma
 
 ifeq ($(DEBUG),1)
-    BASIC_CFLAGS += -O0 -ggdb -g3 -gdwarf-2 -march=$(MARCH)
+    DEFAULT_CFLAGS += -O0 -ggdb -g3 -gdwarf-2 -march=$(MARCH)
     # suppress ABI warnings from platform-specific vector types
-    BASIC_CFLAGS += -Wno-psabi
+    DEFAULT_CFLAGS += -Wno-psabi
 else
-    BASIC_CFLAGS += -O3 -ffast-math -march=$(MARCH) -DNDEBUG
+    DEFAULT_CFLAGS += -O3 -ffast-math -march=$(MARCH) -DNDEBUG
 endif
 
 ifeq ($(OPENMP),1)
-    BASIC_CFLAGS += -fopenmp
+    DEFAULT_CFLAGS += -fopenmp
 else
-    BASIC_LDFLAGS += -lgomp
+    DEFAULT_LDLIBS += -lgomp
+    DEFAULT_CFLAGS += -Wno-unknown-pragmas
 endif
 
 ifeq ($(USE_DOUBLE),1)
-    BASIC_CFLAGS += -DUSE_DOUBLE
+    DEFAULT_CFLAGS += -DUSE_DOUBLE
 endif
 
 ifeq ($(IMPL),naive)
-    BASIC_CFLAGS += -DSAGECONV_NAIVE_IMPL
+    DEFAULT_CFLAGS += -DSAGECONV_NAIVE_IMPL
 else ifeq ($(IMPL),blas)
-    BASIC_CFLAGS += -DSAGECONV_BLAS_IMPL
+    DEFAULT_CFLAGS += -DSAGECONV_BLAS_IMPL
 else
-    BASIC_CFLAGS += -DSAGECONV_TUNED_IMPL
+    DEFAULT_CFLAGS += -DSAGECONV_TUNED_IMPL
 endif
 
-ALL_CFLAGS = $(strip $(BASIC_CFLAGS) $(CFLAGS))
-ALL_LDFLAGS = $(strip $(BASIC_LDFLAGS) $(LDFLAGS))
-
-COMMON_LIBS = -lm -lopenblas  -lnuma
+ALL_CFLAGS = $(strip $(DEFAULT_CFLAGS) $(CFLAGS))
+ALL_LDFLAGS = $(strip $(DEFAULT_LDFLAGS) $(LDFLAGS))
+ALL_LDLIBS = $(strip $(DEFAULT_LDLIBS) $(LDLIBS))
 
 to_obj = $(patsubst %.c,$(BUILDDIR)/%.o,$1)
 to_bench_obj = $(patsubst %.c,$(BENCHDIR)/%.o,$1)
 
-PARAGNN_SRCS = src/main.c src/core.c src/nn.c src/sageconv.c src/matmul_naive.c \
-               src/ds.c src/dsinfo.c src/layers.c src/optim.c src/timer.c src/sparsegraph.c
+PARAGNN_SRCS = src/main.c \
+               src/core.c \
+               src/ds.c \
+               src/dsinfo.c \
+               src/layers.c \
+               src/matmul_naive.c \
+               src/nn.c \
+               src/optim.c \
+               src/sageconv.c \
+               src/sparsegraph.c \
+               src/timer.c
 
-GRAD_SAGECONV_SRCS := kernels/grad_sageconv/bench.c \
-                      kernels/grad_sageconv/naive.c \
-                      kernels/grad_sageconv/blas.c \
-                      kernels/grad_sageconv/outer_tn_v1.c \
-                      kernels/grad_sageconv/outer_tn_v2.c \
-                      kernels/grad_sageconv/outer_tn_v3.c \
-                      kernels/membw.c \
-                      src/core.c \
-                      src/ds.c \
-                      src/sparsegraph.c \
-                      src/timer.c \
-                      src/dsinfo.c \
-                      src/layers.c
+BENCH_GS_SRCS := benchmark/grad_sageconv/main.c \
+                 benchmark/grad_sageconv/naive.c \
+                 benchmark/grad_sageconv/blas.c \
+                 benchmark/grad_sageconv/outer_tn_v1.c \
+                 benchmark/grad_sageconv/outer_tn_v2.c \
+                 benchmark/grad_sageconv/outer_tn_v3.c \
+                 benchmark/grad_sageconv/grad_mean_aggregate.c \
+                 benchmark/membw.c \
+                 src/core.c \
+                 src/ds.c \
+                 src/dsinfo.c \
+                 src/layers.c \
+                 src/sparsegraph.c \
+                 src/timer.c
 
-AGGREGATE_SRCS := kernels/aggregate.c \
-                  kernels/cache_counter.c \
+AGGREGATE_SRCS := benchmark/mean_aggregate/bench.c \
+                  benchmark/mean_aggregate/coo_v1.c \
+                  benchmark/mean_aggregate/coo_v2.c \
+                  benchmark/mean_aggregate/cs_v1.c \
+                  benchmark/membw.c \
                   src/core.c \
                   src/ds.c \
-                  src/timer.c \
-                  src/dsinfo.c
+                  src/dsinfo.c \
+                  src/sparsegraph.c \
+                  src/timer.c
 
 DSPREP_SRC :=  src/dsprep.c src/dsinfo.c src/core.c
-
-paragnn: $(BUILDDIR)/paragnn
-bench-gs: $(BENCHDIR)/bench-gs
-# bench-agg: $(BUILDDIR)/bench-agg
-dsprep: $(BUILDDIR)/dsprep
 
 all: paragnn bench-gs dsprep
 
@@ -108,50 +121,42 @@ else
     E = @echo
 endif
 
-$(BUILDDIR)/paragnn: $(call to_obj,$(PARAGNN_SRCS)) | $(BUILDDIR)
+paragnn: $(patsubst %.c,$(BUILDDIR)/%.o,$(PARAGNN_SRCS))
 	$(E) "  LD    $@"
-	$(Q)$(CC) $(ALL_CFLAGS) $(ALL_LDFLAGS) -o $@ $^ $(COMMON_LIBS)
+	$(Q)$(CC) $(ALL_CFLAGS) $(ALL_LDFLAGS) -o $(BUILDDIR)/$@ $^ $(ALL_LDLIBS)
 
-$(BENCHDIR)/bench-gs: $(call to_bench_obj,$(GRAD_SAGECONV_SRCS)) | $(BENCHDIR)
+bench-gs: $(patsubst %.c,$(BUILDDIR)/%.o,$(BENCH_GS_SRCS))
 	$(E) "  LD    $@"
-	$(Q)$(CC) $(ALL_CFLAGS) $(ALL_LDFLAGS) -o $@ $^ $(COMMON_LIBS)
+	$(Q)$(CC) $(ALL_CFLAGS) $(ALL_LDFLAGS) -o $(BUILDDIR)/$@ $^ $(ALL_LDLIBS)
 
-$(BUILDDIR)/bench-agg: $(call to_obj,$(AGGREGATE_SRCS)) | $(BUILDDIR)
+bench-agg: $(call to_obj,$(AGGREGATE_SRCS)) | $(BUILDDIR)
 	$(E) "  LD    $@"
-	$(Q)$(CC) $(ALL_CFLAGS) $(ALL_LDFLAGS) -o $@ $^ $(COMMON_LIBS)
+	$(Q)$(CC) $(ALL_CFLAGS) $(ALL_LDFLAGS) -o $(BUILDDIR)/$@ $^ $(ALL_LDLIBS)
 
-$(BUILDDIR)/dsprep: $(call to_obj,$(DSPREP_SRC)) | $(BUILDDIR)
+dsprep: $(call to_obj,$(DSPREP_SRC)) | $(BUILDDIR)
 	$(E) "  LD    $@"
-	$(Q)$(CC) $(BASIC_CFLAGS) -o $@ $^ $(COMMON_LIBS) -lz
+	$(Q)$(CC) $(ALL_CFLAGS) $(ALL_LDFLAGS) -o $(BUILDDIR)/$@ $^ $(ALL_LDLIBS) -lz
 
 $(BUILDDIR)/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(E) "  CC    $<"
 	$(Q)$(CC) $(ALL_CFLAGS) -Isrc/ -c $< -o $@
 
-$(BENCHDIR)/%.o: %.c
+$(BUILDDIR)/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(E) "  CC    $<"
 	$(Q)$(CC) $(ALL_CFLAGS) -Isrc/ -c $< -o $@
-
-$(BUILDDIR)/grad_sageconv_outer_tn.s: kernels/grad_sageconv_outer_tn.c | $(BUILDDIR)
-	$(E) "  ASM   $<"
-	$(Q)$(CC) $(ALL_CFLAGS) -DMCA_MARKERS -Isrc/ -S -o $@ $<
-
-$(BUILDDIR) $(BENCHDIR):
-	@mkdir -p $@
 
 arxiv products papers100M: $(BUILDDIR)/dsprep
 	./$< -ds $@ -datadir $(DATADIR)
 
 tags:
 	$(E) "  Generating etags..."
-	$(Q)find src/ kernels/ -type f -name "*.[ch]" -exec etags --declarations {} +
-	$(E) "  Generating etags OK"
+	$(Q)rm -f TAGS
+	$(Q)find src/ benchmark/ -type f -name '*.[ch]' -print0 | xargs -0 etags -a --declarations
 
 clean:
 	rm -rf $(BENCHDIR)
-	rm -rf $(BUILDDIR)
 
 help:
 	@echo "Usage: make [TARGET] [OPTIONS]"
