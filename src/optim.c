@@ -73,7 +73,6 @@ static AdamState *adam_state_create(int64_t n, Real lr)
     Real beta1 = REAL(0.9), beta2 = REAL(0.999);
     AdamState *state  = ALLOC_OR_DIE(malloc(sizeof(*state)));
     *state = (AdamState) {
-        .kind       = OPTIM_ADAM,
         .t          = 0,
         .lr         = lr,
         .beta1      = beta1,
@@ -100,7 +99,7 @@ static AdamState *adam_state_create(int64_t n, Real lr)
 Adam* adam_create(SageNet *net, Real lr)
 {
     Adam *adam = ALLOC_OR_DIE(malloc(sizeof(*adam)));
-
+    adam->kind = OPTIM_ADAM;
     int64_t count = 0;
     for (int64_t i = 0; i < net->layer_count; i++)
     {
@@ -183,9 +182,10 @@ Optim *optim_create(OptimKind kind, SageNet *net, Real lr)
     return optim;
 }
 
-void optim_update(Optim *optim, OptimKind kind, SageNet *net)
+void optim_update(Optim *optim, SageNet *net)
 {
     TIMER_FUNC();
+    OptimKind kind = *(OptimKind*)optim;
     switch(kind)
     {
     case OPTIM_SGD:
@@ -199,8 +199,11 @@ void optim_update(Optim *optim, OptimKind kind, SageNet *net)
     }
 }
 
-void optim_free(Optim **optim, OptimKind kind)
+void optim_free(Optim **optim)
 {
+    if (!optim || !*optim) return;
+
+    OptimKind kind = *(OptimKind*)(*optim);
     switch(kind)
     {
     case OPTIM_SGD:

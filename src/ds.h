@@ -1,5 +1,5 @@
-#ifndef DATASET_H_
-#define DATASET_H_
+#ifndef DS_H
+#define DS_H
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -8,32 +8,23 @@
 #include "dsinfo.h"
 #include "sparsegraph.h"
 
-typedef enum {
-    SPLIT_INVALID = 0,
-    SPLIT_NONE,
-    SPLIT_TRAIN,
-    SPLIT_VALID,
-    SPLIT_TEST,
-    SPLIT_COUNT
-} Split;
-
 typedef struct {
-    char        *label_path;
-    char        *feat_path;
-    Split        split;
+    char              *label_path;
+    char              *feat_path;
     const DatasetInfo *info;
-    // TODO: rename num_* -> *_count
-    int64_t      node_count;
-    int64_t      feature_count;
-    int64_t      class_count;
-    int64_t      edge_count;
-    // TODO: rename nodes -> xs and lables -> ys
-    Real        *x;            // Node features with shape [num_nodes, num_node_features]
-    int64_t     *y;           // Labels to each node [num_nodes]
-    SparseGraph *graph;
+    int64_t            node_count;
+    int64_t            feature_count;
+    int64_t            class_count;
+    int64_t            edge_count;
+    Real              *x;       // Node features with shape [num_nodes, num_node_features]
+    int64_t           *y;       // Labels to each node [num_nodes]
+    int64_t           *y_train; // Labels to each node [num_nodes]
+    int64_t           *y_valid; // Labels to each node [num_nodes]
+    int64_t           *y_test;  // Labels to each node [num_nodes]
+    SparseGraph       *graph;
 } Dataset;
 
-Dataset* dataset_load(DatasetKind dskind, char const *root, SparseFormat format, Split split);
+Dataset* dataset_load(DatasetKind dskind, char const *root, SparseFormat format);
 void dataset_free(Dataset **ds);
 
-#endif // DATASET_H_
+#endif // DS_H

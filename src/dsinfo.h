@@ -26,6 +26,7 @@ typedef struct {
     const char *dir_name; // folder name inside the zip
     const char *split;
 
+    DatasetKind datasetkind;
     bool add_inverse_edge;
     bool has_node_attr;
     bool has_edge_attr;

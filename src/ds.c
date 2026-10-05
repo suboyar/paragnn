@@ -80,9 +80,7 @@ static int64_t load_split(const char *path, int64_t **split)
     *split = alloc_local(sb.st_size);
 #pragma omp parallel for schedule(static)
     for (size_t i = 0; i < count; i++)
-    {
         (*split)[i] = data[i];
-    }
     munmap(data, sb.st_size);
     close(fd);
     return count;
@@ -90,14 +88,18 @@ static int64_t load_split(const char *path, int64_t **split)
 
 #define INVALID_IDX -1          // assumes signed node indecies
 
-static void build_node_mapping(int64_t* map,  int64_t num_nodes, int64_t* split_idx, int64_t split_size)
+static void create_split_mask(int64_t node_count, const int64_t *full_labels, const char *split_path, int64_t *mask)
 {
-    memset(map, 0xFF, num_nodes * sizeof(*map));
+    for (int64_t i = 0; i < node_count; i++)
+        mask[i] = INVALID_IDX;
 
-    for (int64_t i = 0; i < split_size; i++)
-    {
-        map[split_idx[i]] = i;
-    }
+    int64_t *split_idx = NULL;
+    int64_t count = load_split(split_path, &split_idx);
+
+    for (int64_t i = 0; i < count; i++)
+        mask[split_idx[i]] = full_labels[split_idx[i]];
+
+    free(split_idx);
 }
 
 static size_t get_file_size(const char *file)
@@ -136,21 +138,7 @@ static void load_labels(const char *file, int64_t *dest)
     unmap_file(&info);
 }
 
-const char* dataset_split_name(Dataset *ds)
-{
-    static const char *strings[SPLIT_COUNT] = {
-        [SPLIT_NONE] = "full",
-        [SPLIT_TRAIN] = "train",
-        [SPLIT_VALID] = "valid",
-        [SPLIT_TEST] = "test",
-    };
-
-    if (ds->split <= SPLIT_INVALID || ds->split >= SPLIT_COUNT) ERROR("Invlid split value: %d\n", ds->split);
-    return strings[ds->split];
-}
-
-
-Dataset* dataset_load(DatasetKind dskind, char const *root, SparseFormat format, Split split)
+Dataset* dataset_load(DatasetKind dskind, char const *root, SparseFormat format)
 {
     Dataset *ds = ALLOC_OR_DIE(calloc(1, sizeof(*ds)));
 
@@ -159,32 +147,12 @@ Dataset* dataset_load(DatasetKind dskind, char const *root, SparseFormat format,
     char *ds_path = path_join(root, ds->info->dir_name);
     if (access(ds_path, F_OK) != 0) ERROR("Dataset is missing, run:\n  dsprep --dataset %s --root %s", ds->info->name, root);
 
-    char *label_bin_path, *feat_bin_path, *edge_bin_path;
-    switch (split)
-    {
-        case SPLIT_NONE:
-            label_bin_path = path_join(ds_path, "processed/node-label.bin");
-            feat_bin_path  = path_join(ds_path, "processed/node-feat.bin");
-            edge_bin_path  = path_join(ds_path, "processed/edge.bin");
-            break;
-        case SPLIT_TRAIN:
-            label_bin_path = path_join(ds_path, "processed/train-node-label.bin");
-            feat_bin_path  = path_join(ds_path, "processed/train-node-feat.bin");
-            edge_bin_path  = path_join(ds_path, "processed/train-edge.bin");
-            break;
-        case SPLIT_VALID:
-            label_bin_path = path_join(ds_path, "processed/valid-node-label.bin");
-            feat_bin_path  = path_join(ds_path, "processed/valid-node-feat.bin");
-            edge_bin_path  = path_join(ds_path, "processed/valid-edge.bin");
-            break;
-        case SPLIT_TEST:
-            label_bin_path = path_join(ds_path, "processed/test-node-label.bin");
-            feat_bin_path  = path_join(ds_path, "processed/test-node-feat.bin");
-            edge_bin_path  = path_join(ds_path, "processed/test-edge.bin");
-            break;
-        default:
-            UNREACHABLE("Unknown Split enum value %d", split);
-    }
+    char *label_bin_path = path_join(ds_path, "processed/node-label.bin");
+    char *feat_bin_path  = path_join(ds_path, "processed/node-feat.bin");
+    char *edge_bin_path  = path_join(ds_path, "processed/edge.bin");
+    char *train_bin_path = path_join(ds_path, "processed/train.bin");
+    char *valid_bin_path = path_join(ds_path, "processed/valid.bin");
+    char *test_bin_path = path_join(ds_path, "processed/test.bin");
     int64_t node_count = count_bin_elements(label_bin_path);
     int64_t edge_count = count_bin_elements(edge_bin_path) / 2;
     int64_t feature_count = ds->info->feature_count;
@@ -196,19 +164,25 @@ Dataset* dataset_load(DatasetKind dskind, char const *root, SparseFormat format,
     ds->feature_count = feature_count;
     ds->class_count   = class_count;
     ds->edge_count    = edge_count;
-    ds->split         = split;
     ds->x             = ALLOC_OR_DIE(alloc_shared(node_count * feature_count * sizeof(*ds->x)));
     ds->y             = ALLOC_OR_DIE(alloc_local(node_count * sizeof(*ds->y)));
+    ds->y_train       = ALLOC_OR_DIE(alloc_local(node_count * sizeof(*ds->y_train)));
+    ds->y_valid       = ALLOC_OR_DIE(alloc_local(node_count * sizeof(*ds->y_valid)));
+    ds->y_test        = ALLOC_OR_DIE(alloc_local(node_count * sizeof(*ds->y_test)));
 
-    double label_time, feat_time, graph_time;
-    TIMER_NORECORD(label_time, load_labels(ds->label_path, ds->y));
+    double label_time, feat_time, graph_time, split_time;
     TIMER_NORECORD(feat_time, load_feats(ds->feat_path, ds->x));
+    TIMER_NORECORD(label_time, load_labels(ds->label_path, ds->y));
+    TIMER_NORECORD(split_time, {
+            create_split_mask(node_count, ds->y, train_bin_path, ds->y_train);
+            create_split_mask(node_count, ds->y, valid_bin_path, ds->y_valid);
+            create_split_mask(node_count, ds->y, test_bin_path, ds->y_test);
+        });
     TIMER_NORECORD(graph_time,
                    ds->graph = sparsegraph_load(node_count, edge_count, ds->info->add_inverse_edge, edge_bin_path, format));
-
-    printf("Loaded %s [%s] (nodes: %ld, edges: %ld) | Times: label %.2fs, feat %.2fs, graph %.2fs\n",
-           ds->info->name, dataset_split_name(ds), ds->node_count, ds->edge_count,
-           label_time, feat_time, graph_time);
+    printf("Loaded %s (nodes: %ld, edges: %ld) | Times: feat %.2fs, label %.2fs, split %.2fs, graph %.2fs\n",
+           ds->info->name, ds->node_count, ds->edge_count,
+           feat_time, label_time, split_time, graph_time);
 
     temp_free();
     return ds;
@@ -221,6 +195,9 @@ void dataset_free(Dataset **ds)
     free((*ds)->feat_path);
     free((*ds)->x);
     free((*ds)->y);
+    free((*ds)->y_train);
+    free((*ds)->y_valid);
+    free((*ds)->y_test);
     sparsegraph_free(&(*ds)->graph);
     free(*ds);
     *ds = NULL;

@@ -11,6 +11,7 @@ const DatasetInfo ds_infos[] = {
         .dir_name              = "ogbn_proteins",
         .version               = "1",
         .url                   = "http://snap.stanford.edu/ogb/data/nodeproppred/proteins.zip",
+        .datasetkind           = DATASET_PROTEINS,
         .add_inverse_edge      = true, // If true, edge_count denotes original directed edges
         .has_node_attr         = false,
         .has_edge_attr         = true,
@@ -31,6 +32,7 @@ const DatasetInfo ds_infos[] = {
         .dir_name              = "ogbn_products",
         .version               = "1",
         .url                   = "http://snap.stanford.edu/ogb/data/nodeproppred/products.zip",
+        .datasetkind           = DATASET_PRODUCTS,
         .add_inverse_edge      = true, // If true, edge_count denotes original directed edges
         .has_node_attr         = true,
         .has_edge_attr         = false,
@@ -51,6 +53,7 @@ const DatasetInfo ds_infos[] = {
         .dir_name              = "ogbn_arxiv",
         .version               = "1",
         .url                   = "http://snap.stanford.edu/ogb/data/nodeproppred/arxiv.zip",
+        .datasetkind           = DATASET_ARXIV,
         .add_inverse_edge      = true, // If true, edge_count denotes original directed edges
         .has_node_attr         = true,
         .has_edge_attr         = false,
@@ -71,6 +74,7 @@ const DatasetInfo ds_infos[] = {
         .dir_name              = "ogbn_mag",
         .version               = "2",
         .url                   = "http://snap.stanford.edu/ogb/data/nodeproppred/mag.zip",
+        .datasetkind           = DATASET_MAG,
         .add_inverse_edge      = false, // If true, edge_count denotes original directed edges
         .has_node_attr         = true,
         .has_edge_attr         = false,
@@ -91,6 +95,7 @@ const DatasetInfo ds_infos[] = {
         .dir_name              = "ogbn_papers100M",
         .version               = "1",
         .url                   = "http://snap.stanford.edu/ogb/data/nodeproppred/papers100M-bin.zip",
+        .datasetkind           = DATASET_PAPERS100M,
         .add_inverse_edge      = true, // If true, edge_count denotes original directed edges
         .has_node_attr         = true,
         .has_edge_attr         = false,
@@ -109,12 +114,12 @@ DatasetKind str_to_dataset_kind(const char *str)
 {
     if (strcmp(str, "ogbn-proteins") == 0)
         return DATASET_PROTEINS;
-    if (strcmp(str, "ogbn-products") == 0)
-        return DATASET_PRODUCTS;
+    // if (strcmp(str, "ogbn-products") == 0)
+    //     return DATASET_PRODUCTS;
     if (strcmp(str, "ogbn-arxiv") == 0)
         return DATASET_ARXIV;
-    if (strcmp(str, "ogbn-mag") == 0)
-        return DATASET_MAG;
+    // if (strcmp(str, "ogbn-mag") == 0)
+    //     return DATASET_MAG;
     if (strcmp(str, "ogbn-papers100M") == 0)
         return DATASET_PAPERS100M;
     return DATASET_INVALID;

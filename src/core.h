@@ -12,7 +12,11 @@
 
 #define STR(x) #x
 #define XSTR(a) STR(a)
+
 #define PRAGMA_UNROLL(n) _Pragma(STR(GCC unroll n))
+
+#define LIKELY(x) __builtin_expect(!!(x), 1)
+#define UNLIKELY(x) __builtin_expect(!!(x), 0)
 
 #if defined(USE_DOUBLE)
 #define Real      double
@@ -174,6 +178,9 @@ void *alloc_interleaved(size_t size);
 void *alloc_shared(size_t size);
 
 void real_zero_out(Real *a, size_t n);
+
+size_t get_memory_usage(void);
+void print_memory_usage(void);
 
 char *expand_path(const char *path);
 void mkdir_recursive(const char *path);

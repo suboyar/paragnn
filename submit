@@ -2,10 +2,37 @@
 # submit.sh
 # Usage: ./submit.sh <partition_alias> <sbatch_script>
 
-if [ "$#" -ne 2 ]; then
-    echo "Usage: $0 <partition_alias> <sbatch_script>"
+function usage() {
+    echo "Usage: $0 [--dont-sync] [-h|--help] <partition_alias> <sbatch_script>"
     echo "Aliases: cpu, gpu, top, or exact queue name"
-    exit 1
+    exit $1
+}
+
+DONT_SYNC=
+QUEUE_ALIAS=
+SBATCH_PATH=
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --dont-sync)
+            DONT_SYNC=YES
+            shift
+            ;;
+        -h|--help)
+            usage 0
+            ;;
+          -*|--*)
+              echo "Unknown option $1"
+              usage 1
+              ;;
+          *)
+              break
+              ;;
+    esac
+done
+
+if [ "$#" -ne 2 ]; then
+    usage 1
 fi
 
 QUEUE_ALIAS="$1"
@@ -18,19 +45,23 @@ case "$QUEUE_ALIAS" in
     *) PARTITION="$QUEUE_ALIAS" ;;
 esac
 
-set -x
 SBATCH_NAME=$(basename "$SBATCH_PATH" ".sbatch")
 RUN_DIR="$HOME/runs/${SBATCH_NAME}"
 LOG_DIR="logs/${SBATCH_NAME}"
 RESULT_DIR="results/${SBATCH_NAME}"
-mkdir -p "$RUN_DIR" "$LOG_DIR" "$RESULT_DIR"
-git ls-files -z | rsync -a -0 --exclude="logs/" --exclude="results/" --files-from=- ./ "$RUN_DIR/"
-rsync -a --exclude ".git/" --exclude "build/" --exclude "logs/" --exclude "results/" ./ "$RUN_DIR/"
-ln -sf $(realpath "$LOG_DIR") "${RUN_DIR}/logs"
-ln -sf $(realpath "$RESULT_DIR") "${RUN_DIR}/results"
+mkdir -p "$LOG_DIR" "$RESULT_DIR"
 
-cd "$RUN_DIR"
+if [[ -z $DONT_SYNC ]]; then
+    mkdir -p "$RUN_DIR"
+    git ls-files -z | rsync -a -0 --exclude="logs/" --exclude="results/" --files-from=- ./ "$RUN_DIR/"
+    rsync -a --exclude ".git/" --exclude "build/" --exclude "logs/" --exclude "results/" ./ "$RUN_DIR/"
+    ln -snf $(realpath "$LOG_DIR") "${RUN_DIR}/logs"
+    ln -snf $(realpath "$RESULT_DIR") "${RUN_DIR}/results"
+    LOG_DIR="logs"
+    cd "$RUN_DIR"
+fi
+
 IFS=',' read -ra PARTS <<< "$PARTITION"
 for P in "${PARTS[@]}"; do
-    sbatch --partition="$P" --output "${LOG_DIR}/$P.out" --error "${LOG_DIR}/${P}.err" "$SBATCH_PATH"
+    (set -x ; sbatch --partition="$P" --output "${LOG_DIR}/${P}.out" --error "${LOG_DIR}/${P}.err" "$SBATCH_PATH")
 done

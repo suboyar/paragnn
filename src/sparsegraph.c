@@ -77,8 +77,10 @@ void sparsegraph_free(SparseGraph **graph)
 
     if (has_cs)  free_cs(*graph);
     if (has_coo) free_coo(*graph);
+
     free((*graph)->inv_in_degree);
     if (!(*graph)->undirected) free((*graph)->inv_out_degree);
+    free((*graph)->edge_path);
     free(*graph);
     *graph = NULL;
 }

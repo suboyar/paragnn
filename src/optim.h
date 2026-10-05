@@ -11,8 +11,8 @@ typedef enum {
 
 typedef void Optim;
 Optim *optim_create(OptimKind kind, SageNet *net, Real lr);
-void optim_update(Optim *optim, OptimKind kind, SageNet *net);
-void optim_free(Optim **optim, OptimKind kind);
+void optim_update(Optim *optim, SageNet *net);
+void optim_free(Optim **optim);
 
 typedef struct {
     OptimKind kind;
@@ -24,7 +24,6 @@ void sgd_update(SGD *sgd, SageNet *net);
 void sgd_free(SGD **sgd);
 
 typedef struct {
-    OptimKind  kind;
     Real    *m;               // first moment
     Real    *v;               // second moment
     int64_t  t;               // timestep

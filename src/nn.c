@@ -1,3 +1,5 @@
+#include "nn.h"
+
 #include <stdint.h>
 
 #include "core.h"
@@ -54,8 +56,9 @@ void l2norm(L2NormLayer *const l)
             sum_sq += val * val;
         }
 
-        Real safe_sum_sq = real_fmax(sum_sq, eps * eps);
-        Real scale = REAL(1.0) / real_sqrt(safe_sum_sq);
+        Real scale = 0.0;
+        if (LIKELY(sum_sq > eps * eps))
+            scale = REAL(1.0) / real_sqrt(sum_sq);
 
         Real *restrict x_ptr = &x[n*dim];
 #pragma omp simd
@@ -129,7 +132,7 @@ void logsoftmax(LogSoftmaxLayer *const l)
     }
 }
 
-Real nll_loss(LogSoftmaxLayer *l, const int64_t *y)
+Real nll_loss(LogSoftmaxLayer *l, const int64_t *restrict y)
 {
     TIMER_FUNC();
 
@@ -139,14 +142,19 @@ Real nll_loss(LogSoftmaxLayer *l, const int64_t *y)
     Real *restrict x = l->x;
 
     Real loss = 0.0;
-#pragma omp parallel for schedule(static) reduction(+:loss)
+    int64_t valid = 0;
+#pragma omp parallel for schedule(static) reduction(+:loss,valid)
     for (int64_t n = 0; n < node_count; n++)
-        loss -= x[n*dim+y[n]];
-
-    return loss / node_count;
+    {
+        int64_t label = y[n];
+        if (label == -1) continue;
+        loss -= x[n*dim+label];
+        valid++;
+    }
+    return valid > 0 ? loss / valid : REAL(0.0);
 }
 
-Real accuracy(const LogSoftmaxLayer *l, const int64_t *labels)
+Real accuracy(const LogSoftmaxLayer *l, const int64_t *restrict y)
 {
     TIMER_FUNC();
 
@@ -155,28 +163,33 @@ Real accuracy(const LogSoftmaxLayer *l, const int64_t *labels)
 
     const Real *restrict x = l->x;
 
-    uint64_t correct = 0;
-#pragma omp parallel for schedule(static) reduction(+:correct)
-    for (int64_t n = 0; n < l->node_count; n++)
+    int64_t correct = 0, valid = 0;
+#pragma omp parallel for schedule(static) reduction(+:correct,valid)
+    for (int64_t n = 0; n < node_count; n++)
     {
+        if (y[n] == -1) continue;
+        valid++;
+
         const Real *x_ptr = &x[n*dim];
-        int64_t pred_class = 0;
+        Real max_val = x_ptr[0];
+        int64_t pred = 0;
         for (int64_t d = 1; d < dim; d++)
         {
-            if (x_ptr[d] > x_ptr[pred_class])
-                pred_class = d;
+            if (x_ptr[d] > max_val)
+            {
+                max_val = x_ptr[d];
+                pred = d;
+            }
         }
 
-        if (pred_class == labels[n])
-            correct++;
+        if (pred == y[n]) correct++;
     }
-
-    return (Real)correct / node_count;
+    return valid > 0 ? (Real)correct / valid : REAL(0.0);
 }
 
 // Computes gradient flow from both NLLLoss and LogSoftmax.
 // NOTE: we assume mean reduction from NLLLoss
-void grad_logsoftmax_nll(LogSoftmaxLayer *const l, int64_t *labels)
+void grad_logsoftmax_nll(LogSoftmaxLayer *const l, const int64_t *restrict y)
 {
     TIMER_FUNC();
 
@@ -186,19 +199,31 @@ void grad_logsoftmax_nll(LogSoftmaxLayer *const l, int64_t *labels)
     const Real *restrict x  = l->x;
     Real       *restrict dx = l->dx;
 
-    Real scale = REAL(1.0) / node_count;
+    int64_t valid_count = 0;
+#pragma omp parallel for reduction(+:valid_count)
+    for (int64_t n = 0; n < node_count; n++)
+    {
+        if (y[n] != -1) valid_count++;
+    }
+
+    Real scale = valid_count > 0 ? REAL(1.0) / valid_count : REAL(0.0);
+
 #pragma omp parallel for schedule(static)
     for (int64_t n = 0; n < node_count; n++)
     {
-        const Real *restrict x_ptr  = &x[n*dim];
-        Real       *restrict dx_ptr = &dx[n*dim];
+        int64_t target = y[n];
+        Real *restrict dx_ptr = &dx[n*dim];
 
-        int64_t target = labels[n];
-        for (int64_t d = 0; d < dim; d++)
+        if (target == -1)
         {
-            Real softmax_val = real_exp(x_ptr[d]);
-            dx_ptr[d] = softmax_val * scale;
+            memset(dx_ptr, 0, dim * sizeof(Real));
+            continue;
         }
+
+        const Real *restrict x_ptr = &x[n*dim];
+        for (int64_t d = 0; d < dim; d++)
+            dx_ptr[d] = real_exp(x_ptr[d]) * scale;
+
         dx_ptr[target] -= scale;
     }
 }

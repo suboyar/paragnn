@@ -1,5 +1,6 @@
 #include <errno.h>
 #include <fcntl.h>
+#include <math.h>
 #include <omp.h>
 #include <getopt.h>
 #include <stddef.h>
@@ -157,6 +158,10 @@ static inline int64_t parse_i64(char** pp)
 {
     char* p = *pp;
 
+    int64_t sign = 1;
+    if (*p == '-') { sign = -1; p++; }
+    else if (*p == '+') { p++; }
+
     int64_t val = 0;
     while (*p >= '0' && *p <= '9')
     {
@@ -164,7 +169,7 @@ static inline int64_t parse_i64(char** pp)
     }
 
     *pp = p;
-    return val;
+    return val * sign;
 }
 
 void parse_feats(char *input, size_t input_size, char *output, int64_t total_nodes, int64_t split_size, int64_t feature_count, int64_t *split_idx)
@@ -577,7 +582,7 @@ void process_npy(const char *npy_path, const char *bin_path, const char *split_p
                     }                                                   \
                 n = ctx->total_edges;                                     \
             } else {                                                    \
-                for (size_t i = 0; i < ctx->total_edges; i++) {           \
+                for (int64_t i = 0; i < ctx->total_edges; i++) {           \
                     int64_t u = s[i], v = s[ctx->total_edges + i];        \
                     if (node_map) {                                     \
                         u = node_map[u]; v = node_map[v];               \
@@ -592,10 +597,10 @@ void process_npy(const char *npy_path, const char *bin_path, const char *split_p
         } while(0)
 
         // ogbn-papers100M seems to be stored as src0,...,srcE,dst0,...,dstE
-        if (hdr.elem_size == 4) EXTRACT_EDGES(int32_t); // font-lock-function-name-face
-        else EXTRACT_EDGES(int64_t); // no font-lock-function-name-face
+        if (hdr.elem_size == 4) EXTRACT_EDGES(int32_t);
+        else EXTRACT_EDGES(int64_t);
 
-        qsort(packed, n, sizeof(*packed), cmp_s128); //font-lock-function-name-face
+        qsort(packed, n, sizeof(*packed), cmp_s128);
 
         size_t unique = 0;
         if (n > 0)
@@ -610,7 +615,7 @@ void process_npy(const char *npy_path, const char *bin_path, const char *split_p
 
         size_t out_size = unique * 2 * sizeof(int64_t);
         fd_out = open(bin_path, O_RDWR | O_CREAT | O_TRUNC, 0644);
-        ftruncate(fd_out, out_size); // font-lock-function-name-face
+        ftruncate(fd_out, out_size);
         output = mmap(NULL, out_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd_out, 0);
 
         int64_t *dest = (int64_t *)output;
@@ -626,49 +631,52 @@ void process_npy(const char *npy_path, const char *bin_path, const char *split_p
 #endif
         }
 
-        free(packed); // font-lock-function-name-face
-        if (node_map) free(node_map); // font-lock-function-name-face
-        munmap(output, out_size); //font-lock-function-name-face
-        close(fd_out); // font-lock-function-name-face
+        free(packed);
+        if (node_map) free(node_map);
+        munmap(output, out_size);
+        close(fd_out);
     }
     else
     {
         size_t dst_elem_size = (kind == PARSE_FEATS) ? sizeof(double) : sizeof(int64_t);
-        size_t cols = (kind == PARSE_FEATS) ? ctx->feature_count : 1;
+        int64_t cols = (kind == PARSE_FEATS) ? ctx->feature_count : 1;
         size_t out_size = split_nodes * cols * dst_elem_size;
 
-        fd_out = open(bin_path, O_RDWR | O_CREAT | O_TRUNC, 0644); // no font-lock-function-name-face
-        ftruncate(fd_out, out_size); // no font-lock-function-name-face
-        output = mmap(NULL, out_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd_out, 0); // no font-lock-function-name-face
-        if (output == MAP_FAILED) ERROR("mmap output failed: %s", strerror(errno))
-;
-#define COPY_NPY(stype, dtype) do {                                 \
-            stype *s = (stype*)src; dtype *d = (dtype*)output;      \
-            _Pragma("omp parallel for schedule(static)")            \
-                for (size_t i = 0; i < split_nodes; i++) {          \
-                    size_t row = split_idx ? split_idx[i] : i;      \
-                    for (size_t j = 0; j < cols; j++)               \
-                        d[i * cols + j] = (dtype)s[row * cols + j]; \
-                }                                                   \
+        fd_out = open(bin_path, O_RDWR | O_CREAT | O_TRUNC, 0644);
+        ftruncate(fd_out, out_size);
+        output = mmap(NULL, out_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd_out, 0);
+        if (output == MAP_FAILED) ERROR("mmap output failed: %s", strerror(errno));
+
+#define COPY_NPY(stype, dtype, handle_nan) do {                         \
+            stype *s = (stype*)src; dtype *d = (dtype*)output;          \
+            _Pragma("omp parallel for schedule(static)")                \
+                for (int64_t i = 0; i < split_nodes; i++) {              \
+                    int64_t row = split_idx ? split_idx[i] : i;          \
+                    for (int64_t j = 0; j < cols; j++) {                 \
+                        stype v = s[row * cols + j];                    \
+                        d[i * cols + j] = (handle_nan && isnan((double)v)) ? -1 : (dtype)v; \
+                    }                                                   \
+                }                                                       \
         } while(0)
 
-        if (hdr.type_char == 'i' && hdr.elem_size == 8 && dst_elem_size == 4) COPY_NPY(int64_t, uint32_t);
-        else if (hdr.type_char == 'i' && hdr.elem_size == 4 && dst_elem_size == 8) COPY_NPY(int32_t, int64_t);
-        else if (hdr.type_char == 'f' && hdr.elem_size == 4 && dst_elem_size == 8) COPY_NPY(float, double);
-        else if (hdr.type_char == 'f' && hdr.elem_size == 4 && dst_elem_size == 4) COPY_NPY(float, uint32_t);
-        else if (hdr.elem_size == dst_elem_size)
-        {
-            if (!split_idx) memcpy(output, src, out_size);
-            else if (hdr.elem_size == 8) COPY_NPY(int64_t, int64_t);
-            else if (hdr.elem_size == 4) COPY_NPY(int32_t, int32_t);
+        if (kind == PARSE_FEATS) {
+            if (hdr.type_char == 'f' && hdr.elem_size == 4) COPY_NPY(float, double, 0);
+            else if (hdr.type_char == 'f' && hdr.elem_size == 8) COPY_NPY(double, double, 0);
+            else if (hdr.type_char == 'i' && hdr.elem_size == 4) COPY_NPY(int32_t, double, 0);
+            else if (hdr.type_char == 'i' && hdr.elem_size == 8) COPY_NPY(int64_t, double, 0);
+            else ERROR("Unsupported feature conversion: %c%zu", hdr.type_char, hdr.elem_size);
+        } else { // PARSE_LABELS
+            if (hdr.type_char == 'f' && hdr.elem_size == 4) COPY_NPY(float, int64_t, 1);
+            else if (hdr.type_char == 'f' && hdr.elem_size == 8) COPY_NPY(double, int64_t, 1);
+            else if (hdr.type_char == 'i' && hdr.elem_size == 4) COPY_NPY(int32_t, int64_t, 0);
+            else if (hdr.type_char == 'i' && hdr.elem_size == 8) COPY_NPY(int64_t, int64_t, 0);
+            else ERROR("Unsupported label conversion: %c%zu", hdr.type_char, hdr.elem_size);
         }
-        else ERROR("Unsupported npy conversion: %c%zu -> %zu", hdr.type_char, hdr.elem_size, dst_elem_size);
 
         munmap(output, out_size);
         close(fd_out);
     }
 
-cleanup:
     if (split_idx) free(split_idx);
     munmap(input, sb.st_size);
     close(fd_in);
@@ -777,65 +785,55 @@ void prepare_dataset(DatasetKind kind, char *root)
     process_csv_gz(path_join(split_path, "valid.csv.gz"), path_join(proc_path, "valid.bin"), NULL, PARSE_SPLIT, SPLIT_NONE, &ctx);
     process_csv_gz(path_join(split_path, "test.csv.gz"),  path_join(proc_path, "test.bin"),  NULL, PARSE_SPLIT, SPLIT_NONE, &ctx);
 
-    Split splits[] = {SPLIT_NONE, SPLIT_TRAIN, SPLIT_VALID, SPLIT_TEST};
+    const char *feat_in, *label_in, *edge_in;
+    void (*process_fn)(const char*, const char*, const char*, ParseKind, Split, const ParseContext*);
 
-    // Data
     if (ds_info->raw_format == FMT_CSV_GZ)
     {
-        // Full
-        process_csv_gz(path_join(ds_path, "raw/node-feat.csv.gz"),  path_join(proc_path, "node-feat.bin"),  NULL, PARSE_FEATS,  SPLIT_NONE, &ctx);
-        process_csv_gz(path_join(ds_path, "raw/node-label.csv.gz"), path_join(proc_path, "node-label.bin"), NULL, PARSE_LABELS, SPLIT_NONE, &ctx);
-        process_csv_gz(path_join(ds_path, "raw/edge.csv.gz"),       path_join(proc_path, "edge.bin"),       NULL, PARSE_EDGES,  SPLIT_NONE, &ctx);
-
-        // Training split
-        process_csv_gz(path_join(ds_path, "raw/node-feat.csv.gz"),  path_join(proc_path, "train-node-feat.bin"),  path_join(proc_path, "train.bin"), PARSE_FEATS,  SPLIT_TRAIN, &ctx);
-        process_csv_gz(path_join(ds_path, "raw/node-label.csv.gz"), path_join(proc_path, "train-node-label.bin"), path_join(proc_path, "train.bin"), PARSE_LABELS, SPLIT_TRAIN, &ctx);
-        process_csv_gz(path_join(ds_path, "raw/edge.csv.gz"),       path_join(proc_path, "train-edge.bin"),       path_join(proc_path, "train.bin"), PARSE_EDGES,  SPLIT_TRAIN, &ctx);
-
-        // Validation split
-        process_csv_gz(path_join(ds_path, "raw/node-feat.csv.gz"),  path_join(proc_path, "valid-node-feat.bin"),  path_join(proc_path, "valid.bin"), PARSE_FEATS,  SPLIT_VALID, &ctx);
-        process_csv_gz(path_join(ds_path, "raw/node-label.csv.gz"), path_join(proc_path, "valid-node-label.bin"), path_join(proc_path, "valid.bin"), PARSE_LABELS, SPLIT_VALID, &ctx);
-        process_csv_gz(path_join(ds_path, "raw/edge.csv.gz"),       path_join(proc_path, "valid-edge.bin"),       path_join(proc_path, "valid.bin"), PARSE_EDGES,  SPLIT_VALID, &ctx);
-
-        // Test split
-        process_csv_gz(path_join(ds_path, "raw/node-feat.csv.gz"),  path_join(proc_path, "test-node-feat.bin"),  path_join(proc_path, "test.bin"), PARSE_FEATS,  SPLIT_TEST, &ctx);
-        process_csv_gz(path_join(ds_path, "raw/node-label.csv.gz"), path_join(proc_path, "test-node-label.bin"), path_join(proc_path, "test.bin"), PARSE_LABELS, SPLIT_TEST, &ctx);
-        process_csv_gz(path_join(ds_path, "raw/edge.csv.gz"),       path_join(proc_path, "test-edge.bin"),       path_join(proc_path, "test.bin"), PARSE_EDGES,  SPLIT_TEST, &ctx);
+        feat_in    = "raw/node-feat.csv.gz";
+        label_in   = "raw/node-label.csv.gz";
+        edge_in    = "raw/edge.csv.gz";
+        process_fn = process_csv_gz;
     }
-    else if (ds_info->raw_format == FMT_NPY)
+    else // FMT_NPY
     {
-        int rc;
-        rc = run_cmd(CMD_ARGS("unzip", "-q",
-                              "-n", path_join(ds_path, "raw/data.npz"),
-                              "-d", path_join(ds_path, "raw/data")));
-        if (rc < 0) ERROR("failed to unzip npz file: %s", path_join(ds_path, "raw/data.npz"));
+        if (run_cmd(CMD_ARGS("unzip", "-q", "-n", path_join(ds_path, "raw/data.npz"), "-d", path_join(ds_path, "raw/data"))) < 0)
+            ERROR("failed to unzip npz file: %s", path_join(ds_path, "raw/data.npz"));
 
-        rc = run_cmd(CMD_ARGS("unzip", "-q",
-                              "-n", path_join(ds_path, "raw/node-label.npz"),
-                              "-d", path_join(ds_path, "raw/node-label")));
-        if (rc < 0) ERROR("failed to unzip npz file: %s", path_join(ds_path, "raw/node-label.npz"));
+        if (run_cmd(CMD_ARGS("unzip", "-q", "-n", path_join(ds_path, "raw/node-label.npz"), "-d", path_join(ds_path, "raw/node-label"))) < 0)
+            ERROR("failed to unzip npz file: %s", path_join(ds_path, "raw/node-label.npz"));
 
-        // Full
-        process_npy(path_join(ds_path, "raw/data/node_feat.npy"),        path_join(proc_path, "node-feat.bin"),  NULL, PARSE_FEATS,  SPLIT_NONE, &ctx);
-        process_npy(path_join(ds_path, "raw/node-label/node_label.npy"), path_join(proc_path, "node-label.bin"), NULL, PARSE_LABELS, SPLIT_NONE, &ctx);
-        process_npy(path_join(ds_path, "raw/data/edge_index.npy"),       path_join(proc_path, "edge.bin"),       NULL, PARSE_EDGES,  SPLIT_NONE, &ctx);
-
-        // Training split
-        process_npy(path_join(ds_path, "raw/data/node_feat.npy"),        path_join(proc_path, "train-node-feat.bin"),  path_join(proc_path, "train.bin"), PARSE_FEATS,  SPLIT_TRAIN, &ctx);
-        process_npy(path_join(ds_path, "raw/node-label/node_label.npy"), path_join(proc_path, "train-node-label.bin"), path_join(proc_path, "train.bin"), PARSE_LABELS, SPLIT_TRAIN, &ctx);
-        process_npy(path_join(ds_path, "raw/data/edge_index.npy"),       path_join(proc_path, "train-edge.bin"),       path_join(proc_path, "train.bin"), PARSE_EDGES,  SPLIT_TRAIN, &ctx);
-
-        // Validation split
-        process_npy(path_join(ds_path, "raw/data/node_feat.npy"),        path_join(proc_path, "valid-node-feat.bin"),  path_join(proc_path, "valid.bin"), PARSE_FEATS,  SPLIT_VALID, &ctx);
-        process_npy(path_join(ds_path, "raw/node-label/node_label.npy"), path_join(proc_path, "valid-node-label.bin"), path_join(proc_path, "valid.bin"), PARSE_LABELS, SPLIT_VALID, &ctx);
-        process_npy(path_join(ds_path, "raw/data/edge_index.npy"),       path_join(proc_path, "valid-edge.bin"),       path_join(proc_path, "valid.bin"), PARSE_EDGES,  SPLIT_VALID, &ctx);
-
-        // Test split
-        process_npy(path_join(ds_path, "raw/data/node_feat.npy"),        path_join(proc_path, "test-node-feat.bin"),  path_join(proc_path, "test.bin"), PARSE_FEATS,  SPLIT_TEST, &ctx);
-        process_npy(path_join(ds_path, "raw/node-label/node_label.npy"), path_join(proc_path, "test-node-label.bin"), path_join(proc_path, "test.bin"), PARSE_LABELS, SPLIT_TEST, &ctx);
-        process_npy(path_join(ds_path, "raw/data/edge_index.npy"),       path_join(proc_path, "test-edge.bin"),       path_join(proc_path, "test.bin"), PARSE_EDGES,  SPLIT_TEST, &ctx);
+        feat_in    = "raw/data/node_feat.npy";
+        label_in   = "raw/node-label/node_label.npy";
+        edge_in    = "raw/data/edge_index.npy";
+        process_fn = process_npy;
     }
-    else ERROR("Invalid fromat: %d", ds_info->raw_format);
+
+    struct {
+        Split split;
+        const char *feat_out, *label_out, *edge_out, *split_bin;
+    } runs[] = {
+        {SPLIT_NONE,  "node-feat.bin",       "node-label.bin",       "edge.bin",       NULL},
+        {SPLIT_TRAIN, "train-node-feat.bin", "train-node-label.bin", "train-edge.bin", "train.bin"},
+        {SPLIT_VALID, "valid-node-feat.bin", "valid-node-label.bin", "valid-edge.bin", "valid.bin"},
+        {SPLIT_TEST,  "test-node-feat.bin",  "test-node-label.bin",  "test-edge.bin",  "test.bin"}
+    };
+
+    for (int i = 0; i < 4; i++)
+    {
+        const char *f_in  = path_join(ds_path, feat_in);
+        const char *l_in  = path_join(ds_path, label_in);
+        const char *e_in  = path_join(ds_path, edge_in);
+
+        const char *f_out = path_join(proc_path, runs[i].feat_out);
+        const char *l_out = path_join(proc_path, runs[i].label_out);
+        const char *e_out = path_join(proc_path, runs[i].edge_out);
+        const char *s_bin = runs[i].split_bin ? path_join(proc_path, runs[i].split_bin) : NULL;
+
+        process_fn(f_in, f_out, s_bin, PARSE_FEATS,  runs[i].split, &ctx);
+        process_fn(l_in, l_out, s_bin, PARSE_LABELS, runs[i].split, &ctx);
+        process_fn(e_in, e_out, s_bin, PARSE_EDGES,  runs[i].split, &ctx);
+    }
 
     temp_reset();
 }

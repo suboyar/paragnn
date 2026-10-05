@@ -31,7 +31,7 @@ int get_active_numa_nodes(void)
             {
                 struct bitmask *nodes = numa_get_run_node_mask();
                 numa_nodes = numa_bitmask_weight(nodes);
-                free(nodes);
+                numa_bitmask_free(nodes);
 #pragma omp atomic write
                 _numa_nodes = numa_nodes;
             }
@@ -132,6 +132,44 @@ void real_zero_out(Real *a, size_t n)
     }
 }
 
+// TODO: Check out getrusage from <sys/resource.h>
+size_t get_memory_usage(void)
+{
+    const char *path = "/proc/self/status";
+    FILE* file = fopen(path, "r");
+    if (!file) ERROR("Could not open %s: %s", path, strerror(errno));
+    size_t kb = 0;
+    char line[128];
+    while (fgets(line, 128, file) != NULL)
+    {
+        if (strncmp(line, "VmRSS:", 6) == 0)
+        {
+            sscanf(line + 6, "%zu", &kb);
+            if (errno != 0) ERROR("sscanf failed: %s", strerror(errno));
+            break;
+        }
+    }
+    fclose(file);
+    return kb;
+}
+
+void print_memory_usage(void)
+{
+    size_t kb = get_memory_usage();
+    if (kb >= 1024 * 1024)
+    {
+        printf("Memory usage: %.2f GB\n", (double)kb / (1024.0 * 1024.0));
+    }
+    else if (kb >= 1024)
+    {
+        printf("Memory usage: %.2f MB\n", (double)kb / 1024.0);
+    }
+    else
+    {
+        printf("Memory usage: %zu kB\n", kb);
+    }
+}
+
 char *expand_path(const char *path)
 {
     if (path == NULL || path[0] == '\0') return NULL;
@@ -197,13 +235,14 @@ MmapInfo map_file(const char *file, int prot, int flags)
     int fd = open(file, O_RDONLY);
     if (fd < 0) ERROR("Could not open %s: %s", file, strerror(errno));
     struct stat sb;
-    fstat(fd, &sb);
+    if (fstat(fd, &sb) < 0) ERROR("fstat failed: %s", strerror(errno));
     void *data = mmap(NULL, sb.st_size, prot, flags, fd, 0);
+    if (data == MAP_FAILED) ERROR("mmap failed: %s", strerror(errno));
     return (MmapInfo){data, (size_t)sb.st_size, fd};
 }
 
 void unmap_file(MmapInfo *info)
 {
-    munmap(info->data, info->bytes);
+    if (munmap(info->data, info->bytes) < 0) ERROR("munmap failed: %s", strerror(errno));
     close(info->fd);
 }

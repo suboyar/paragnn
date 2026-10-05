@@ -13,12 +13,14 @@ LDLIBS     ?=
 DEBUG      ?= 0
 OPENMP     ?= 1
 USE_DOUBLE ?= 0
+MODE       ?= convergence
 IMPL       ?= blas
+SPARSE     ?= cs
 BUILDDIR   ?= build
 TARGET_CPU ?= TARGET_CPU_GENERIC
 MARCH      ?= native
 V          ?= 0
-DATADIR ?= ~/D1/paragnn-ds
+DATADIR ?= ~/D1/paragnn-dataset
 
 # remove trailing slash if included
 BUILDDIR := $(patsubst %/,%,$(BUILDDIR))
@@ -27,10 +29,12 @@ DEFAULT_CFLAGS += -std=gnu23
 DEFAULT_CFLAGS += -Wall \
                   -Wextra \
                   -Wfloat-conversion \
-                 -Werror=implicit-function-declaration \
-                 -Werror=strict-prototypes \
-                 -Werror=incompatible-pointer-types \
-                 -Wno-unused-function
+                  -Werror=implicit-function-declaration \
+                  -Werror=strict-prototypes \
+                  -Werror=incompatible-pointer-types \
+                  -Wno-unused-function\
+                  -ggdb
+
 DEFAULT_CFLAGS += -D$(TARGET_CPU)
 # Add dummy targets for local header files
 DEFAULT_CFLAGS += -MMD -MP
@@ -38,7 +42,7 @@ DEFAULT_CFLAGS += -MMD -MP
 DEFAULT_LDLIBS = -lm -lopenblas -lnuma
 
 ifeq ($(DEBUG),1)
-    DEFAULT_CFLAGS += -O0 -ggdb -g3 -gdwarf-2 -march=$(MARCH)
+    DEFAULT_CFLAGS += -O0 -g3 -gdwarf-2 -march=$(MARCH)
     # suppress ABI warnings from platform-specific vector types
     DEFAULT_CFLAGS += -Wno-psabi
 else
@@ -56,12 +60,20 @@ ifeq ($(USE_DOUBLE),1)
     DEFAULT_CFLAGS += -DUSE_DOUBLE
 endif
 
+ifeq ($(MODE),benchmark)
+    DEFAULT_CFLAGS += -DBENCHMARK_MODE
+endif
+
 ifeq ($(IMPL),naive)
     DEFAULT_CFLAGS += -DSAGECONV_NAIVE_IMPL
 else ifeq ($(IMPL),blas)
     DEFAULT_CFLAGS += -DSAGECONV_BLAS_IMPL
 else
     DEFAULT_CFLAGS += -DSAGECONV_TUNED_IMPL
+endif
+
+ifeq ($(SPARSE),coo)
+    DEFAULT_CFLAGS += -DSPARSE_COO
 endif
 
 ALL_CFLAGS = $(strip $(DEFAULT_CFLAGS) $(CFLAGS))
@@ -133,6 +145,9 @@ bench-agg: $(call to_obj,$(AGGREGATE_SRCS)) | $(BUILDDIR)
 	$(E) "  LD    $@"
 	$(Q)$(CC) $(ALL_CFLAGS) $(ALL_LDFLAGS) -o $(BUILDDIR)/$@ $^ $(ALL_LDLIBS)
 
+# Some invalid values might be nan or inf, and they will be converted to -1, but
+# for that to happen we need to disable -ffast-math's -ffinite-math-only
+dsprep: ALL_CFLAGS += -fno-finite-math-only
 dsprep: $(call to_obj,$(DSPREP_SRC)) | $(BUILDDIR)
 	$(E) "  LD    $@"
 	$(Q)$(CC) $(ALL_CFLAGS) $(ALL_LDFLAGS) -o $(BUILDDIR)/$@ $^ $(ALL_LDLIBS) -lz
@@ -147,8 +162,15 @@ $(BUILDDIR)/%.o: %.c
 	$(E) "  CC    $<"
 	$(Q)$(CC) $(ALL_CFLAGS) -Isrc/ -c $< -o $@
 
-arxiv products papers100M: $(BUILDDIR)/dsprep
-	./$< -ds $@ -datadir $(DATADIR)
+ifeq ($(V),1)
+    DS_VERBOSE = --verbose
+endif
+
+ogbn-arxiv ogbn-products ogbn-papers100M: $(BUILDDIR)/dsprep
+	./$< --dataset $@ --root $(DATADIR) $(DS_VERBOSE)
+
+datasets: $(BUILDDIR)/dsprep
+	./$< --dataset all --root $(DATADIR) $(DS_VERBOSE)
 
 tags:
 	$(E) "  Generating etags..."
@@ -166,7 +188,8 @@ help:
 	@echo "  bench-gs                   Benchmark grad SAGEConv kernels"
 	@echo "  bench-agg                  Build aggregate kernel benchmark"
 	@echo "  dsprep                     Benchmark aggregate kernels"
-	@echo "  arxiv|products|papers100M  Prepare datasets for training"
+	@echo "  datasets                   Prepare all datasets for training"
+	@echo "  ogbn-arxiv|ogbn-products|ogbn-papers100M  Prepare datasets for training"
 	@echo "  all                        Build all targets"
 	@echo "  tags                       Generate etags file for project"
 	@echo "  clean                      Remove build directory"
@@ -178,14 +201,15 @@ help:
 	@echo "  DEBUG=0|1                  Enable debug build        [$(DEBUG)]"
 	@echo "  OPENMP=0|1                 Enable OpenMP             [$(OPENMP)]"
 	@echo "  USE_DOUBLE=0|1             Use double precision      [$(USE_DOUBLE)]"
+	@echo "  MODE=convergence|benchmark Run mode                  [$(MODE)]"
 	@echo "  IMPL=naive|blas|tuned      SAGEConv implementation   [$(IMPL)]"
+	@echo "  SPARSE=cs|coo              Sparse graph format       [$(SPARSE)]"
 	@echo "  MARCH=<arch>               Target architecture       [$(MARCH)]"
 	@echo "  BUILDDIR=<dir>             Build output directory    [$(BUILDDIR)]"
 	@echo "  PARTITION=<name>           Config partition          [$(PARTITION)]"
 	@echo "  V=0|1                      Verbose output            [$(V)]"
 	@echo ""
-	@echo "Example: make paragnn DEBUG=1 IMPL=blas"
-
+	@echo "Example: make paragnn DEBUG=1 IMPL=blas SPARSE=coo"
 .PHONY: all clean tags help \
         paragnn bench-gs aggregate \
         dsprep arxiv products papers100M
