@@ -21,8 +21,6 @@ static inline void sgd_step(SGD *restrict sgd, Real *restrict param, const Real 
 
 void sgd_update(SGD *sgd, SageNet *net)
 {
-    TIMER_FUNC();
-
     for (int64_t i = 0; i < net->layer_count; i++)
     {
         Layer layer = net->layers[i];
@@ -56,15 +54,17 @@ static void adam_step(AdamState *restrict s, Real *restrict param, const Real *r
     s->t++;
     s->beta1_t *= s->beta1;
     s->beta2_t *= s->beta2;
-    const Real bc = real_sqrt((REAL(1.0) - s->beta2_t) / (REAL(1.0) - s->beta1_t));
-    const Real lr_t = s->lr * bc;
+
+    const Real step_size = s->lr / (REAL(1.0) - s->beta1_t);
+    const Real bc2 = real_sqrt(REAL(1.0) - s->beta2_t);
+
 #pragma omp parallel for simd schedule(static)
     for (int64_t i = 0; i < n; i++)
     {
         const Real g = grad[i];
         s->m[i] = s->beta1 * s->m[i] + s->beta1_comp * g;
         s->v[i] = s->beta2 * s->v[i] + s->beta2_comp * g * g;
-        param[i] -=  lr_t * s->m[i] / (real_sqrt(s->v[i]) + s->epsilon);
+        param[i] -= step_size * s->m[i] / ((real_sqrt(s->v[i]) / bc2) + s->epsilon);
     }
 }
 
@@ -185,6 +185,7 @@ Optim *optim_create(OptimKind kind, SageNet *net, Real lr)
 
 void optim_update(Optim *optim, OptimKind kind, SageNet *net)
 {
+    TIMER_FUNC();
     switch(kind)
     {
     case OPTIM_SGD:
