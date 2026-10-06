@@ -21,6 +21,7 @@ static inline void sgd_step(SGD *restrict sgd, Real *restrict param, const Real 
 
 void sgd_update(SGD *sgd, SageNet *net)
 {
+    TIMER_FUNC();
     for (int64_t i = 0; i < net->layer_count; i++)
     {
         Layer layer = net->layers[i];
@@ -130,6 +131,7 @@ Adam* adam_create(SageNet *net, Real lr)
 
 void adam_update(Adam *adam, SageNet *net)
 {
+    TIMER_FUNC();
     int64_t s = 0;
     for (int64_t i = 0; i < net->layer_count; i++)
     {
@@ -184,7 +186,6 @@ Optim *optim_create(OptimKind kind, SageNet *net, Real lr)
 
 void optim_update(Optim *optim, SageNet *net)
 {
-    TIMER_FUNC();
     OptimKind kind = *(OptimKind*)optim;
     switch(kind)
     {

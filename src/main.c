@@ -340,13 +340,8 @@ int main(int argc, char** argv)
             });
     }
 
-    if (export_csv)
-    {
-        printf("GraphSAGE finished.\n");
-        timer_export_csv(output_fd);
-    }
-    else
-        timer_print();
+    timer_print();
+    if (export_csv) timer_export_csv(output_fd);
 
 #else
     timer_disable();
@@ -384,6 +379,7 @@ int main(int argc, char** argv)
         }
         if (output_fd == stdout) fprintf(output_fd, "--- CSV_OUTPUT_END ---\n");
     }
+
     free(loss_hist);
     free(train_hist);
     free(valid_hist);
@@ -397,6 +393,7 @@ int main(int argc, char** argv)
     dataset_free(&ds);
     free(root);
 
+    printf("GraphSAGE finished.\n");
     fflush(stdout);
     return 0;
 }
