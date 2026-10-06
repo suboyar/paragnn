@@ -44,8 +44,9 @@ BDIR="build_${SLURM_JOB_PARTITION}"
 run_cmd ulimit -v unlimited
 run_cmd make -B paragnn BUILDDIR="$BDIR" MODE=benchmark IMPL=blas SPARSE=cs V=1 1>&2
 
-OUTPUT_DIR="${OUTPUT_DIR:-results}"
-mkdir -p "$OUTPUT_DIR"
+BASE_DIR="${RESULTS_DIR:-results}"
+PARTITION_DIR="${BASE_DIR}/${SLURM_JOB_PARTITION}"
+mkdir -p "$PARTITION_DIR"
 
 run_fixed() {
     local dataset="$1"
@@ -59,7 +60,7 @@ run_fixed() {
         echo " ${dataset} (${run_label})"
         echo "----------------------------------------------------------------"
         run_cmd env OMP_NUM_THREADS="$t" OPENBLAS_NUM_THREADS="$t" OMP_PROC_BIND=true OMP_PLACES=threads numactl -C"$c" \
-                ./"$BDIR"/paragnn --dataset "$dataset" --csv --output "${OUTPUT_DIR}/${SLURM_JOB_PARTITION}_${dataset}_${run_label}.csv"
+                ./"$BDIR"/paragnn --dataset "$dataset" --csv --output "${PARTITION_DIR}/${dataset}_${run_label}.csv"
     done
 }
 
@@ -74,7 +75,7 @@ run_scaled() {
             echo " ${dataset} (${run_label})"
             echo "----------------------------------------------------------------"
             run_cmd env OMP_NUM_THREADS="$t" OPENBLAS_NUM_THREADS="$t" OMP_PROC_BIND=true OMP_PLACES=threads numactl -C"$c" \
-                    ./"$BDIR"/paragnn --dataset "$dataset" --csv --output "${OUTPUT_DIR}/${SLURM_JOB_PARTITION}_${dataset}_${run_label}.csv"
+                    ./"$BDIR"/paragnn --dataset "$dataset" --csv --output "${PARTITION_DIR}/${dataset}_${run_label}.csv"
         done
     done
 }
