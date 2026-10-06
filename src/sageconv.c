@@ -24,46 +24,45 @@ static void sage_mean_aggregate_coo(SageLayer *l)
 {
     TIMER_FUNC();
 
-    int64_t  node_count  = l->node_count;
     int64_t  edge_count  = l->edge_count;
-    int64_t  in_dim     = l->in_dim;
+    int64_t  in_dim      = l->in_dim;
+    SparseGraph *graph   = l->graph;
+    FlowDirection flow   = l->flow;
 
-    const int64_t *restrict nodes, *restrict peers;
+    int64_t *restrict roots, *restrict neighbors;
     const Real *restrict inv_degree;
-    if (l->flow == SOURCE_TO_TARGET) // e.g. src (citer) aggregates from dst (cited)
+    if (flow == SOURCE_TO_TARGET) // e.g. src (citer) aggregates from dst (cited)
     {
-        nodes = l->graph->dst;
-        peers = l->graph->src;
-        inv_degree = l->graph->inv_in_degree;
+        roots = graph->dst;
+        neighbors = graph->src;
+        inv_degree = graph->inv_in_degree;
     }
-    else // flow == TARGET_TO_SOURCE // e.g. dst (cited) aggregates from src (citer)
+    // flow == TARGET_TO_SOURCE e.g. dst (cited) aggregates from src (citer)
+    else
     {
-        nodes = l->graph->src;
-        peers = l->graph->dst;
-        inv_degree = l->graph->inv_out_degree;
+        roots = graph->src;
+        neighbors = graph->dst;
+        inv_degree = graph->inv_out_degree;
     }
 
     const Real *restrict x_in = l->x_in;
     Real       *restrict x_neigh = l->x_neigh;
 
-#pragma omp parallel for schedule(static)
-    for (int64_t n = 0; n < node_count; n++)
+#pragma omp parallel for
+    for (size_t e = 0; e < edge_count; e++)
     {
-        Real *x_neigh_ptr = &x_neigh[n*in_dim];
-        memset(x_neigh_ptr, 0, in_dim * sizeof(*x_neigh_ptr));
+        uint64_t root = roots[e];
+        uint64_t neighbor = neighbors[e];
+        const Real scale = inv_degree[root];
 
-        Real scale = inv_degree[n];
-        if (scale == REAL(0.0)) continue;
+        const Real *x_in_ptr = &x_in[neighbor * in_dim];
+        Real *x_neigh_ptr = &x_neigh[root * in_dim];
 
-        for (int64_t e = 0; e < edge_count; e++)
+        for (int64_t d = 0; d < in_dim; d++)
         {
-            if (n == nodes[e])
-            {
-                const Real *x_in_ptr = &x_in[peers[e]*in_dim];
-#pragma omp simd
-                for (int64_t d = 0; d < in_dim; d++)
-                    x_neigh_ptr[d] += x_in_ptr[d] * scale;
-            }
+            Real scaled_val = x_in_ptr[d] * scale;
+#pragma omp atomic
+            x_neigh_ptr[d] += scaled_val;
         }
     }
 }
