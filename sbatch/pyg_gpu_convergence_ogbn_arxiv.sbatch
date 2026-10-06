@@ -39,14 +39,14 @@ run_cmd ulimit -v unlimited
 echo "----------------------------------------------------------------"
 echo " ogbn-arxiv"
 echo "----------------------------------------------------------------"
-run_cmd time python pyg.py --device gpu --dataset ogbn-arxiv --epochs 1000 --num_layers 4 --hidden_channels 256
+run_cmd time python pyg.py --device gpu --dataset ogbn-arxiv --epochs 1000 --num_layers 4 --hidden_channels 256 --sparse
 
 echo "----------------------------------------------------------------"
 echo " ogbn-papers100M"
 echo "----------------------------------------------------------------"
-run_cmd time python pyg.py --device gpu --dataset ogbn-papers100M --epochs 1000 --num_layers 4 --hidden_channels 256
+run_cmd time python pyg.py --device gpu --dataset ogbn-papers100M --epochs 1000 --num_layers 4 --hidden_channels 256 --sparse
 
 echo "----------------------------------------------------------------"
 echo " ogbn-products"
 echo "----------------------------------------------------------------"
-run_cmd time python pyg.py --device gpu --dataset ogbn-products --epochs 1000 --num_layers 4 --hidden_channels 256
+run_cmd time python pyg.py --device gpu --dataset ogbn-products --epochs 1000 --num_layers 4 --hidden_channels 256 --sparse

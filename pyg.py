@@ -15,6 +15,7 @@ from torch_geometric.data.storage import GlobalStorage
 torch.serialization.add_safe_globals([DataEdgeAttr, DataTensorAttr, GlobalStorage])
 import torch_geometric.transforms as T
 from torch_geometric.nn import SAGEConv
+from torch_geometric.utils import to_undirected
 
 from ogb.nodeproppred import PygNodePropPredDataset, Evaluator
 
@@ -54,20 +55,20 @@ class SAGE(torch.nn.Module):
         for conv in self.convs:
             conv.reset_parameters()
 
-    def forward(self, x, adj_t):
+    def forward(self, x, edge_index):
         for i, conv in enumerate(self.convs[:-1]):
-            x = conv(x, adj_t)
+            x = conv(x, edge_index)
             x = F.relu(x)
             x = F.normalize(x, p=2., dim=-1)
-        x = self.convs[-1](x, adj_t)
+        x = self.convs[-1](x, edge_index)
         result = x.log_softmax(dim=-1)
         return result
 
 def train(model, data, train_idx, optimizer):
     model.train()
-
     optimizer.zero_grad()
-    out = model(data.x, data.adj_t)[train_idx]
+    edges = data.adj_t if hasattr(data, 'adj_t') else data.edge_index
+    out = model(data.x, edges)[train_idx]
     loss = F.nll_loss(out, data.y.squeeze(1)[train_idx])
     loss.backward()
     optimizer.step()
@@ -78,7 +79,8 @@ def train(model, data, train_idx, optimizer):
 def test(model, data, split_idx, evaluator):
     model.eval()
 
-    out = model(data.x, data.adj_t)
+    edges = data.adj_t if hasattr(data, 'adj_t') else data.edge_index
+    out = model(data.x, edges)
     y_pred = out.argmax(dim=-1, keepdim=True)
 
     train_acc = evaluator.eval({
@@ -120,12 +122,14 @@ if __name__ == "__main__":
     parser.add_argument('--lr', type=float, default=0.01, help="Learning rate")
     parser.add_argument('--epochs', type=int, default=1000, help="Training epochs")
     parser.add_argument('--benchmark', action='store_true', help="Run benchmark")
-    parser.add_argument('--losstrack', action='store_true', help="Track loss")
+    parser.add_argument('--sparse', action='store_true', help="Run benchmark")
     parser.add_argument('--dataset', type=str, default="ogbn-arxiv", choices=["ogbn-arxiv","ogbn-products","ogbn-papers100M"], help="Dataset to use")
     parser.add_argument('--root', type=str, default="~/D1/pyg-dataset", help="Dataset root directory")
 
     args = parser.parse_args()
     args.root = os.path.expanduser(args.root)
+    if args.benchmark:
+       args.epochs = 10
     print(args)
 
     torch.manual_seed(0)
@@ -134,10 +138,16 @@ if __name__ == "__main__":
     print(f"Using device: {device}")
     device = torch.device(device)
     to_symmetric = {"ogbn-arxiv": True, "ogbn-products": False, "ogbn-papers100M": True}
-    dataset = PygNodePropPredDataset(name=args.dataset, root=args.root, transform=T.ToSparseTensor())
+    sparse = None
+    if args.sparse:
+        sparse = T.ToSparseTensor()
+    dataset = PygNodePropPredDataset(name=args.dataset, root=args.root, transform=sparse)
     data = dataset[0]
     if to_symmetric[args.dataset]:
-        data.adj_t = data.adj_t.to_symmetric()
+        if args.sparse:
+            data.adj_t = data.adj_t.to_symmetric()
+        else:
+            data.edge_index = to_undirected(data.edge_index)
     data = data.to(device)
 
     split_idx = dataset.get_idx_split()
@@ -161,7 +171,7 @@ if __name__ == "__main__":
             torch.cuda.synchronize()
         start_time = time.perf_counter()
         epoch_times = []
-        for ep in range(0, 10):
+        for ep in range(0, args.epochs):
             if device.type == 'cuda':
                 torch.cuda.synchronize()
             start_time = time.perf_counter()
@@ -175,13 +185,23 @@ if __name__ == "__main__":
             epoch_times.append(end_time - start_time)
 
         epoch_times = np.array(epoch_times)
-        print(f"Total Time:  {np.sum(epoch_times):.4f} s")
-        print(f"Avg Time:    {np.mean(epoch_times):.4f} s")
-        print(f"Std Dev:     {np.std(epoch_times):.4f} s")
-        print(f"Min Time:    {np.min(epoch_times):.4f} s")
-        print(f"Max Time:    {np.max(epoch_times):.4f} s")
-        print(f"P95 Time:    {np.percentile(epoch_times, 95):.4f} s")
-        print(f"P99 Time:    {np.percentile(epoch_times, 99):.4f} s")
+        if True:
+            print("\n--- CSV_OUTPUT_BEGIN ---")
+            print("dataset,sparse,total,avg,std,min,max,p95,p99,epochs")
+            print(f"{args.dataset},{str(args.sparse).lower()},"
+                  f"{np.sum(epoch_times)},{np.mean(epoch_times)},"
+                  f"{np.std(epoch_times)},{np.min(epoch_times)},"
+                  f"{np.max(epoch_times)},{np.percentile(epoch_times, 95)},"
+                  f"{np.percentile(epoch_times, 99)},{args.epochs}")
+            print("--- CSV_OUTPUT_END ---")
+        else:
+                print(f"Total Time:  {np.sum(epoch_times):.4f} s")
+                print(f"Avg Time:    {np.mean(epoch_times):.4f} s")
+                print(f"Std Dev:     {np.std(epoch_times):.4f} s")
+                print(f"Min Time:    {np.min(epoch_times):.4f} s")
+                print(f"Max Time:    {np.max(epoch_times):.4f} s")
+                print(f"P95 Time:    {np.percentile(epoch_times, 95):.4f} s")
+                print(f"P99 Time:    {np.percentile(epoch_times, 99):.4f} s")
     else:
         for ep in range(1, args.epochs+1):
             loss = train(model, data, train_idx, optimizer)
