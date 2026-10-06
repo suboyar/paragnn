@@ -277,7 +277,6 @@ int main(int argc, char** argv)
         fprintf(stderr,
                 "Warning: OpenBLAS thread count is 1. Set OPENBLAS_NUM_THREADS (for non-OpenMP), "
                 "OMP_NUM_THREADS (for OpenMP builds) or call openblas_set_num_threads()\n");
-        return 1;
     }
 
     omp_set_dynamic(0);
