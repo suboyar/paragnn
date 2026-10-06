@@ -26,61 +26,68 @@ run_cmd() {
     "$@"
 }
 
+count_threads() {
+    local count=0
+    local IFS=','
+    for part in $1; do
+        if [[ $part == *-* ]]; then
+            (( count += ${part#*-} - ${part%-*} + 1 ))
+        else
+            (( count += 1 ))
+        fi
+    done
+    echo "$count"
+}
+
 BDIR="build_${SLURM_JOB_PARTITION}"
 
 run_cmd ulimit -v unlimited
-run_cmd make -B paragnn BUILDDIR="$BDIR" MODE=benchmark IMPL=blas SPARSE=coo > /dev/null
+run_cmd make -B paragnn BUILDDIR="$BDIR" MODE=benchmark IMPL=blas SPARSE=cs V=1 1>&2
 
-run_test() {
+OUTPUT_DIR="${OUTPUT_DIR:-results}"
+mkdir -p "$OUTPUT_DIR"
+
+run_fixed() {
     local dataset="$1"
-    echo
-    echo "----------------------------------------------------------------"
-    echo " ${dataset} (1s)"
-    echo "----------------------------------------------------------------"
-    run_cmd numactl -C$(./cpumap 1s) ./"$BDIR"/paragnn --dataset "$dataset"
+    for mode in "1s" "1s-smt" "2s" "2s-smt"; do
+        local c=$(./cpumap ${mode})
+        local t=$(count_threads "$c")
+        local run_label="${mode}-${t}t"
 
-    echo
-    echo "----------------------------------------------------------------"
-    echo " ${dataset} (1s-smt)"
-    echo "----------------------------------------------------------------"
-    run_cmd numactl -C$(./cpumap 1s-smt) ./"$BDIR"/paragnn --dataset "$dataset"
-
-    echo
-    echo "----------------------------------------------------------------"
-    echo " ${dataset} (2s)"
-    echo "----------------------------------------------------------------"
-    run_cmd numactl -C$(./cpumap 2s) ./"$BDIR"/paragnn --dataset "$dataset"
-
-    echo
-    echo "----------------------------------------------------------------"
-    echo " ${dataset} (2s-smt)"
-    echo "----------------------------------------------------------------"
-    run_cmd numactl -C$(./cpumap 2s-smt) ./"$BDIR"/paragnn --dataset "$dataset"
-
-    echo
-    echo "----------------------------------------------------------------"
-    echo " ${dataset} (scale-1s)"
-    echo "----------------------------------------------------------------"
-    for c in $(./cpumap scale-1s); do run_cmd numactl -C"$c" ./"$BDIR"/paragnn --dataset "$dataset"; done
-
-    echo
-    echo "----------------------------------------------------------------"
-    echo " ${dataset} (scale-1s-smt)"
-    echo "----------------------------------------------------------------"
-    for c in $(./cpumap scale-1s-smt); do run_cmd numactl -C"$c" ./"$BDIR"/paragnn --dataset "$dataset"; done
-
-    echo
-    echo "----------------------------------------------------------------"
-    echo " ${dataset} (scale-2s)"
-    echo "----------------------------------------------------------------"
-    for c in $(./cpumap scale-2s); do run_cmd numactl -C"$c" ./"$BDIR"/paragnn --dataset "$dataset"; done
-
-    echo
-    echo "----------------------------------------------------------------"
-    echo " ${dataset} (scale-2s-smt)"
-    echo "----------------------------------------------------------------"
-    for c in $(./cpumap scale-2s-smt); do run_cmd numactl -C"$c" ./"$BDIR"/paragnn --dataset "$dataset"; done
+        echo
+        echo "----------------------------------------------------------------"
+        echo " ${dataset} (${run_label})"
+        echo "----------------------------------------------------------------"
+        run_cmd env OMP_NUM_THREADS="$t" OPENBLAS_NUM_THREADS="$t" OMP_PROC_BIND=true OMP_PLACES=threads numactl -C"$c" \
+                ./"$BDIR"/paragnn --dataset "$dataset" --csv --output "${OUTPUT_DIR}/${SLURM_JOB_PARTITION}_${dataset}_${run_label}.csv"
+    done
 }
 
-run_test "ogbn-arxiv"
-run_test "ogbn-products"
+run_scaled() {
+    local dataset="$1"
+    for mode in "scale-1s" "scale-1s-smt" "scale-2s" "scale-2s-smt"; do
+        for c in $(./cpumap ${mode}); do
+            local t=$(count_threads "$c")
+            local run_label="${mode#scale-}-${t}t"
+            echo
+            echo "----------------------------------------------------------------"
+            echo " ${dataset} (${run_label})"
+            echo "----------------------------------------------------------------"
+            run_cmd env OMP_NUM_THREADS="$t" OPENBLAS_NUM_THREADS="$t" OMP_PROC_BIND=true OMP_PLACES=threads numactl -C"$c" \
+                    ./"$BDIR"/paragnn --dataset "$dataset" --csv --output "${OUTPUT_DIR}/${SLURM_JOB_PARTITION}_${dataset}_${run_label}.csv"
+        done
+    done
+}
+
+case "$SLURM_JOB_PARTITION" in
+    gh200q|h200q|genoaxq)
+        run_scaled "ogbn-arxiv"
+        run_scaled "ogbn-products"
+        run_fixed "ogbn-papers100M"
+        ;;
+    *)
+        run_fixed "ogbn-arxiv"
+        run_fixed "ogbn-products"
+        run_fixed "ogbn-papers100M"
+        ;;
+esac
