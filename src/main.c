@@ -275,7 +275,7 @@ int main(int argc, char** argv)
     if (openblas_num_threads == 1)
     {
         fprintf(stderr,
-                "Error: OpenBLAS thread count is 1. Set OPENBLAS_NUM_THREADS (for non-OpenMP), "
+                "Warning: OpenBLAS thread count is 1. Set OPENBLAS_NUM_THREADS (for non-OpenMP), "
                 "OMP_NUM_THREADS (for OpenMP builds) or call openblas_set_num_threads()\n");
         return 1;
     }
@@ -341,9 +341,13 @@ int main(int argc, char** argv)
     }
 
     if (export_csv)
+    {
+        printf("GraphSAGE finished.\n");
         timer_export_csv(output_fd);
+    }
     else
         timer_print();
+
 #else
     timer_disable();
 
@@ -392,6 +396,8 @@ int main(int argc, char** argv)
     sage_net_free(&net);
     dataset_free(&ds);
     free(root);
+
+    fflush(stdout);
     return 0;
 }
 

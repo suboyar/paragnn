@@ -112,15 +112,20 @@ const DatasetInfo ds_infos[] = {
 
 DatasetKind str_to_dataset_kind(const char *str)
 {
-    if (strcmp(str, "ogbn-proteins") == 0)
-        return DATASET_PROTEINS;
-    // if (strcmp(str, "ogbn-products") == 0)
-    //     return DATASET_PRODUCTS;
     if (strcmp(str, "ogbn-arxiv") == 0)
         return DATASET_ARXIV;
-    // if (strcmp(str, "ogbn-mag") == 0)
-    //     return DATASET_MAG;
+    if (strcmp(str, "ogbn-products") == 0)
+        return DATASET_PRODUCTS;
     if (strcmp(str, "ogbn-papers100M") == 0)
         return DATASET_PAPERS100M;
+
+    // These are currently disable as I haven't implememnted ROC-AUC and
+    // handling heterogeneous graphs.
+
+    // if (strcmp(str, "ogbn-proteins") == 0)
+    //     return DATASET_PROTEINS;
+    // if (strcmp(str, "ogbn-mag") == 0)
+    //     return DATASET_MAG;
+
     return DATASET_INVALID;
 }
