@@ -330,7 +330,6 @@ static void benchmark_kernel(Dataset *ds, int64_t in_dim, int64_t out_dim)
         do_interleave = 1;
 #endif // FIRST_TOUCH
 
-// TODO: Fix segfault when RUN_COMPLETE_GRAD_SAGECONV is enabled
 #if defined(RUN_COMPLETE_GRAD_SAGECONV)
         SageLayer *l = ALLOC_OR_DIE(malloc(sizeof(*l)));
         *l = (SageLayer) {

@@ -84,19 +84,19 @@ void membw_stop_all(void)  { apply_action_all(stop_events);  }
 void membw_close_1(void) { apply_action_1(close_events); free(global_metrics); global_metrics = NULL; }
 void membw_close_all(void) { apply_action_all(close_events); free(global_metrics); global_metrics = NULL; }
 
-int64_t membw_get_llc_load_miss_1()          { return get_metric_1(offsetof(MemBWMetrics, llc_load_miss));    }
-int64_t membw_get_llc_load_miss_all()        { return get_metric_all(offsetof(MemBWMetrics, llc_load_miss));  }
+int64_t membw_get_llc_load_miss_1(void)          { return get_metric_1(offsetof(MemBWMetrics, llc_load_miss));    }
+int64_t membw_get_llc_load_miss_all(void)        { return get_metric_all(offsetof(MemBWMetrics, llc_load_miss));  }
 
-int64_t membw_get_llc_store_miss_1()         { return get_metric_1(offsetof(MemBWMetrics, llc_store_miss));   }
-int64_t membw_get_llc_store_miss_all()       { return get_metric_all(offsetof(MemBWMetrics, llc_store_miss)); }
+int64_t membw_get_llc_store_miss_1(void)         { return get_metric_1(offsetof(MemBWMetrics, llc_store_miss));   }
+int64_t membw_get_llc_store_miss_all(void)       { return get_metric_all(offsetof(MemBWMetrics, llc_store_miss)); }
 
-int64_t membw_get_l3_local_cache_miss_1()    { return get_metric_1(offsetof(MemBWMetrics, l3_miss_local));    }
-int64_t membw_get_l3_local_cache_miss_all()  { return get_metric_all(offsetof(MemBWMetrics, l3_miss_local));  }
+int64_t membw_get_l3_local_cache_miss_1(void)    { return get_metric_1(offsetof(MemBWMetrics, l3_miss_local));    }
+int64_t membw_get_l3_local_cache_miss_all(void)  { return get_metric_all(offsetof(MemBWMetrics, l3_miss_local));  }
 
-int64_t membw_get_l3_remote_cache_miss_1()   { return get_metric_1(offsetof(MemBWMetrics, l3_miss_remote));   }
-int64_t membw_get_l3_remote_cache_miss_all() { return get_metric_all(offsetof(MemBWMetrics, l3_miss_remote)); }
+int64_t membw_get_l3_remote_cache_miss_1(void)   { return get_metric_1(offsetof(MemBWMetrics, l3_miss_remote));   }
+int64_t membw_get_l3_remote_cache_miss_all(void) { return get_metric_all(offsetof(MemBWMetrics, l3_miss_remote)); }
 
-uint64_t membw_get_bytes_loaded_1()
+uint64_t membw_get_bytes_loaded_1(void)
 {
     int64_t bytes_load = membw_get_llc_load_miss_1();
     int64_t bytes_store = membw_get_llc_store_miss_1();
@@ -115,7 +115,7 @@ uint64_t membw_get_bytes_loaded_1()
     return UINT64_MAX;
 }
 
-uint64_t membw_get_bytes_loaded_all()
+uint64_t membw_get_bytes_loaded_all(void)
 {
     int64_t bytes_load = membw_get_llc_load_miss_all();
     int64_t bytes_store = membw_get_llc_store_miss_all();

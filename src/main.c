@@ -49,12 +49,6 @@ static bool         quick;
 
 void print_config(void)
 {
-#if defined(BENCHMARK_MODE)
-    const char *mode = "benchmark";
-#else
-    const char *mode = "convergence";
-#endif
-
 #if defined(SAGECONV_NAIVE_IMPL)
     const char *impl = "naive";
 #elif defined(SAGECONV_BLAS_IMPL)
@@ -62,23 +56,25 @@ void print_config(void)
 #else
     const char *impl = "tuned";
 #endif
-
-#if defined(SPARSE_COO)
-    const char *sparse_format_name = "SPARSE_FORMAT_COO";
-#else
-    const char *sparse_format_name = "SPARSE_FORMAT_CS";
-#endif
-
-
-    printf("mode=%s impl=%s prec=%s epochs=%zu lr=%g layers=%zu hidden=%zu sparse=%s data=%s "
-           "omp=%d blas=%d partition=%s\n"
-           "openblas: %s\n",
-           mode, impl,
-           sizeof(Real) == sizeof(double) ? "dp" : "sp",
-           epochs, lr, layers, channels, sparse_format_name, ds_infos[datasetkind].name,
-           omp_get_max_threads(), openblas_get_num_threads(),
-           getenv("SLURM_JOB_PARTITION"),
+    char *o_path = export_csv ? fd_to_path(output_fd) : strdup("none");
+    const char *partition = getenv("SLURM_JOB_PARTITION");
+    printf("mode=%s impl=%s precision=%s epochs=%zu lr=%g layers=%zu hidden=%zu sparse=%s data=%s root=%s quick=%s export-csv=%s\n"
+           "Files: output=%s\n"
+           "Environment: partition=%s, %d OMP threads, %d OpenBLAS threads, %d NUMA node(s)\n"
+           "BLAS Config: %s\n",
+           IS_DEFINED(BENCHMARK_MODE) ? "benchmark" : "convergence",
+           impl,
+           sizeof(Real) == sizeof(double) ? "fp64" : "fp32",
+           epochs, lr, layers, channels,
+           IS_DEFINED(SPARSE_COO) ? "SPARSE_FORMAT_COO" : "SPARSE_FORMAT_CS",
+           ds_infos[datasetkind].name,
+           root ? root : "none",
+           quick ? "yes" : "no",
+           export_csv ? "yes" : "no",
+           o_path,
+           partition ? partition : "none", omp_get_max_threads(), openblas_get_num_threads(), get_active_numa_nodes(),
            openblas_get_config());
+    free(o_path);
 }
 
 static void inference(SageNet *net)
@@ -323,6 +319,7 @@ int main(int argc, char** argv)
     Optim *optim = optim_create(OPTIM_ADAM, net, lr);
 
     printf("GraphSAGE starting...\n");
+
 #if defined(BENCHMARK_MODE)
     timer_enable();
 

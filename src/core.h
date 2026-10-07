@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <stdbool.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -17,6 +18,12 @@
 
 #define LIKELY(x) __builtin_expect(!!(x), 1)
 #define UNLIKELY(x) __builtin_expect(!!(x), 0)
+
+#define __ARG_PLACEHOLDER_1 0,
+#define __TAKE_SECOND_ARG(__ignored, val, ...) val
+#define __IS_DEFINED(arg1_or_junk)  __TAKE_SECOND_ARG(arg1_or_junk 1, 0)
+#define _IS_DEFINED(val)            __IS_DEFINED(__ARG_PLACEHOLDER_##val)
+#define IS_DEFINED(x)               _IS_DEFINED(x)
 
 #if defined(USE_DOUBLE)
 #define Real      double
@@ -186,6 +193,7 @@ char *expand_path(const char *path);
 void mkdir_recursive(const char *path);
 const char *path_name(const char *path);
 bool file_exists(const char *file_path);
+char* fd_to_path(FILE *fp);
 
 MmapInfo map_file(const char *file, int prot, int flags);
 void unmap_file(MmapInfo *info);

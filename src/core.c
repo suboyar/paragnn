@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include <fcntl.h>
+#include <limits.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -228,6 +229,22 @@ bool file_exists(const char *file_path)
         ERROR("Could not check if file %s exists: %s", file_path, strerror(errno));
     }
     return true;
+}
+
+char* fd_to_path(FILE *fp)
+{
+    if (!fp) return strdup("");
+    if (fp == stdout) return strdup("stdout");
+    if (fp == stderr) return strdup("stderr");
+
+    char proc_path[64];
+    snprintf(proc_path, sizeof(proc_path), "/proc/self/fd/%d", fileno(fp));
+
+    char tmp[PATH_MAX];
+    ssize_t len = readlink(proc_path, tmp, sizeof(tmp));
+    if (len < 0) return strdup("unknown");
+
+    return strndup(tmp, (size_t)len);
 }
 
 MmapInfo map_file(const char *file, int prot, int flags)
