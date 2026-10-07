@@ -101,7 +101,6 @@ BENCH_GS_SRCS := benchmark/grad_sageconv/main.c \
                  benchmark/grad_sageconv/outer_tn_v1.c \
                  benchmark/grad_sageconv/outer_tn_v2.c \
                  benchmark/grad_sageconv/outer_tn_v3.c \
-                 benchmark/grad_sageconv/grad_mean_aggregate.c \
                  benchmark/membw.c \
                  src/core.c \
                  src/ds.c \
