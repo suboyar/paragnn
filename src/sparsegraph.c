@@ -169,7 +169,6 @@ static void load_cs(SparseGraph *graph)
 
     int64_t *src = data;
     int64_t *dst = data + graph->edge_count;
-    int64_t sum_csr = 0, sum_csc = 0;
 #pragma omp parallel
     {
 #pragma omp for
@@ -188,6 +187,16 @@ static void load_cs(SparseGraph *graph)
             graph->ptr_csc[dst[i]+1]++;
         }
 
+
+#if 0
+        // GCC's implementation of OpenMP `inscan` reduction allocates
+        // per-thread temporary buffers proportional to the loop bound. With
+        // high thread counts, this spikes virtual memory usage beyond standard
+        // `ulimit -v` caps. A sequential prefix sum in `omp single` avoids this
+        // overhead with negligible time cost.
+        static int64_t sum_csr = 0, sum_csc = 0;
+#pragma omp single
+        { sum_csr = 0; sum_csc = 0; }
 #pragma omp for simd reduction(inscan, +:sum_csr, sum_csc)
         for(int64_t i = 1; i <= graph->node_count; i++)
         {
@@ -198,6 +207,20 @@ static void load_cs(SparseGraph *graph)
             graph->ptr_csr[i] = sum_csr;
             graph->ptr_csc[i] = sum_csc;
         }
+
+#else
+#pragma omp single
+        {
+            int64_t local_sum_csr = 0, local_sum_csc = 0;
+            for(int64_t i = 1; i <= graph->node_count; i++)
+            {
+                local_sum_csr += graph->ptr_csr[i];
+                local_sum_csc += graph->ptr_csc[i];
+                graph->ptr_csr[i] = local_sum_csr;
+                graph->ptr_csc[i] = local_sum_csc;
+            }
+        }
+#endif
 
 #pragma omp for
         for (int64_t i = 0; i < graph->node_count; i++)
