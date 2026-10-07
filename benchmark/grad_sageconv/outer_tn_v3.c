@@ -10,13 +10,13 @@
 
 #include "core.h"
 #include "layers.h"
-#include "params.h"
+#include "outer_tn_params.h"
 #include "vreg.h"
 
 static void pack_A(const Real *restrict A, int64_t lda, Real *restrict Ap, int64_t cols, int64_t rows);
 static void pack_B(const Real *restrict B, int64_t ldb, Real *restrict Bp, int64_t rows, int64_t cols);
 static void microkernel_MRxNR(int64_t k, const Real *restrict A, const Real *restrict B, Real *restrict C, int64_t ldc, int first_time);
-static void reduction(int64_t M, int64_t N, int64_t M_pad, int64_t N_pad, int nthreads, Real *restrict C, int64_t ldc, Real *restrict Cl, int64_t ldcl, Real *all_Cl[]);
+static void reduction(int64_t M, int64_t N, int nthreads, Real *restrict C, int64_t ldc, Real *all_Cl[], int64_t ldcl);
 
 void outer_tn_v3_touch(int64_t M, int64_t N, int64_t K,
                        Real *restrict A, int64_t lda,
@@ -73,21 +73,21 @@ void outer_tn_v3(int64_t M, int64_t N, int64_t K,
         if (M_pad != local_M_pad)
         {
             free(Ap);
-            Ap = cache_aligned_alloc((size_t)KC * M_pad * sizeof(Real));
+            Ap = alloc_local((size_t)KC * M_pad * sizeof(Real));
             needs_cl_realloc = 1;
         }
 
         if (N_pad != local_N_pad)
         {
             free(Bp);
-            Bp = cache_aligned_alloc((size_t)KC * N_pad * sizeof(Real));
+            Bp = alloc_local((size_t)KC * N_pad * sizeof(Real));
             needs_cl_realloc = 1;
         }
 
         if (needs_cl_realloc)
         {
             free(Cl);
-            Cl = cache_aligned_alloc((size_t)M_pad * ldcl * sizeof(Real));
+            Cl = alloc_local((size_t)M_pad * ldcl * sizeof(Real));
         }
 
         local_M_pad = M_pad;
@@ -135,8 +135,7 @@ void outer_tn_v3(int64_t M, int64_t N, int64_t K,
 
 #pragma omp barrier
 
-        // Reduction
-        reduction(M, N, M_pad, N_pad, actual_nthreads, C, ldc, local_Cl, ldcl, all_Cl);
+        reduction(M, N, actual_nthreads, C, ldc, all_Cl, ldcl);
     }
 }
 
@@ -292,11 +291,9 @@ static void microkernel_MRxNR(int64_t k,
 }
 
 static void reduction(int64_t M, int64_t N,
-                      int64_t M_pad, int64_t N_pad,
                       int nthreads,
                       Real *restrict C, int64_t ldc,
-                      Real *restrict Cl, int64_t ldcl,
-                      Real *all_Cl[])
+                      Real *all_Cl[], int64_t ldcl)
 {
 #pragma omp for schedule(static)
     for (int64_t i = 0; i < M; i++)
@@ -310,14 +307,66 @@ static void reduction(int64_t M, int64_t N,
             VReal sum[UNROLL_FACTOR];
 
             PRAGMA_UNROLL(UNROLL_FACTOR)
-            for (int iv = 0; iv < UNROLL_FACTOR; iv++) {
+            for (int iv = 0; iv < UNROLL_FACTOR; iv++)
                 sum[iv] = vrbcast((Real)0.0);
-            }
 
             PRAGMA_UNROLL(4)
             for (int t = 0; t < nthreads; t++)
             {
+                const Real *restrict in_row = &all_Cl[t][i * ldcl];
+
+                PRAGMA_UNROLL(UNROLL_FACTOR)
+                for (int iv = 0; iv < UNROLL_FACTOR; iv++)
+                    sum[iv] += vrload(in_row + j + iv * N_VEC);
+            }
+
+            PRAGMA_UNROLL(UNROLL_FACTOR)
+            for (int iv = 0; iv < UNROLL_FACTOR; iv++) {
+                stream_vrstore(out_row + j + iv * N_VEC, sum[iv]);
+            }
+        }
+#undef UNROLL_FACTOR
+
+        for (; j < N; j++)
+        {
+            Real sum_scalar = (Real)0.0;
+            for (int t = 0; t < nthreads; t++)
+                sum_scalar += all_Cl[t][i * ldcl + j];
+            out_row[j] = sum_scalar;
+        }
+    }
+}
+
+/*
+static void reduction(int64_t M, int64_t N,
+                      int64_t M_pad, int64_t N_pad,
+                      int nthreads,
+                      Real *restrict C, int64_t ldc,
+                      Real *restrict Cl, int64_t ldcl,
+                      Real *all_Cl[])
+{
+#pragma omp for schedule(static)
+    for (int64_t i = 0; i < M; i++)
+    {
+        Real *out_row = &C[i * ldc];
+        int64_t j = 0;
+
+#define UNROLL_FACTOR (NUM_REGS/2)
+        for (; j + UNROLL_FACTOR * N_VEC <= N; j += UNROLL_FACTOR * N_VEC)
+        {
+            VReal sum[UNROLL_FACTOR];
+            const Real *in_row_t0 = &all_Cl[0][i * ldcl];
+
+            PRAGMA_UNROLL(UNROLL_FACTOR)
+            for (int iv = 0; iv < UNROLL_FACTOR; iv++) {
+                sum[iv] = vrload(in_row_t0 + j + iv * N_VEC);
+            }
+
+            for (int t = 1; t < nthreads; t++)
+            {
                 const Real *in_row = &all_Cl[t][i * ldcl];
+
+                __builtin_prefetch(in_row + j + UNROLL_FACTOR * N_VEC, 0, 1);
 
                 PRAGMA_UNROLL(UNROLL_FACTOR)
                 for (int iv = 0; iv < UNROLL_FACTOR; iv++) {
@@ -332,14 +381,15 @@ static void reduction(int64_t M, int64_t N,
         }
 #undef UNROLL_FACTOR
 
+        // Scalar remainder loop optimized similarly
         for (; j < N; j++)
         {
-            Real sum_scalar = (Real)0.0;
-            for (int t = 0; t < nthreads; t++)
-            {
+            Real sum_scalar = all_Cl[0][i * ldcl + j];
+            for (int t = 1; t < nthreads; t++) {
                 sum_scalar += all_Cl[t][i * ldcl + j];
             }
             out_row[j] = sum_scalar;
         }
     }
 }
+*/

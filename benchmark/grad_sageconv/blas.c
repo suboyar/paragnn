@@ -2,6 +2,7 @@
 #include <cblas.h>
 
 #include "core.h"
+#include "layers.h"
 
 void cblas_gemm_touch(int64_t M, int64_t N, int64_t K,
                       Real *restrict A, int64_t lda,
@@ -28,9 +29,9 @@ void cblas_gemm_touch(int64_t M, int64_t N, int64_t K,
 }
 
 void cblas_gemm(int64_t M, int64_t N, int64_t K,
-                const Real *restrict A, int64_t lda,
-                const Real *restrict B, int64_t ldb,
-                Real *restrict C, int64_t ldc)
+          const Real *restrict A, int64_t lda,
+          const Real *restrict B, int64_t ldb,
+          Real *restrict C, int64_t ldc)
 {
     cblas_rgemm(CblasRowMajor,
                 CblasTrans, CblasNoTrans,

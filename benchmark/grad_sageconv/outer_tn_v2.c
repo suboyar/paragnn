@@ -8,7 +8,7 @@
 #include <omp.h>
 
 #include "core.h"
-#include "params.h"
+#include "outer_tn_params.h"
 #include "vreg.h"
 
 static void pack_panel(const Real *restrict X, int64_t ldx, Real *restrict Xp, int64_t rows, int64_t cols, int64_t cols_aligned, int64_t panel);
@@ -69,21 +69,21 @@ void outer_tn_v2(int64_t M, int64_t N, int64_t K,
         if (M_pad != local_M_pad)
         {
             free(Ap);
-            Ap = cache_aligned_alloc((size_t)KC * M_pad * sizeof(Real));
+            Ap = alloc_local((size_t)KC * M_pad * sizeof(Real));
             needs_cl_realloc = 1;
         }
 
         if (N_pad != local_N_pad)
         {
             free(Bp);
-            Bp = cache_aligned_alloc((size_t)KC * N_pad * sizeof(Real));
+            Bp = alloc_local((size_t)KC * N_pad * sizeof(Real));
             needs_cl_realloc = 1;
         }
 
         if (needs_cl_realloc)
         {
             free(Cl);
-            Cl = cache_aligned_alloc((size_t)M_pad * ldcl * sizeof(Real));
+            Cl = alloc_local((size_t)M_pad * ldcl * sizeof(Real));
         }
 
         local_M_pad = M_pad;

@@ -81,8 +81,8 @@ void membw_start_all(void) { apply_action_all(start_events); }
 void membw_stop_1(void)    { apply_action_1(stop_events);    }
 void membw_stop_all(void)  { apply_action_all(stop_events);  }
 
-void membw_close_1(void)   { apply_action_1(close_events);   }
-void membw_close_all(void) { apply_action_all(close_events); }
+void membw_close_1(void) { apply_action_1(close_events); free(global_metrics); global_metrics = NULL; }
+void membw_close_all(void) { apply_action_all(close_events); free(global_metrics); global_metrics = NULL; }
 
 int64_t membw_get_llc_load_miss_1()          { return get_metric_1(offsetof(MemBWMetrics, llc_load_miss));    }
 int64_t membw_get_llc_load_miss_all()        { return get_metric_all(offsetof(MemBWMetrics, llc_load_miss));  }
@@ -107,12 +107,12 @@ uint64_t membw_get_bytes_loaded_1()
     int64_t bytes_remote = membw_get_l3_remote_cache_miss_1();
     if (bytes_local != -1 || bytes_remote != -1) {
         uint64_t total = 0;
-        if (bytes_local != -1) total += bytes_local;
-        if (bytes_remote != -1) total += bytes_remote;
+        if (bytes_local != -1) total += (uint64_t)bytes_local;
+        if (bytes_remote != -1) total += (uint64_t)bytes_remote;
         return total;
     }
 
-    return -1;
+    return UINT64_MAX;
 }
 
 uint64_t membw_get_bytes_loaded_all()
@@ -136,13 +136,13 @@ uint64_t membw_get_bytes_loaded_all()
 double membw_get_bw_1(double time)
 {
     uint64_t bytes = membw_get_bytes_loaded_1();
-    return (bytes != -1) ? (double)bytes / time : -1.0;
+    return (bytes != UINT64_MAX) ? (double)bytes / time : -1.0;
 }
 
 double membw_get_bw_all(double time)
 {
     uint64_t bytes = membw_get_bytes_loaded_all();
-    return (bytes != -1) ? (double)bytes / time : -1.0;
+    return (bytes != UINT64_MAX) ? (double)bytes / time : -1.0;
 }
 
 static long perf_event_open(struct perf_event_attr *hw_event, pid_t pid, int cpu, int group_fd, unsigned long flags)

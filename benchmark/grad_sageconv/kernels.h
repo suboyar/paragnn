@@ -22,19 +22,22 @@ typedef void (*TouchFunc)(KERNEL_TOUCH_ARGS);
 // Kernel declerations
 void naive_touch(KERNEL_TOUCH_ARGS);
 void naive(KERNEL_ARGS);
+void grad_sageconv_naive(SageLayer *l);
 
 void cblas_gemm_touch(KERNEL_TOUCH_ARGS);
 void cblas_gemm(KERNEL_ARGS);
+void grad_sageconv_cblas_gemm(SageLayer *l);
 
 void outer_tn_v1_touch(KERNEL_TOUCH_ARGS);
 void outer_tn_v1(KERNEL_ARGS);
+void grad_sageconv_outer_tn_v1(SageLayer *l);
 
 void outer_tn_v2_touch(KERNEL_TOUCH_ARGS);
 void outer_tn_v2(KERNEL_ARGS);
+void grad_sageconv_outer_tn_v2(SageLayer *l);
 
 void outer_tn_v3_touch(KERNEL_TOUCH_ARGS);
 void outer_tn_v3(KERNEL_ARGS);
-
-void grad_sageconv(SageLayer *l, KernelFunc kernel);
+void grad_sageconv_outer_tn_v3(SageLayer *l);
 
 #endif // KERNELS_H

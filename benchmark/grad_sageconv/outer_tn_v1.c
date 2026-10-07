@@ -8,6 +8,7 @@
 #include <omp.h>
 
 #include "core.h"
+#include "layers.h"
 
 void outer_tn_v1_touch(int64_t M, int64_t N, int64_t K,
                        Real *restrict A, int64_t lda,
@@ -50,7 +51,7 @@ void outer_tn_v1(int64_t M, int64_t N, int64_t K,
         int tid = omp_get_thread_num();
         int actual_nthreads = omp_get_num_threads();
 
-        Real *Cl = cache_aligned_alloc((size_t)M * ldcl * sizeof(Real));
+        Real *Cl = ALLOC_OR_DIE(alloc_local((size_t)M * ldcl * sizeof(Real)));
         memset(Cl, 0, (size_t)M * ldcl * sizeof(Real));
         all_Cl[tid] = Cl;
 

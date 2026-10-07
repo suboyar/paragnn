@@ -10,15 +10,22 @@
 #include "core.h"
 #include "ds.h"
 #include "dsinfo.h"
-#include "kernels.h"
 #include "../membw.h"
 #include "timer.h"
-#include "params.h"
 #include "vreg.h"
+
+void relu_v1(int64_t node_count, int64_t dim, const Real* restrict input, Real* restrict output);
+void relu_v2(int64_t node_count, int64_t dim, const Real* restrict input, Real* restrict output);
+void relu_v3(int64_t node_count, int64_t dim, const Real* restrict input, Real* restrict output);
+void relu_v3_1(int64_t num_nodes, int64_t dim, const Real* restrict input, Real* restrict output);
+void relu_v4(int64_t node_count, int64_t dim, const Real* restrict input, Real* restrict output);
+void relu_v5(int64_t node_count, int64_t dim, const Real* restrict input, Real* restrict output);
+void relu_v6(int64_t node_count, int64_t dim, const Real* restrict input, Real* restrict output);
+void relu_v7(int64_t node_count, int64_t dim, const Real* restrict input, Real* restrict output);
 
 // Default flag values
 #define MAX_DIMS 16
-#define DEFAULT_NTIMES  100
+#define DEFAULT_NTIMES  1000
 #define DEFAULT_DIMS    {256}
 #define DEFAULT_NDIMS   1
 #define DEFAULT_DATASET "arxiv"
@@ -32,9 +39,10 @@ static FILE        *csv_fd;
 static DatasetKind  dataset;
 static char        *datadir;
 
+typedef void (*KernelFunc)(int64_t, int64_t, const Real* restrict, Real* restrict);
+
 typedef struct {
     KernelFunc func;
-    TouchFunc func_touch;
     const char *name;
     double flops_per_sec;
     double bw;
@@ -45,7 +53,7 @@ typedef struct {
     int64_t l3_remote_miss;
     uint64_t bytes_loaded;
 } BenchKernel;
-#define BENCH_FUNC(fn) { .func = &(fn), .func_touch = &(fn##_touch), .name = #fn, 0}
+#define BENCH_FUNC(fn) { .func = &(fn), .name = #fn, 0}
 
 static void stat_print(BenchKernel *funcs, size_t func_count)
 {
@@ -133,40 +141,39 @@ static bool is_valid_2d(Real *x, Real *y, int64_t rows, int64_t cols, int64_t ld
     return true;
 }
 
-static void validate(int64_t M, int64_t N, int64_t K, int64_t lda, int64_t ldb, int64_t ldc, BenchKernel *funcs, size_t func_count)
+static void validate(int64_t node_count, int64_t dim, Real *reference_input, BenchKernel *funcs, size_t func_count)
 {
     printf("Computing reference...\n");
-    Real *A = ALLOC_OR_DIE(cache_aligned_alloc(K * lda * sizeof(Real)));
-    fill_uniform(A, K * lda);
-    Real *B = ALLOC_OR_DIE(cache_aligned_alloc(K * ldb * sizeof(Real)));
-    fill_uniform(B, K * ldb);
-    Real *C_ref = ALLOC_OR_DIE(cache_aligned_alloc(M * ldc * sizeof(Real)));
-    memset(C_ref, 0, M * ldc * sizeof(Real));
+    Real *reference_output = ALLOC_OR_DIE(cache_aligned_alloc(node_count * dim * sizeof(Real)));
+    relu_v1(node_count, dim, reference_input, reference_output);
 
-    cblas_gemm(M, N, K,
-               A,     lda,
-               B,     ldb,
-               C_ref, ldc);
-
-    Real *C = ALLOC_OR_DIE(cache_aligned_alloc(M * ldc * sizeof(Real)));
+    Real *output = ALLOC_OR_DIE(cache_aligned_alloc(node_count * dim * sizeof(Real)));
     for (size_t i = 0; i < func_count; i++)
     {
         printf("Validating: %s...\n", funcs[i].name, i+1, func_count);
-        memset(C, 0, M * N * sizeof(Real));
-        funcs[i].func(M, N, K,
-                      A, lda,
-                      B, ldb,
-                      C, ldc);
+        memset(output, 0, node_count * dim * sizeof(Real));
+        funcs[i].func(node_count, dim, reference_input, output);
 
         if (isatty(STDOUT_FILENO)) printf("\r\033[K");
-        if(!is_valid_2d(C, C_ref, M, N, ldc))
+        if(!is_valid_2d(output, reference_output, node_count, dim, dim))
             ERROR("%s doesn't match the reference: %s", funcs[i].name, mismatch_buf);
     }
 
-    free(A);
-    free(B);
-    free(C);
-    free(C_ref);
+    free(output);
+    free(reference_output);
+}
+
+static Real *reference_input = NULL;
+void init_reference_input(Real **reference_input, int64_t node_count, int64_t dim)
+{
+    Real *input = ALLOC_OR_DIE(cache_aligned_alloc(node_count * dim * sizeof(Real)));
+    int64_t n = node_count * dim;
+    for (int64_t i = 0; i < n; i++)
+    {
+        Real v = ((Real) rand() / (Real) (RAND_MAX)) * 2 - 1;
+        input[i] = v;
+    }
+    *reference_input = input;
 }
 
 #if defined(__x86_64__)
@@ -189,46 +196,47 @@ void flush_memory_region(void *ptr, size_t size)
 }
 #endif
 
-static void benchmark_kernel(int64_t M, int64_t N, int64_t K)
+static void benchmark_kernel(int64_t node_count, int64_t dim)
 {
-    timer_set_timer_sample_size(ntimes);
     membw_init_all();
     int is_tty = isatty(STDOUT_FILENO);
 
-    Real *A, *B, *C;
-    int64_t lda = M, ldb = N, ldc = ((N + N_VEC - 1) / N_VEC) * N_VEC;
-
     BenchKernel funcs[] = {
-        // BENCH_FUNC(naive),
-        BENCH_FUNC(cblas_gemm),
-        BENCH_FUNC(outer_tn_v1),
-        BENCH_FUNC(outer_tn_v2),
-        BENCH_FUNC(outer_tn_v3),
+        BENCH_FUNC(relu_v1),
+        BENCH_FUNC(relu_v2),
+        BENCH_FUNC(relu_v3),
+        BENCH_FUNC(relu_v3_1),
+        BENCH_FUNC(relu_v4),
+        BENCH_FUNC(relu_v5),
+        BENCH_FUNC(relu_v6),
+        BENCH_FUNC(relu_v7),
     };
     size_t func_count = sizeof(funcs)/sizeof(funcs[0]);
 
+    init_reference_input(&reference_input, node_count, dim);
+
 #if defined(SKIP_VALID)
 #else
-    validate(M, N, K, lda, ldb, ldc, funcs, func_count);
+    validate(node_count, dim, reference_input, funcs, func_count);
 #endif // SKIP_VALID
 
+    printf("Performing NUMA first touch...\n");
+    Real *input = ALLOC_OR_DIE(cache_aligned_alloc(node_count * dim * sizeof(Real)));
+    Real *output = ALLOC_OR_DIE(cache_aligned_alloc(node_count * dim * sizeof(Real)));
+#if defined(NO_FIRST_TOUCH)
+    memcpy(input, reference_input, node_count * dim * sizeof(Real));
+    memset(output, 0, node_count * dim * sizeof(Real));
+#else
+    int64_t n = node_count * dim;
+#pragma omp parallel for
+    for (int64_t i = 0; i < n; i++) {
+        input[i] = reference_input[i];
+        output[i] = REAL(0.0);
+    }
+#endif // NO_FIRST_TOUCH
 
     for (size_t i = 0; i < func_count; i++)
     {
-        printf("Performing NUMA first touch: %s...\n", funcs[i].name);
-        A = ALLOC_OR_DIE(cache_aligned_alloc(K * lda * sizeof(Real)));
-        B = ALLOC_OR_DIE(cache_aligned_alloc(K * ldb * sizeof(Real)));
-        C = ALLOC_OR_DIE(cache_aligned_alloc(M * ldc * sizeof(Real)));
-#if defined(NO_FIRST_TOUCH)
-        memset(A, 0, K * lda * sizeof(Real));
-        memset(B, 0, K * ldb * sizeof(Real));
-        memset(C, 0, M * ldc * sizeof(Real));
-#else
-        funcs[i].func_touch(M, N, K,
-                            A, lda,
-                            B, ldb,
-                            C, ldc);
-#endif // NO_FIRST_TOUCH
 
 #if defined(SKIP_WARMUP)
 #else
@@ -236,10 +244,7 @@ static void benchmark_kernel(int64_t M, int64_t N, int64_t K)
         const int warmup_count = 100;
         for (int j = 0; j < warmup_count; j++)
         {
-            funcs[i].func(M, N, K,
-                          A, lda,
-                          B, ldb,
-                          C, ldc);
+            funcs[i].func(node_count, dim, input, output);
         }
 #endif // SKIP_WARMUP
 
@@ -261,34 +266,27 @@ static void benchmark_kernel(int64_t M, int64_t N, int64_t K)
 
 #if defined(DONT_FLUSH_MEMORY)
 #else
-            flush_memory_region(A, K * lda * sizeof(Real));
-            flush_memory_region(B, K * ldb * sizeof(Real));
-            flush_memory_region(C, M * ldc * sizeof(Real));
+            flush_memory_region(input, node_count * dim * sizeof(Real));
+            flush_memory_region(output, node_count * dim * sizeof(Real));
 #endif // NO_FIRST_TOUCH
 
             timer_enable();
             membw_start_all();
-            double start_time = omp_get_wtime();
-
-            funcs[i].func(M, N, K,
-                          A, lda,
-                          B, ldb,
-                          C, ldc);
-
-            double elapsed_time = omp_get_wtime()-start_time;
+            double t = omp_get_wtime();
+            funcs[i].func(node_count, dim, input, output);
+            t = omp_get_wtime() - t;
             membw_stop_all();
-            timer_record(funcs[i].name, elapsed_time, NULL);
+            timer_record(funcs[i].name, t, NULL);
             timer_disable();
 
-            sum_time += elapsed_time;
+            sum_time += t;
 
-            if (elapsed_time < min_time)
+            if (t < min_time)
             {
-                uint64_t flop = (2 * M * N * K);
-                min_time = elapsed_time;
-                funcs[i].flops_per_sec = ((double)flop)/elapsed_time;
-                funcs[i].bw = membw_get_bw_all(elapsed_time);
-                funcs[i].ai = flop / membw_get_bytes_loaded_all();
+                min_time = t;
+                funcs[i].flops_per_sec = -1;
+                funcs[i].bw = membw_get_bw_all(t);
+                funcs[i].ai = -1;
                 funcs[i].llc_load_miss = membw_get_llc_load_miss_all();
                 funcs[i].llc_store_miss = membw_get_llc_store_miss_all();
                 funcs[i].l3_local_miss = membw_get_l3_local_cache_miss_all();
@@ -298,9 +296,6 @@ static void benchmark_kernel(int64_t M, int64_t N, int64_t K)
         }
 
         if (is_tty) printf("\r\033[KRunning: %s (%d/%d) [%.5fs]\n", funcs[i].name, ntimes, ntimes, min_time);
-        free(A);
-        free(B);
-        free(C);
     }
 
     timer_print();
@@ -310,6 +305,10 @@ static void benchmark_kernel(int64_t M, int64_t N, int64_t K)
 
     membw_close_all();
     timer_reset();
+
+    free(output);
+    free(input);
+    free(reference_input);
 }
 
 static int64_t get_node_count(Split splitkind)
@@ -353,7 +352,7 @@ static void usage(const char *progname)
             "  -n, -ntimes N       Number of iterations            [" STRINGIFY(DEFAULT_NTIMES) "]\n"
             "  -dims D1[,D2,...]   Dimensions to benchmark         [256,512,1024]\n"
             "  -dataset NAME       Dataset name                    [" DEFAULT_DATASET "]\n"
-            "  -datadir PATH       Dataset directory               [" DEFAULT_DATADIR "]\n"
+            "  -root PATH          Root path of dataset directory  [" DEFAULT_DATADIR "]\n"
             "  -csv FILE           CSV output (stdout/stderr/path) [" DEFAULT_CSV "]\n"
             "  -h, -help           Show this help\n",
             progname);
@@ -463,9 +462,8 @@ int main(int argc, char** argv)
     omp_set_num_threads(omp_num_threads);
 
     printf("BLAS Config : %s\n"
-           "Environment : %d OMP threads, %d OpenBLAS threads, %d NUMA node(s)\n"
-           "Kernel      : KC=%d, MR=%d, NR=%d\n",
-           openblas_get_config(), omp_num_threads, openblas_num_threads, get_active_sockets(), KC, MR, NR);
+           "Environment : %d OMP threads, %d OpenBLAS threads, %d NUMA node(s)\n",
+           openblas_get_config(), omp_num_threads, openblas_num_threads, get_active_sockets());
 
-    benchmark_kernel(256, 256, node_counts[SPLIT_NONE]);
+    benchmark_kernel(node_counts[SPLIT_NONE], 256);
 }

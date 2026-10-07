@@ -39,10 +39,20 @@ count_threads() {
     echo "$count"
 }
 
+get_label_cores() {
+    local mode=$1
+    local t=$2
+    case "$mode" in
+        *2s-smt) echo "$(( t / 4 ))" ;;
+        *1s-smt|*2s) echo "$(( t / 2 ))" ;;
+        *) echo "$t" ;;
+    esac
+}
+
 BDIR="build_${SLURM_JOB_PARTITION}"
 
 run_cmd ulimit -v unlimited
-run_cmd make -B paragnn BUILDDIR="$BDIR" MODE=benchmark IMPL=blas SPARSE=cs V=1 1>&2
+run_cmd make -B paragnn BUILDDIR="$BDIR" MODE=benchmark IMPL=blas SPARSE=coo V=1 1>&2
 
 BASE_DIR="${RESULTS_DIR:-results}"
 PARTITION_DIR="${BASE_DIR}/${SLURM_JOB_PARTITION}"
@@ -53,7 +63,8 @@ run_fixed() {
     for mode in "1s" "1s-smt" "2s" "2s-smt"; do
         local c=$(./cpumap ${mode})
         local t=$(count_threads "$c")
-        local run_label="${mode}-${t}t"
+        local label_t=$(get_label_cores "$mode" "$t")
+        local run_label="${mode}-${label_t}t"
 
         echo
         echo "----------------------------------------------------------------"
@@ -69,7 +80,9 @@ run_scaled() {
     for mode in "scale-1s" "scale-1s-smt" "scale-2s" "scale-2s-smt"; do
         for c in $(./cpumap ${mode}); do
             local t=$(count_threads "$c")
-            local run_label="${mode#scale-}-${t}t"
+            local label_t=$(get_label_cores "$mode" "$t")
+            local run_label="${mode#scale-}-${label_t}t"
+
             echo
             echo "----------------------------------------------------------------"
             echo " ${dataset} (${run_label})"

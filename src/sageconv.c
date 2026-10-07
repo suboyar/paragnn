@@ -173,7 +173,7 @@ static void scale_by_inv_degree_coo(SageLayer *l)
     }
 }
 
-static void scale_by_inv_degree_csx(SageLayer *l)
+static void scale_by_inv_degree_cs(SageLayer *l)
 {
     TIMER_FUNC();
 
@@ -240,7 +240,7 @@ static void scatter_coo(SageLayer *l)
     }
 }
 
-static void scatter_csx(SageLayer *l)
+static void scatter_cs(SageLayer *l)
 {
     TIMER_FUNC();
 
@@ -323,7 +323,7 @@ void grad_sageconv(SageLayer *l)
         scale_by_inv_degree_coo(l);
         scatter_coo(l);
 #else
-        scale_by_inv_degree_csx(l);
-        scatter_csx(l);
+        scale_by_inv_degree_cs(l);
+        scatter_cs(l);
 #endif
 }

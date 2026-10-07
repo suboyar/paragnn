@@ -1,6 +1,7 @@
 #include <stdint.h>
 
 #include "core.h"
+#include "layers.h"
 
 void naive_touch(int64_t M, int64_t N, int64_t K,
                  Real *restrict A, int64_t lda,
