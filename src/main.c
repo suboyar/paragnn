@@ -231,13 +231,15 @@ int main(int argc, char** argv)
                     output_fd = stderr;
                 else
                 {
-                    output_fd = fopen(optarg, "w+");
+                    char *full_path = expand_path(optarg);
+                    output_fd = fopen(full_path, "w+");
                     if (!output_fd)
                     {
                         ERROR("Could not open file %s for csv export: %s", optarg, strerror(errno));
                         usage(argv[0]);
                         return 1;
                     }
+                    free(full_path);
                 }
                 break;
             }

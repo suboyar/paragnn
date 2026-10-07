@@ -24,14 +24,14 @@
 #define DEFAULT_ROOT        "~/D1/paragnn-dataset"
 #define DEFAULT_CSV          false
 #define DEFAULT_OUTPUT_TIMER stdout
-#define DEFAULT_OUTPUT_STAT  stdout
+#define DEFAULT_OUTPUT_PERF  stdout
 
 static int64_t      ntimes;
 static DatasetKind  datasetkind;
 static char        *root;
 static bool         export_csv;
 static FILE        *timer_fd;
-static FILE        *stat_fd;
+static FILE        *perf_fd;
 
 typedef struct {
     KernelFunc func;
@@ -48,7 +48,7 @@ typedef struct {
 } BenchKernel;
 #define BENCH_KERNEL(fn) { .func = &(fn), .func_touch = &(fn##_touch), .name = #fn, 0}
 
-static void stat_print(BenchKernel *funcs, size_t func_count)
+static void perf_print(BenchKernel *funcs, size_t func_count)
 {
     int name_col_width = 30; // Match default minimum of timer_print
     for (size_t i = 0; i < func_count; i++) {
@@ -89,22 +89,22 @@ static void stat_print(BenchKernel *funcs, size_t func_count)
     }
 }
 
-static void stat_print_csv(FILE *fd, BenchKernel *funcs, size_t func_count)
+static void perf_print_csv(FILE *fd, BenchKernel *funcs, size_t func_count)
 {
     if (fd == stdout) fprintf(fd, "\n--- CSV_OUTPUT_BEGIN ---\n");
-    printf("name,GFLOP/s,MB/s,AI,LLC Ld,LLC St,L3 Loc,L3 Rem,Bytes\n");
+    fprintf(fd, "name,GFLOP/s,MB/s,AI,LLC Ld,LLC St,L3 Loc,L3 Rem,Bytes\n");
     for(size_t i = 0; i < func_count; i++)
     {
-        printf("%s,%f,%f,%f,%ld,%ld,%ld,%ld,%lu\n",
-               funcs[i].name,
-               funcs[i].flops_per_sec / 1e9,
-               funcs[i].bw / 1e6,
-               funcs[i].ai,
-               funcs[i].llc_load_miss,
-               funcs[i].llc_store_miss,
-               funcs[i].l3_local_miss,
-               funcs[i].l3_remote_miss,
-               funcs[i].bytes_loaded);
+        fprintf(fd, "%s,%f,%f,%f,%ld,%ld,%ld,%ld,%lu\n",
+                funcs[i].name,
+                funcs[i].flops_per_sec / 1e9,
+                funcs[i].bw / 1e6,
+                funcs[i].ai,
+                funcs[i].llc_load_miss,
+                funcs[i].llc_store_miss,
+                funcs[i].l3_local_miss,
+                funcs[i].l3_remote_miss,
+                funcs[i].bytes_loaded);
     }
     if (fd == stdout) fprintf(fd, "--- CSV_OUTPUT_END ---\n");
 }
@@ -501,12 +501,12 @@ static void benchmark_kernel(Dataset *ds, int64_t in_dim, int64_t out_dim)
 
     timer_print();
     printf("\n");
-    stat_print(funcs, ARRAY_LEN(funcs));
+    perf_print(funcs, ARRAY_LEN(funcs));
 
     if (export_csv)
     {
         timer_export_csv(timer_fd);
-        stat_print_csv(stat_fd, funcs, ARRAY_LEN(funcs));
+        perf_print_csv(perf_fd, funcs, ARRAY_LEN(funcs));
     }
 
     membw_close_all();
@@ -523,7 +523,7 @@ enum {
     OPT_ROOT,
     OPT_CSV,
     OPT_OUTPUT_TIMER,
-    OPT_OUTPUT_STAT,
+    OPT_OUTPUT_PERF,
 };
 
 static struct option long_options[] = {
@@ -532,7 +532,7 @@ static struct option long_options[] = {
     {"datadir",       required_argument, NULL, OPT_ROOT},
     {"csv",           no_argument,       NULL, OPT_CSV},
     {"output-timer",  required_argument, NULL, OPT_OUTPUT_TIMER},
-    {"output-stat", required_argument, NULL, OPT_OUTPUT_STAT},
+    {"output-perf", required_argument, NULL, OPT_OUTPUT_PERF},
     {"help",          no_argument,       NULL, OPT_HELP},
     {0,               0,                 0,    0}
 };
@@ -548,7 +548,7 @@ static void usage(const char *progname)
             "  --root PATH       Root path of dataset directory               [" DEFAULT_ROOT "]\n"
             "  --csv             Enable CSV output                            [" XSTR(DEFAULT_CSV) "]\n"
             "  --output-timer    Output file of timing (stdout,stderr,path)   [" XSTR(DEFAULT_CSV) "]\n"
-            "  --output-stat     Output file of stat (stdout,stderr,path)     [" XSTR(DEFAULT_CSV) "]\n"
+            "  --output-perf     Output file of perf (stdout,stderr,path)     [" XSTR(DEFAULT_CSV) "]\n"
             "  -h, --help        Show this help\n",
             progname);
 }
@@ -557,10 +557,10 @@ static void usage(const char *progname)
 void print_config(void)
 {
     char *t_path = export_csv ? fd_to_path(timer_fd) : strdup("none");
-    char *s_path = export_csv ? fd_to_path(stat_fd)  : strdup("none");
+    char *s_path = export_csv ? fd_to_path(perf_fd)  : strdup("none");
     const char *partition = getenv("SLURM_JOB_PARTITION");
     printf("mode=%s precision=%s ntimes=%ld data=%s validation=%s warmup=%s allocation=%s flush-memory=%s export-csv=%s\n"
-           "Files: timer=%s stats=%s\n"
+           "Files: timer=%s perf=%s\n"
            "Environment: partition=%s, %d OMP threads, %d OpenBLAS threads, %d NUMA node(s)\n"
            "BLAS Config: %s\n"
            "Kernel     : KC=%d, MR=%d, NR=%d\n",
@@ -589,7 +589,7 @@ int main(int argc, char** argv)
     root     = DEFAULT_ROOT;
     export_csv  = DEFAULT_CSV;
     timer_fd    = DEFAULT_OUTPUT_TIMER;
-    stat_fd     = DEFAULT_OUTPUT_STAT;
+    perf_fd     = DEFAULT_OUTPUT_PERF;
 
     int opt;
     while ((opt = getopt_long(argc, argv, "h", long_options, NULL)) != -1)
@@ -616,29 +616,33 @@ int main(int argc, char** argv)
                 else if (strcmp("stderr", optarg) == 0) timer_fd = stderr;
                 else
                 {
-                    timer_fd = fopen(optarg, "w+");
+                    char *full_path = expand_path(optarg);
+                    timer_fd = fopen(full_path, "w+");
                     if (!timer_fd)
                     {
                         ERROR("Could not open file %s for csv export: %s", optarg, strerror(errno));
                         usage(argv[0]);
                         return 1;
                     }
+                    free(full_path);
                 }
                 break;
             }
-            case OPT_OUTPUT_STAT:
+            case OPT_OUTPUT_PERF:
             {
-                if (strcmp("stdout", optarg) == 0) stat_fd = stdout;
-                else if (strcmp("stderr", optarg) == 0) stat_fd = stderr;
+                if (strcmp("stdout", optarg) == 0) perf_fd = stdout;
+                else if (strcmp("stderr", optarg) == 0) perf_fd = stderr;
                 else
                 {
-                    stat_fd = fopen(optarg, "w+");
-                    if (!stat_fd)
+                    char *full_path = expand_path(optarg);
+                    perf_fd = fopen(full_path, "w+");
+                    if (!perf_fd)
                     {
                         ERROR("Could not open file %s for csv export: %s", optarg, strerror(errno));
                         usage(argv[0]);
                         return 1;
                     }
+                    free(full_path);
                 }
                 break;
             }
@@ -672,8 +676,8 @@ int main(int argc, char** argv)
 
     if (timer_fd != stdout && timer_fd != stderr)
         fclose(timer_fd);
-    if (stat_fd != stdout && stat_fd != stderr)
-        fclose(stat_fd);
+    if (perf_fd != stdout && perf_fd != stderr)
+        fclose(perf_fd);
 
     free(root);
 
