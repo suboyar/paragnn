@@ -33,39 +33,6 @@ static bool         export_csv;
 static FILE        *timer_fd;
 static FILE        *stat_fd;
 
-#define GRAD_SAGECONV()                                     \
-    do {                                                    \
-    funcs[i].func(l->in_dim, l->out_dim, l->node_count,     \
-                  l->x_in,    l->in_dim,                    \
-                  l->dx_out,  l->out_dim,                   \
-                  l->dW_self, l->W_stride);                 \
-                                                            \
-    funcs[i].func(l->in_dim, l->out_dim, l->node_count,     \
-                  l->x_neigh,  l->in_dim,                   \
-                  l->dx_out,   l->out_dim,                  \
-                  l->dW_neigh, l->W_stride);                \
-                                                            \
-    cblas_rgemm(CblasRowMajor, CblasNoTrans, CblasTrans,    \
-                l->node_count, l->in_dim, l->out_dim,       \
-                1.0,                                        \
-                l->dx_out, l->out_dim,                      \
-                l->W_self, l->W_stride,                     \
-                0.0,                                        \
-                l->dx_in,  l->in_dim);                      \
-                                                            \
-    cblas_rgemm(CblasRowMajor, CblasNoTrans, CblasTrans,    \
-                l->node_count, l->in_dim, l->out_dim,       \
-                1.0,                                        \
-                l->dx_out,     l->out_dim,                  \
-                l->W_neigh,    l->W_stride,                 \
-                0.0,                                        \
-                l->dx_scatter, l->in_dim);                  \
-                                                            \
-    scale_by_inv_degree_cs(l);                              \
-    scatter_cs(l);                                          \
-    } while (0)
-
-
 typedef struct {
     KernelFunc func;
     TouchFunc func_touch;
@@ -80,21 +47,6 @@ typedef struct {
     uint64_t bytes_loaded;
 } BenchKernel;
 #define BENCH_KERNEL(fn) { .func = &(fn), .func_touch = &(fn##_touch), .name = #fn, 0}
-
-typedef struct {
-    void (*func)(SageLayer*);
-    TouchFunc func_touch;
-    const char *name;
-    double flops_per_sec;
-    double bw;
-    double ai;
-    int64_t llc_load_miss;
-    int64_t llc_store_miss;
-    int64_t l3_local_miss;
-    int64_t l3_remote_miss;
-    uint64_t bytes_loaded;
-} BenchGradSageconv;
-#define BENCH_GRAD_SAGECONV(fn) { .func = &(grad_sageconv_##fn), .func_touch = &(fn##_touch), .name = #fn, 0}
 
 static void stat_print(BenchKernel *funcs, size_t func_count)
 {
@@ -292,15 +244,45 @@ void flush_memory_region(void *ptr, size_t size)
 }
 #endif
 
+#define GRAD_SAGECONV()                                     \
+    do {                                                    \
+    funcs[i].func(l->in_dim, l->out_dim, l->node_count,     \
+                  l->x_in,    l->in_dim,                    \
+                  l->dx_out,  l->out_dim,                   \
+                  l->dW_self, l->W_stride);                 \
+                                                            \
+    funcs[i].func(l->in_dim, l->out_dim, l->node_count,     \
+                  l->x_neigh,  l->in_dim,                   \
+                  l->dx_out,   l->out_dim,                  \
+                  l->dW_neigh, l->W_stride);                \
+                                                            \
+    cblas_rgemm(CblasRowMajor, CblasNoTrans, CblasTrans,    \
+                l->node_count, l->in_dim, l->out_dim,       \
+                1.0,                                        \
+                l->dx_out, l->out_dim,                      \
+                l->W_self, l->W_stride,                     \
+                0.0,                                        \
+                l->dx_in,  l->in_dim);                      \
+                                                            \
+    cblas_rgemm(CblasRowMajor, CblasNoTrans, CblasTrans,    \
+                l->node_count, l->in_dim, l->out_dim,       \
+                1.0,                                        \
+                l->dx_out,     l->out_dim,                  \
+                l->W_neigh,    l->W_stride,                 \
+                0.0,                                        \
+                l->dx_scatter, l->in_dim);                  \
+                                                            \
+    scale_by_inv_degree_cs(l);                              \
+    scatter_cs(l);                                          \
+    } while (0)
+
+#define ARRAY_LEN(x) sizeof((x))/sizeof((x)[0])
 static void benchmark_kernel(Dataset *ds, int64_t in_dim, int64_t out_dim)
 {
     membw_init_all();
     int is_tty = isatty(STDOUT_FILENO);
 
     int64_t node_count = ds->node_count;
-
-    Real *A, *B, *C, *C_ref;
-    int64_t lda = in_dim, ldb = out_dim, ldc = out_dim;
 
     BenchKernel funcs[] = {
         // BENCH_KERNEL(naive),
@@ -309,40 +291,37 @@ static void benchmark_kernel(Dataset *ds, int64_t in_dim, int64_t out_dim)
         BENCH_KERNEL(outer_tn_v2),
         BENCH_KERNEL(outer_tn_v3),
     };
-    size_t func_count = sizeof(funcs)/sizeof(funcs[0]);
 
 #if defined(SKIP_VALID)
 #else
     printf("Computing reference...\n");
-    A = ALLOC_OR_DIE(alloc_shared(node_count * lda * sizeof(Real)));
-    fill_uniform(A, node_count * lda);
-    B = ALLOC_OR_DIE(alloc_shared(node_count * ldb * sizeof(Real)));
-    fill_uniform(B, node_count * ldb);
-    C_ref = ALLOC_OR_DIE(alloc_shared(in_dim * ldc * sizeof(Real)));
-    memset(C_ref, 0, in_dim * ldc * sizeof(Real));
-    cblas_gemm(in_dim, out_dim, node_count, A, lda, B, ldb, C_ref, ldc);
+    Real *A_ref = ALLOC_OR_DIE(alloc_shared(node_count * in_dim * sizeof(Real)));
+    fill_uniform(A_ref, node_count * in_dim);
+    Real *B_ref = ALLOC_OR_DIE(alloc_shared(node_count * out_dim * sizeof(Real)));
+    fill_uniform(B_ref, node_count * out_dim);
+    Real *C_ref = ALLOC_OR_DIE(alloc_shared(in_dim * out_dim * sizeof(Real)));
+    memset(C_ref, 0, in_dim * out_dim * sizeof(Real));
+    cblas_gemm(in_dim, out_dim, node_count, A_ref, in_dim, B_ref, out_dim, C_ref, out_dim);
 
-    for (size_t i = 0; i < func_count; i++)
+    for (size_t i = 0; i < ARRAY_LEN(funcs); i++)
     {
-        if (funcs[i].func == outer_tn_v3) ldc = ((out_dim + N_VEC - 1) / N_VEC) * N_VEC;
-        else ldc = out_dim;
-        C = ALLOC_OR_DIE(alloc_shared(in_dim * ldc * sizeof(Real)));
-        memset(C, 0, in_dim * ldc * sizeof(Real));
+        int64_t c_stride = (funcs[i].func == outer_tn_v3) ? ((out_dim + N_VEC - 1) / N_VEC) * N_VEC : out_dim;
+        Real *C = ALLOC_OR_DIE(alloc_shared(in_dim * out_dim * sizeof(Real)));
+        memset(C, 0, in_dim * out_dim * sizeof(Real));
         printf("Validating: %s...\n", funcs[i].name);
-        funcs[i].func(in_dim, out_dim, node_count, A, lda, B, ldb, C, ldc);
-        if(!is_valid_2d(C, C_ref, in_dim, out_dim, ldc))
+        funcs[i].func(in_dim, out_dim, node_count, A_ref, in_dim, B_ref, out_dim, C, c_stride);
+        if(!is_valid_2d(C, C_ref, in_dim, out_dim, c_stride))
             ERROR("%s doesn't match the reference: %s", funcs[i].name, mismatch_buf);
         free(C);
     }
-    free(A);
-    free(B);
+    free(A_ref);
+    free(B_ref);
     free(C_ref);
 #endif // SKIP_VALID
 
-    for (size_t i = 0; i < func_count; i++)
+    for (size_t i = 0; i < ARRAY_LEN(funcs); i++)
     {
-        if (funcs[i].func == outer_tn_v3) ldc = ((out_dim + N_VEC - 1) / N_VEC) * N_VEC;
-        else ldc = out_dim;
+        int64_t c_stride = (funcs[i].func == outer_tn_v3) ? ((out_dim + N_VEC - 1) / N_VEC) * N_VEC : out_dim;
 
         int do_interleave = 0;
 #if defined(FIRST_TOUCH)
@@ -361,31 +340,37 @@ static void benchmark_kernel(Dataset *ds, int64_t in_dim, int64_t out_dim)
             .in_dim     = in_dim,
             .out_dim    = out_dim,
             .flow       = SOURCE_TO_TARGET,
-            .W_stride   = ldc,
+            .W_stride   = c_stride,
         };
 
-        l->W_self     = ALLOC_OR_DIE(alloc_shared(in_dim * ldc * sizeof(Real)));
-        l->W_neigh    = ALLOC_OR_DIE(alloc_shared(in_dim * ldc * sizeof(Real)));
-        memset(l->W_self, 0, in_dim * ldc * sizeof(Real));
-        memset(l->W_neigh, 0, in_dim * ldc * sizeof(Real));
+        l->W_self     = ALLOC_OR_DIE(alloc_shared(in_dim * l->W_stride * sizeof(Real)));
+        l->W_neigh    = ALLOC_OR_DIE(alloc_shared(in_dim * l->W_stride * sizeof(Real)));
+        l->dx_in      = ALLOC_OR_DIE(alloc_shared(node_count * in_dim * sizeof(Real)));
+        l->x_neigh    = ALLOC_OR_DIE(alloc_shared(node_count * in_dim * sizeof(Real)));
+        l->dx_scatter = ALLOC_OR_DIE(alloc_shared(node_count * in_dim * sizeof(Real)));
+        memset(l->W_self,     0, in_dim * l->W_stride * sizeof(Real));
+        memset(l->W_neigh,    0, in_dim * l->W_stride * sizeof(Real));
+        memset(l->dx_in,      0, node_count * in_dim * sizeof(Real));
+        memset(l->x_neigh,    0, node_count * in_dim * sizeof(Real));
+        memset(l->dx_scatter, 0, node_count * in_dim * sizeof(Real));
 
         if (do_interleave)
         {
-            l->x_in       = ALLOC_OR_DIE(alloc_shared(in_dim * ldc * sizeof(Real)));
-            l->dx_out     = ALLOC_OR_DIE(alloc_shared(out_dim * ldc * sizeof(Real)));
-            l->dW_self    = ALLOC_OR_DIE(alloc_shared(in_dim * ldc * sizeof(Real)));
-            l->dW_neigh   = ALLOC_OR_DIE(alloc_shared(in_dim * ldc * sizeof(Real)));
-            memset(l->x_in, 0, in_dim * ldc * sizeof(Real));
-            memset(l->dx_out, 0, out_dim * ldc * sizeof(Real));
-            memset(l->dW_self, 0, in_dim * ldc * sizeof(Real));
-            memset(l->dW_neigh, 0, in_dim * ldc * sizeof(Real));
+            l->x_in       = ALLOC_OR_DIE(alloc_shared(node_count * in_dim * sizeof(Real)));
+            l->dx_out     = ALLOC_OR_DIE(alloc_shared(node_count * out_dim * sizeof(Real)));
+            l->dW_self    = ALLOC_OR_DIE(alloc_shared(in_dim * l->W_stride * sizeof(Real)));
+            l->dW_neigh   = ALLOC_OR_DIE(alloc_shared(in_dim * l->W_stride * sizeof(Real)));
+            memset(l->x_in,     0, node_count * in_dim * sizeof(Real));
+            memset(l->dx_out,   0, node_count * out_dim * sizeof(Real));
+            memset(l->dW_self,  0, in_dim * l->W_stride * sizeof(Real));
+            memset(l->dW_neigh, 0, in_dim * l->W_stride * sizeof(Real));
         }
         else
         {
-            l->x_in       = ALLOC_OR_DIE(alloc_local(in_dim * ldc * sizeof(Real)));
-            l->dx_out     = ALLOC_OR_DIE(alloc_local(out_dim * ldc * sizeof(Real)));
-            l->dW_self    = ALLOC_OR_DIE(alloc_local(in_dim * ldc * sizeof(Real)));
-            l->dW_neigh   = ALLOC_OR_DIE(alloc_local(in_dim * ldc * sizeof(Real)));
+            l->x_in       = ALLOC_OR_DIE(alloc_local(node_count * in_dim * sizeof(Real)));
+            l->dx_out     = ALLOC_OR_DIE(alloc_local(node_count * out_dim * sizeof(Real)));
+            l->dW_self    = ALLOC_OR_DIE(alloc_local(in_dim * l->W_stride * sizeof(Real)));
+            l->dW_neigh   = ALLOC_OR_DIE(alloc_local(in_dim * l->W_stride * sizeof(Real)));
             funcs[i].func_touch(l->in_dim, l->out_dim, l->node_count,
                                 l->x_in,    l->in_dim,
                                 l->dx_out,  l->out_dim,
@@ -396,9 +381,10 @@ static void benchmark_kernel(Dataset *ds, int64_t in_dim, int64_t out_dim)
                                 l->dW_neigh, l->W_stride);
         }
 #else
-        const size_t sz_A = node_count * lda * sizeof(Real);
-        const size_t sz_B = node_count * ldb * sizeof(Real);
-        const size_t sz_C = in_dim * ldc * sizeof(Real);
+        Real *A, *B, *C;
+        const size_t sz_A = node_count * in_dim * sizeof(Real);
+        const size_t sz_B = node_count * out_dim * sizeof(Real);
+        const size_t sz_C = in_dim * c_stride * sizeof(Real);
 
         if (do_interleave)
         {
@@ -416,7 +402,7 @@ static void benchmark_kernel(Dataset *ds, int64_t in_dim, int64_t out_dim)
             A = ALLOC_OR_DIE(alloc_local(sz_A));
             B = ALLOC_OR_DIE(alloc_local(sz_B));
             C = ALLOC_OR_DIE(alloc_local(sz_C));
-            funcs[i].func_touch(in_dim, out_dim, node_count, A, lda, B, ldb, C, ldc);
+            funcs[i].func_touch(in_dim, out_dim, node_count, A, in_dim, B, out_dim, C, c_stride);
         }
 #endif // RUN_COMPLETE_GRAD_SAGECONV
 
@@ -429,7 +415,7 @@ static void benchmark_kernel(Dataset *ds, int64_t in_dim, int64_t out_dim)
 #if defined(RUN_COMPLETE_GRAD_SAGECONV)
             GRAD_SAGECONV();
 #else
-            funcs[i].func(in_dim, out_dim, node_count, A, lda, B, ldb, C, ldc);
+            funcs[i].func(in_dim, out_dim, node_count, A, in_dim, B, out_dim, C, c_stride);
 #endif // RUN_COMPLETE_GRAD_SAGECONV
         }
 #endif // SKIP_WARMUP
@@ -446,10 +432,10 @@ static void benchmark_kernel(Dataset *ds, int64_t in_dim, int64_t out_dim)
                 fflush(stdout);
             }
 
-#if defined(FLUSH_MEMORY)
-            flush_memory_region(A, node_count * lda * sizeof(Real));
-            flush_memory_region(B, node_count * ldb * sizeof(Real));
-            flush_memory_region(C, in_dim * ldc * sizeof(Real));
+#if defined(FLUSH_MEMORY) && !defined(RUN_COMPLETE_GRAD_SAGECONV)
+            flush_memory_region(A, node_count * in_dim * sizeof(Real));
+            flush_memory_region(B, node_count * out_dim * sizeof(Real));
+            flush_memory_region(C, in_dim * c_stride * sizeof(Real));
 #endif // FLUSH_MEMORY
 
             timer_enable();
@@ -459,7 +445,7 @@ static void benchmark_kernel(Dataset *ds, int64_t in_dim, int64_t out_dim)
 #if defined(RUN_COMPLETE_GRAD_SAGECONV)
             GRAD_SAGECONV();
 #else
-            funcs[i].func(in_dim, out_dim, node_count, A, lda, B, ldb, C, ldc);
+            funcs[i].func(in_dim, out_dim, node_count, A, in_dim, B, out_dim, C, c_stride);
 #endif // RUN_COMPLETE_GRAD_SAGECONV
             time = omp_get_wtime() - time;
             membw_stop_all();
@@ -468,7 +454,21 @@ static void benchmark_kernel(Dataset *ds, int64_t in_dim, int64_t out_dim)
 
             if (time < min_time)
             {
+#if defined(RUN_COMPLETE_GRAD_SAGECONV)
+                /*
+                 * funcs[i].func (dW_self): 2 * in_dim * out_dim * node_count
+                 * funcs[i].func (dW_neigh): 2 * in_dim * out_dim * node_count
+                 * cblas_rgemm (dx_in): 2 * in_dim * out_dim * node_count
+                 * cblas_rgemm (dx_scatter): 2 * in_dim * out_dim * node_count
+                 * scale_by_inv_degree_cs: node_count * (in_dim + 1) [1 division + in_dim multiplications per node]
+                 * scatter_cs: ds->edge_count * in_dim
+                 */
+                uint64_t flop = (8 * in_dim * out_dim * node_count) +
+                                (node_count * (in_dim + 1)) +
+                                (ds->edge_count * in_dim);
+#else
                 uint64_t flop = (2 * in_dim * out_dim * node_count);
+#endif
                 min_time = time;
                 funcs[i].flops_per_sec = ((double)flop)/time;
                 funcs[i].bw = membw_get_bw_all(time);
@@ -489,6 +489,9 @@ static void benchmark_kernel(Dataset *ds, int64_t in_dim, int64_t out_dim)
         free(l->W_neigh);
         free(l->dW_self);
         free(l->dW_neigh);
+        free(l->dx_in);
+        free(l->x_neigh);
+        free(l->dx_scatter);
         free(l);
 #else
         free(A);
@@ -499,12 +502,12 @@ static void benchmark_kernel(Dataset *ds, int64_t in_dim, int64_t out_dim)
 
     timer_print();
     printf("\n");
-    stat_print(funcs, func_count);
+    stat_print(funcs, ARRAY_LEN(funcs));
 
     if (export_csv)
     {
         timer_export_csv(timer_fd);
-        stat_print_csv(stat_fd, funcs, func_count);
+        stat_print_csv(stat_fd, funcs, ARRAY_LEN(funcs));
     }
 
     membw_close_all();
@@ -549,6 +552,33 @@ static void usage(const char *progname)
             "  --output-stat     Output file of stat (stdout,stderr,path)     [" XSTR(DEFAULT_CSV) "]\n"
             "  -h, --help        Show this help\n",
             progname);
+}
+
+
+void print_config(void)
+{
+    char *t_path = export_csv ? fd_to_path(timer_fd) : strdup("none");
+    char *s_path = export_csv ? fd_to_path(stat_fd)  : strdup("none");
+    const char *partition = getenv("SLURM_JOB_PARTITION");
+    printf("mode=%s precision=%s ntimes=%ld data=%s validation=%s warmup=%s allocation=%s flush-memory=%s export-csv=%s\n"
+           "Files: timer=%s stats=%s\n"
+           "Environment: partition=%s, %d OMP threads, %d OpenBLAS threads, %d NUMA node(s)\n"
+           "BLAS Config: %s\n"
+           "Kernel     : KC=%d, MR=%d, NR=%d\n",
+           IS_DEFINED(RUN_COMPLETE_GRAD_SAGECONV) ? "grad_sageconv" : "kernel",
+           sizeof(Real) == sizeof(double) ? "fp64" : "fp32",
+           ntimes, ds_infos[datasetkind].name,
+           IS_DEFINED(SKIP_VALID)   ? "no" : "yes",
+           IS_DEFINED(SKIP_WARMUP)  ? "no" : "yes",
+           IS_DEFINED(FIRST_TOUCH)  ? "first-touch" : "interleave",
+           IS_DEFINED(FLUSH_MEMORY) ? "yes" : "no",
+           export_csv ? "yes" : "no",
+           t_path, s_path,
+           partition ? partition : "none", omp_get_max_threads(), openblas_get_num_threads(), get_active_numa_nodes(),
+           openblas_get_config(),
+           KC, MR, NR);
+    free(t_path);
+    free(s_path);
 }
 
 int main(int argc, char** argv)
@@ -636,10 +666,7 @@ int main(int argc, char** argv)
     omp_set_dynamic(0);
     omp_set_num_threads(omp_num_threads);
 
-    printf("BLAS Config: %s\n"
-           "Environment: %d OMP threads, %d OpenBLAS threads, %d NUMA node(s)\n"
-           "Kernel     : KC=%d, MR=%d, NR=%d\n",
-           openblas_get_config(), omp_num_threads, openblas_num_threads, get_active_numa_nodes(), KC, MR, NR);
+    print_config();
 
     Dataset *ds = dataset_load(datasetkind, root, SPARSE_FORMAT_CS);
     benchmark_kernel(ds, 256, 256);
