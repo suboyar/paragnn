@@ -89,4 +89,21 @@ void stream_vrstore(Real* __restrict dst, VReal v)
 #endif
 }
 
+// Paired non-temporal store
+static inline __attribute__((always_inline, unused))
+void stream_vrstore2(Real *__restrict dst, VReal v0, VReal v1)
+{
+#if defined(__aarch64__)
+    __asm__ volatile("stnp %q[r0], %q[r1], [%[ptr]]"
+                     :
+                     : [r0] "w"((float32x4_t)v0),
+                       [r1] "w"((float32x4_t)v1),
+                       [ptr] "r"(dst)
+                     : "memory");
+#else
+    stream_vrstore(dst, v0);
+    stream_vrstore(dst + N_VEC, v1);
+#endif
+}
+
 #endif // VREG_H

@@ -24,19 +24,27 @@ int get_active_numa_nodes(void)
 
     if (__builtin_expect(numa_nodes == 0, 0))
     {
-#pragma omp critical
+        struct bitmask *total_nodes = numa_allocate_nodemask();
+
+#pragma omp parallel
         {
-#pragma omp atomic read
-            numa_nodes = _numa_nodes;
-            if (numa_nodes == 0)
+            struct bitmask *thread_nodes = numa_get_run_node_mask();
+#pragma omp critical
             {
-                struct bitmask *nodes = numa_get_run_node_mask();
-                numa_nodes = numa_bitmask_weight(nodes);
-                numa_bitmask_free(nodes);
-#pragma omp atomic write
-                _numa_nodes = numa_nodes;
+                for (unsigned int i = 0; i < total_nodes->size; i++) {
+                    if (numa_bitmask_isbitset(thread_nodes, i)) {
+                        numa_bitmask_setbit(total_nodes, i);
+                    }
+                }
             }
+            numa_bitmask_free(thread_nodes);
         }
+
+        numa_nodes = numa_bitmask_weight(total_nodes);
+        numa_bitmask_free(total_nodes);
+
+#pragma omp atomic write
+        _numa_nodes = numa_nodes;
     }
 
     return numa_nodes;

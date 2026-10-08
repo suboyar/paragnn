@@ -109,10 +109,12 @@ BENCH_GS_SRCS := benchmark/grad_sageconv/main.c \
                  src/sparsegraph.c \
                  src/timer.c
 
-AGGREGATE_SRCS := benchmark/mean_aggregate/bench.c \
+AGGREGATE_SRCS := benchmark/mean_aggregate/main.c \
                   benchmark/mean_aggregate/coo_v1.c \
-                  benchmark/mean_aggregate/coo_v2.c \
                   benchmark/mean_aggregate/cs_v1.c \
+                  benchmark/mean_aggregate/cs_v2.c \
+                  benchmark/mean_aggregate/cs_v3.c \
+                  benchmark/mean_aggregate/cs_v4.c \
                   benchmark/membw.c \
                   src/core.c \
                   src/ds.c \

@@ -48,11 +48,11 @@ static void sage_mean_aggregate_coo(SageLayer *l)
     const Real *restrict x_in = l->x_in;
     Real       *restrict x_neigh = l->x_neigh;
 
-#pragma omp parallel for
-    for (size_t e = 0; e < edge_count; e++)
+#pragma omp parallel for schedule(static)
+    for (int64_t e = 0; e < edge_count; e++)
     {
-        uint64_t root = roots[e];
-        uint64_t neighbor = neighbors[e];
+        int64_t root = roots[e];
+        int64_t neighbor = neighbors[e];
         const Real scale = inv_degree[root];
 
         const Real *x_in_ptr = &x_in[neighbor * in_dim];
@@ -93,9 +93,7 @@ static void sage_mean_aggregate_cs(SageLayer *l)
     for (int64_t n = 0; n < node_count; n++)
     {
         Real *x_neigh_ptr = &x_neigh[n*in_dim];
-        memset(x_neigh_ptr, 0, in_dim * sizeof(*x_neigh_ptr));
 
-        // TODO: compare it with using inv_degree directly
         int64_t degree = ptr[n+1] - ptr[n];
         if (degree == 0) continue; // since we memset x_neigh_ptr with 0 by default we can just skip here
         Real scale = (Real)1.0 / degree;

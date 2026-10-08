@@ -97,6 +97,11 @@ void sage_layer_reset_gradient(SageLayer *l)
     real_zero_out(l->dW_neigh, l->in_dim * l->W_stride);
 }
 
+void sage_layer_zero_x_neigh(SageLayer *l)
+{
+    real_zero_out(l->x_neigh, l->node_count * l->in_dim);
+}
+
 void sage_layer_free(SageLayer **l)
 {
     if (!(*l)) return;
@@ -408,7 +413,6 @@ void sage_net_reset_parameters(SageNet *net)
                 ERROR("Unknown layer type %d", layer->type);
         }
     }
-
 }
 
 void sage_net_free(SageNet **net)

@@ -86,21 +86,28 @@ static void inference(SageNet *net)
         Layer layer = net->layers[i];
         switch(layer.type)
         {
-        case LAYER_SAGE:
-            sageconv((SageLayer*)layer.ctx);
-            break;
-        case LAYER_RELU:
-            relu((ReluLayer*)layer.ctx);
-            break;
-        case LAYER_L2NORM:
-            l2norm((L2NormLayer*)layer.ctx);
-            break;
-        case LAYER_LOGSOFTMAX:
-            logsoftmax((LogSoftmaxLayer*)layer.ctx);
-            break;
-        default:
-            ERROR("Unknown layer type %d", layer.type);
+            case LAYER_SAGE:
+                sageconv((SageLayer*)layer.ctx);
+                break;
+            case LAYER_RELU:
+                relu((ReluLayer*)layer.ctx);
+                break;
+            case LAYER_L2NORM:
+                l2norm((L2NormLayer*)layer.ctx);
+                break;
+            case LAYER_LOGSOFTMAX:
+                logsoftmax((LogSoftmaxLayer*)layer.ctx);
+                break;
+            default:
+                ERROR("Unknown layer type %d", layer.type);
         }
+    }
+
+    for (int64_t i = 0; i < net->layer_count; i++)
+    {
+        Layer layer = net->layers[i];
+        if (layer.type == LAYER_SAGE)
+            sage_layer_zero_x_neigh((SageLayer*)layer.ctx);
     }
 }
 
@@ -108,29 +115,30 @@ static void train(SageNet *net, int64_t *y, Optim *optim)
 {
     TIMER_FUNC();
 
-    for (size_t i = net->layer_count; i-- > 0; ) {
+    for (int64_t i = net->layer_count-1; i >= 0; i--)
+    {
         Layer layer = net->layers[i];
         switch(layer.type)
         {
-        case LAYER_SAGE:
-            grad_sageconv((SageLayer*)layer.ctx);
-            break;
-        case LAYER_RELU:
-            grad_relu((ReluLayer*)layer.ctx);
-            break;
-        case LAYER_L2NORM:
-            grad_l2norm((L2NormLayer*)layer.ctx);
-            break;
-        case LAYER_LOGSOFTMAX:
-            grad_logsoftmax_nll((LogSoftmaxLayer*)layer.ctx, y);
-            break;
-        default:
-            ERROR("Unknown layer type %d", layer.type);
+            case LAYER_SAGE:
+                grad_sageconv((SageLayer*)layer.ctx);
+                break;
+            case LAYER_RELU:
+                grad_relu((ReluLayer*)layer.ctx);
+                break;
+            case LAYER_L2NORM:
+                grad_l2norm((L2NormLayer*)layer.ctx);
+                break;
+            case LAYER_LOGSOFTMAX:
+                grad_logsoftmax_nll((LogSoftmaxLayer*)layer.ctx, y);
+                break;
+            default:
+                ERROR("Unknown layer type %d", layer.type);
         }
     }
 
     optim_update(optim, net);
-    for (size_t i = net->layer_count; i-- > 0; )
+    for (int64_t i = net->layer_count-1; i >= 0; i--)
     {
         Layer layer = net->layers[i];
         if (layer.type == LAYER_SAGE)

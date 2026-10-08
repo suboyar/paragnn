@@ -145,8 +145,8 @@ static void ideg_coo(const int64_t *endpoints, Real *inv_degree, SparseGraph *gr
 static void alloc_cs(SparseGraph *graph)
 {
     graph->ptr_csr = ALLOC_OR_DIE(alloc_local((graph->node_count+1) * sizeof(*graph->ptr_csc)));
-    graph->idx_csr = ALLOC_OR_DIE(alloc_shared(graph->edge_count * sizeof(*graph->idx_csr)));
     graph->ptr_csc = ALLOC_OR_DIE(alloc_local((graph->node_count+1) * sizeof(*graph->ptr_csc)));
+    graph->idx_csr = ALLOC_OR_DIE(alloc_shared(graph->edge_count * sizeof(*graph->idx_csr)));
     graph->idx_csc = ALLOC_OR_DIE(alloc_shared(graph->edge_count * sizeof(*graph->idx_csc)));
 }
 

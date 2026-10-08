@@ -90,6 +90,9 @@ void sage_net_reset_parameters(SageNet *net);
 void sage_layer_reset_parameters(SageLayer *l);
 void sage_layer_reset_gradient(SageLayer *l);
 
+void sage_net_zero_x_neigh(SageNet *net);
+void sage_layer_zero_x_neigh(SageLayer *l);
+
 void sage_net_bind(SageNet *net, Dataset *ds);
 void sage_layer_bind(SageLayer *l, int64_t node_count, int64_t edge_count, SparseGraph *graph);
 void relu_layer_bind(ReluLayer *l, int64_t node_count);
