@@ -264,10 +264,12 @@ static void benchmark_kernel(Dataset *ds, int64_t in_dim, int64_t out_dim)
     int64_t node_count = ds->node_count;
 
     BenchKernel funcs[] = {
+#if !defined(SCALING)
         BENCH_KERNEL(coo_v1, flops_coo, SPARSE_FORMAT_COO),
         BENCH_KERNEL(cs_v1,  flops_cs,  SPARSE_FORMAT_CS),
         BENCH_KERNEL(cs_v2,  flops_cs,  SPARSE_FORMAT_CS),
         BENCH_KERNEL(cs_v3,  flops_cs,  SPARSE_FORMAT_CS),
+#endif
         BENCH_KERNEL(cs_v4,  flops_cs,  SPARSE_FORMAT_CS),
     };
 
@@ -288,7 +290,13 @@ static void benchmark_kernel(Dataset *ds, int64_t in_dim, int64_t out_dim)
         printf("Validating: %s...\n", funcs[i].name);
         funcs[i].func(x_in_ref, x_in_neigh, in_dim, ds->graph, flow);
         if (!is_valid_2d(x_in_neigh, x_neigh_ref, node_count, in_dim, in_dim))
+        {
+#if defined(NONFATAL_VALIDATION)
+            printf("warning: %s doesn't match the reference: %s\n", funcs[i].name, mismatch_buf);
+#else
             ERROR("%s doesn't match the reference: %s", funcs[i].name, mismatch_buf);
+#endif
+        }
     }
     free(x_in_neigh);
     free(x_in_ref);

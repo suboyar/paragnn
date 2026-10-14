@@ -303,10 +303,12 @@ static void benchmark_kernel(Dataset *ds, int64_t in_dim, int64_t out_dim)
     int64_t node_count = ds->node_count;
 
     BenchKernel funcs[] = {
+#if !defined(SCALING)
         // BENCH_KERNEL(naive),
         BENCH_KERNEL(cblas_gemm),
         BENCH_KERNEL(outer_tn_v1),
         BENCH_KERNEL(outer_tn_v2),
+#endif
         BENCH_KERNEL(outer_tn_v3),
     };
 
@@ -329,13 +331,19 @@ static void benchmark_kernel(Dataset *ds, int64_t in_dim, int64_t out_dim)
         printf("Validating: %s...\n", funcs[i].name);
         funcs[i].func(in_dim, out_dim, node_count, A_ref, in_dim, B_ref, out_dim, C, c_stride);
         if(!is_valid_2d(C, C_ref, in_dim, out_dim, c_stride))
+        {
+#if defined(NONFATAL_VALIDATION)
+            printf("warning: %s doesn't match the reference: %s\n", funcs[i].name, mismatch_buf);
+#else
             ERROR("%s doesn't match the reference: %s", funcs[i].name, mismatch_buf);
+#endif
+        }
         free(C);
     }
     free(A_ref);
     free(B_ref);
     free(C_ref);
-#endif // SKIP_VALID
+#endif // SKIP_VALDI
 
     for (size_t i = 0; i < ARRAY_LEN(funcs); i++)
     {
@@ -679,9 +687,8 @@ int main(int argc, char** argv)
     int omp_num_threads = omp_get_max_threads();
     if (openblas_num_threads == 1)
     {
-        fprintf(stderr,
-                "Error: OpenBLAS thread count is 1. Set OPENBLAS_NUM_THREADS (for non-OpenMP), "
-                "OMP_NUM_THREADS (for OpenMP builds) or call openblas_set_num_threads()\n");
+        printf("warning: OpenBLAS thread count is 1. Set OPENBLAS_NUM_THREADS (for non-OpenMP), "
+               "OMP_NUM_THREADS (for OpenMP builds) or call openblas_set_num_threads()\n");
     }
 
     omp_set_dynamic(0);

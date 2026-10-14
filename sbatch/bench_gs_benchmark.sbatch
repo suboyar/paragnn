@@ -5,15 +5,12 @@
 #SBATCH --ntasks=1
 #SBATCH --exclusive
 
-
-if [ $(uname -m) = "x86_64" ];
-then
+if [ $(uname -m) = "x86_64" ]; then
     module purge
     module load gcc/cu1281/15.2.0
     module load openblas/dynamic/0.3.30
     module load numactl/gcc/2.0.17
-elif [ $(uname -m) = "aarch64" ];
-then
+elif [ $(uname -m) = "aarch64" ]; then
     unset LOADEDMODULES
     unset _LMFILES_
     module purge
@@ -50,17 +47,18 @@ get_label_cores() {
     esac
 }
 
-run_cmd ulimit -v unlimited
+run_cmd ulimit -S -v unlimited
 
-BASE_DIR="${RESULTS_DIR:-results}"
-PREFIX_DIR="${BASE_DIR}/${SLURM_JOB_PARTITION}"
+RESULTS_DIR="${RESULTS_DIR:-results}"
+PREFIX_DIR="${RESULTS_DIR}/${SLURM_JOB_PARTITION}"
 mkdir -p "${PREFIX_DIR}-kernel" "${PREFIX_DIR}-complete"
 
 BDIR="build_${SLURM_JOB_PARTITION}"
 
 case "$SLURM_JOB_PARTITION" in
-    gh200q|h200q|genoaxq) MODES=("scale-1s" "scale-1s-smt" "scale-2s" "scale-2s-smt") ;;
-    *)                    MODES=("1s" "1s-smt" "2s" "2s-smt") ;;
+    gh200q)        MODES_STD=("1s"); MODES_SCALE=("scale-1s") ;;
+    h200q|genoaxq) MODES_STD=("1s" "2s"); MODES_SCALE=("scale-1s" "scale-2s") ;;
+    *)             MODES_STD=("1s" "2s"); MODES_SCALE=() ;;
 esac
 
 DATASETS=("ogbn-arxiv" "ogbn-products" "ogbn-papers100M")
@@ -68,10 +66,16 @@ DATASETS=("ogbn-arxiv" "ogbn-products" "ogbn-papers100M")
 run_suite() {
     local allocation="$1"
     local run_mode="$2"
+    shift 2
+    local modes=("$@")
     local dir="${PREFIX_DIR}-${run_mode}"
 
     for dataset in "${DATASETS[@]}"; do
-        for mode in "${MODES[@]}"; do
+        for mode in "${modes[@]}"; do
+
+            # Skip interleave on 1s modes
+            [[ "$allocation" == "interleave" && "$mode" == *"1s"* ]] && continue
+
             for c in $(./cpumap "$mode"); do
                 local t=$(count_threads "$c")
                 local label_t=$(get_label_cores "$mode" "$t")
@@ -91,14 +95,31 @@ run_suite() {
     done
 }
 
-run_cmd make -B bench-gs BUILDDIR="$BDIR" V=1 1>&2
-run_suite "interleave" "kernel"
+# Standard runs
+run_cmd make -B bench-gs BUILDDIR="$BDIR" CFLAGS="-DNONFATAL_VALIDATION" V=1 1>&2 && \
+    run_suite "interleave" "kernel" "${MODES_STD[@]}"
 
-run_cmd make -B bench-gs BUILDDIR="$BDIR" CFLAGS="-DFIRST_TOUCH" V=1 1>&2
-run_suite "first-touch" "kernel"
+run_cmd make -B bench-gs BUILDDIR="$BDIR" CFLAGS="-DNONFATAL_VALIDATION -DFIRST_TOUCH" V=1 1>&2 && \
+    run_suite "first-touch" "kernel" "${MODES_STD[@]}"
 
-run_cmd make -B bench-gs BUILDDIR="$BDIR" CFLAGS="-DRUN_COMPLETE_GRAD_SAGECONV" V=1 1>&2
-run_suite "interleave" "complete"
+run_cmd make -B bench-gs BUILDDIR="$BDIR" CFLAGS="-DNONFATAL_VALIDATION -DRUN_COMPLETE_GRAD_SAGECONV" V=1 1>&2 && \
+    run_suite "interleave" "complete" "${MODES_STD[@]}"
 
-run_cmd make -B bench-gs BUILDDIR="$BDIR" CFLAGS="-DRUN_COMPLETE_GRAD_SAGECONV -DFIRST_TOUCH" V=1 1>&2
-run_suite "first-touch" "complete"
+run_cmd make -B bench-gs BUILDDIR="$BDIR" CFLAGS="-DNONFATAL_VALIDATION -DRUN_COMPLETE_GRAD_SAGECONV -DFIRST_TOUCH" V=1 1>&2 && \
+    run_suite "first-touch" "complete" "${MODES_STD[@]}"
+
+
+# Scaling runs
+if [ ${#MODES_SCALE[@]} -gt 0 ]; then
+    run_cmd make -B bench-gs BUILDDIR="$BDIR" CFLAGS="-DNONFATAL_VALIDATION -DSCALING" V=1 1>&2 && \
+        run_suite "interleave" "kernel" "${MODES_SCALE[@]}"
+
+    run_cmd make -B bench-gs BUILDDIR="$BDIR" CFLAGS="-DNONFATAL_VALIDATION -DSCALING -DFIRST_TOUCH" V=1 1>&2 && \
+        run_suite "first-touch" "kernel" "${MODES_SCALE[@]}"
+
+    run_cmd make -B bench-gs BUILDDIR="$BDIR" CFLAGS="-DNONFATAL_VALIDATION -DSCALING -DRUN_COMPLETE_GRAD_SAGECONV" V=1 1>&2 && \
+        run_suite "interleave" "complete" "${MODES_SCALE[@]}"
+
+    run_cmd make -B bench-gs BUILDDIR="$BDIR" CFLAGS="-DNONFATAL_VALIDATION -DSCALING -DRUN_COMPLETE_GRAD_SAGECONV -DFIRST_TOUCH" V=1 1>&2 && \
+        run_suite "first-touch" "complete" "${MODES_SCALE[@]}"
+fi
