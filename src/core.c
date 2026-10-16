@@ -263,7 +263,7 @@ char* fd_to_path(FILE *fp)
     if (fp == stdout) return strdup("stdout");
     if (fp == stderr) return strdup("stderr");
 
-    char proc_path[64];
+    char proc_path[PATH_MAX];
     snprintf(proc_path, sizeof(proc_path), "/proc/self/fd/%d", fileno(fp));
 
     char tmp[PATH_MAX];

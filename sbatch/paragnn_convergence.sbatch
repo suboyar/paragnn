@@ -3,7 +3,6 @@
 #SBATCH --job-name="paragnn_convergence"
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --exclusive
 
 if [ $(uname -m) = "x86_64" ];
 then
@@ -28,8 +27,8 @@ run_cmd() {
 
 BDIR="build_${SLURM_JOB_PARTITION}"
 
-run_cmd ulimit -v unlimited
-run_cmd make -B paragnn BUILDDIR="$BDIR" IMPL=blas SPARSE=cs
+run_cmd ulimit -S -v unlimited
+run_cmd make -B paragnn BUILDDIR="$BDIR" IMPL=blas SPARSE=cs CFLAGS="-DEXPORT_INTERMEDIATE_CSV"
 
 BASE_DIR="${RESULTS_DIR:-results}"
 PARTITION_DIR="${BASE_DIR}/${SLURM_JOB_PARTITION}"

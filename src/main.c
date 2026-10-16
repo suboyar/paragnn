@@ -387,9 +387,42 @@ int main(int argc, char** argv)
         train(net, ds->y_train, optim);
 
         if (ep % 10 == 0)
+        {
             printf("Epoch: %zu/%zu, Loss: %f, Train: %.2f%%, Valid: %.2f%%, Test: %.2f%%\n",
                    ep, epochs, loss_hist[ep-1],
                    100*train_hist[ep-1], 100*valid_hist[ep-1], 100*test_hist[ep-1]);
+        }
+
+#if defined(EXPORT_INTERMEDIATE_CSV)
+        if (ep % 100 == 0 && export_csv)
+        {
+            char *orig_path = fd_to_path(output_fd);
+            const char *p = full_path(orig_path);
+            size_t len  = p - orig_path;
+
+            char *dir = ALLOC_OR_DIE(malloc(len + 1));
+            strncpy(dir, orig_path, len);
+            dir[len] = '\0';
+
+            char* new_path;
+            asprintf(&new_path, "%s/%zu-%zu-%s", dir, ep - 99, ep, p);
+
+            FILE *fd = fopen(new_path, "w+");
+            if (!fd) ERROR("Could not open file %s for csv export: %s", new_path, strerror(errno));
+
+            fprintf(fd, "epoch,loss,train,valid,test\n");
+            for (size_t e = ep - 99; e <= ep; e++)
+            {
+                fprintf(fd, "%zu,%f,%f,%f,%f\n",
+                        e, loss_hist[e-1], 100*train_hist[e-1], 100*valid_hist[e-1], 100*test_hist[e-1]);
+            }
+
+            fclose(fd);
+            free(new_path);
+            free(dir);
+            free(orig_path);
+        }
+#endif
     }
 
     if (export_csv)
