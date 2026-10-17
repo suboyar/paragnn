@@ -25,26 +25,29 @@ run_cmd() {
     "$@"
 }
 
-BDIR="build_${SLURM_JOB_PARTITION}"
+run_test() {
+    echo "----------------------------------------------------------------"
+    echo " ogbn-arxiv"
+    echo "----------------------------------------------------------------"
+    run_cmd ./"$BDIR"/paragnn --dataset ogbn-arxiv --csv --output "${PARTITION_DIR}/ogbn-arxiv.csv"
 
-run_cmd ulimit -S -v unlimited
-run_cmd make -B paragnn BUILDDIR="$BDIR" IMPL=blas SPARSE=cs CFLAGS="-DEXPORT_INTERMEDIATE_CSV"
+    echo "----------------------------------------------------------------"
+    echo " ogbn-products"
+    echo "----------------------------------------------------------------"
+    run_cmd ./"$BDIR"/paragnn --dataset ogbn-products --csv --output "${PARTITION_DIR}/ogbn-products.csv"
+
+    echo "----------------------------------------------------------------"
+    echo " ogbn-papers100M"
+    echo "----------------------------------------------------------------"
+    run_cmd ./"$BDIR"/paragnn --dataset ogbn-papers100M --csv --output "${PARTITION_DIR}/ogbn-papers100M.csv"
+}
+
+BDIR="build_${SLURM_JOB_PARTITION}"
 
 BASE_DIR="${RESULTS_DIR:-results}"
 PARTITION_DIR="${BASE_DIR}/${SLURM_JOB_PARTITION}"
 mkdir -p "$PARTITION_DIR"
 
-echo "----------------------------------------------------------------"
-echo " ogbn-arxiv"
-echo "----------------------------------------------------------------"
-run_cmd ./"$BDIR"/paragnn --dataset ogbn-arxiv --csv --output "${PARTITION_DIR}/ogbn-arxiv.csv"
-
-echo "----------------------------------------------------------------"
-echo " ogbn-products"
-echo "----------------------------------------------------------------"
-run_cmd ./"$BDIR"/paragnn --dataset ogbn-products --csv --output "${PARTITION_DIR}/ogbn-products.csv"
-
-echo "----------------------------------------------------------------"
-echo " ogbn-papers100M"
-echo "----------------------------------------------------------------"
-run_cmd ./"$BDIR"/paragnn --dataset ogbn-papers100M --csv --output "${PARTITION_DIR}/ogbn-papers100M.csv"
+run_cmd ulimit -S -v unlimited
+run_cmd make -B paragnn BUILDDIR="$BDIR" IMPL=blas SPARSE=cs CFLAGS="-DEXPORT_INTERMEDIATE_CSV" && \
+    run_test

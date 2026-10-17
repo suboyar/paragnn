@@ -25,7 +25,7 @@ DATADIR ?= ~/D1/paragnn-dataset
 # remove trailing slash if included
 BUILDDIR := $(patsubst %/,%,$(BUILDDIR))
 
-DEFAULT_CFLAGS += -std=gnu23
+DEFAULT_CFLAGS += -std=gnu23 -D_GNU_SOURCE
 DEFAULT_CFLAGS += -Wall \
                   -Wextra \
                   -Wfloat-conversion \

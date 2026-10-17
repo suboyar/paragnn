@@ -397,7 +397,7 @@ int main(int argc, char** argv)
         if (ep % 100 == 0 && export_csv)
         {
             char *orig_path = fd_to_path(output_fd);
-            const char *p = full_path(orig_path);
+            const char *p = path_name(orig_path);
             size_t len  = p - orig_path;
 
             char *dir = ALLOC_OR_DIE(malloc(len + 1));
